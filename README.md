@@ -36,14 +36,21 @@ LexEscrow/
 │   │   ├── anchor-matcher.ts#   proper-noun + bar-number matching
 │   │   ├── anomaly-watcher.ts#  anomaly-suppression detection
 │   │   └── scope-guard.ts   #   field-access whitelist enforcement
-│   ├── screens/             # Five screens (Load, Processing, Review, Execute, Escalation)
+│   ├── lib/                 # backend bridge, AI providers, browser vault fallback
+│   │   ├── ai/              #   model-agnostic providers (HTTP / WebSocket / local)
+│   │   ├── backend.ts       #   Tauri-or-browser bridge (incl. vault + AI transport)
+│   │   ├── browserVault.ts  #   Web-Crypto AES-GCM + PBKDF2 fallback vault
+│   │   └── aiParse.ts       #   deterministic heuristic parser (local provider)
+│   ├── screens/             # Six screens (Load, Processing, Review, Execute, Escalation, Configuration)
 │   ├── store/               # Zustand session store
 │   └── components/          # Shared UI primitives
 ├── src-tauri/               # Rust backend (Tauri v2)
 │   ├── src/
 │   │   ├── artifact_guard.rs# SHA-256 hashing + UTF-8 normalization + final verify
 │   │   ├── db.rs            #   SQLite (sqlx) — sessions, payloads, audit trail
-│   │   ├── notify.rs        #   SMTP (lettre) + Twilio SMS (reqwest)
+│   │   ├── vault.rs         #   AES-256-GCM credential vault (scrypt KDF)
+│   │   ├── ai.rs            #   AI transport (HTTP + WebSocket) — secret stays in core
+│   │   ├── notify.rs        #   SMTP (lettre) + Twilio SMS (reqwest), vault-backed
 │   │   └── lib.rs           #   Tauri command registration
 │   └── migrations/          # SQLite schema (3 tables, hash-chained audit trail)
 └── cre/                     # Chainlink CRE workflow (bun + @chainlink/cre-sdk)
@@ -108,6 +115,30 @@ browser with Web-Crypto hashing, a JS port of the normalizer, and an in-memory
 hash-chained audit log. The Document Load screen has one-click **sample**
 documents — "Clean retainer" flows through to settlement; "Discrepancy" trips a
 LexGuard escalation.
+
+## Credential vault & AI providers
+
+Credentials live in an **AES-256-GCM encrypted vault** (`credentials.vault` in
+the Tauri app data dir — never the project root). The key is derived with
+**scrypt**; a wrong password fails the GCM auth tag on decrypt. Decrypted
+contents stay in backend memory only, the derived key is zeroized on lock, and
+writes are atomic (temp + rename, mode 0600). Manage it on the **Configuration**
+screen (the gear icon). Only secret-free public metadata crosses IPC — stored
+secrets are write-only from the UI. The vault holds three groups: **AI provider**
+(name, endpoint, connection type, API key), **SMTP**, and **Twilio**; notifications
+prefer vault credentials over environment variables.
+
+Document parsing is **model-agnostic** via the `AIParserProvider` interface. The
+provider is resolved at runtime from the vault's AI metadata — `connection_type`
+selects `HTTPProvider` vs `WebSocketProvider`, and the endpoint + API key are
+pulled from the vault *inside the Rust core* at parse time, so the WebView never
+sees the key. When no provider is configured (or the vault is locked), a
+deterministic local heuristic stands in. LexGuard validates the output the same
+way regardless of which provider produced it.
+
+> Outside Tauri, the vault falls back to a Web-Crypto AES-GCM vault using PBKDF2
+> (the browser analogue of scrypt) persisted to localStorage, so the whole flow
+> is demoable in a plain browser.
 
 ## Tests
 

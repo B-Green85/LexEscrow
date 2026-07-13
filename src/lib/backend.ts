@@ -10,6 +10,15 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import * as browserVault from "./browserVault";
+import type {
+  AiInput,
+  SmtpInput,
+  TwilioInput,
+  UnlockResult,
+  VaultPublic,
+  VaultStatus,
+} from "./vaultTypes";
 
 export interface LoadedArtifact {
   filename: string;
@@ -266,4 +275,143 @@ export async function verifyAuditChain(): Promise<ChainVerification> {
     prev = e.entryHash;
   }
   return { valid: true, entries: memAudit.length, brokenAt: null };
+}
+
+// ── Credential vault ─────────────────────────────────────────────────────────
+
+export async function vaultStatus(): Promise<VaultStatus> {
+  return isTauri() ? invoke<VaultStatus>("vault_status") : browserVault.status();
+}
+
+export async function vaultUnlock(password: string): Promise<UnlockResult> {
+  return isTauri() ? invoke<UnlockResult>("vault_unlock", { password }) : browserVault.unlock(password);
+}
+
+export async function vaultLock(): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_lock");
+    return;
+  }
+  browserVault.lock();
+}
+
+export async function vaultGetPublic(): Promise<VaultPublic> {
+  return isTauri() ? invoke<VaultPublic>("vault_get_public") : browserVault.getPublic();
+}
+
+export async function vaultSetAi(input: AiInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_ai", { input });
+    return;
+  }
+  await browserVault.setAi(input);
+}
+
+export async function vaultSetSmtp(input: SmtpInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_smtp", { input });
+    return;
+  }
+  await browserVault.setSmtp(input);
+}
+
+export async function vaultSetTwilio(input: TwilioInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_twilio", { input });
+    return;
+  }
+  await browserVault.setTwilio(input);
+}
+
+export async function vaultDelete(group: "ai" | "smtp" | "twilio"): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_delete", { group });
+    return;
+  }
+  await browserVault.deleteGroup(group);
+}
+
+export async function vaultChangePassword(current: string, next: string): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_change_password", { current, next });
+    return;
+  }
+  await browserVault.changePassword(current, next);
+}
+
+// ── AI transport (secret stays in the backend / browser vault) ───────────────
+
+export async function aiParseHttp(documentText: string, schemaJson: string): Promise<string> {
+  if (isTauri()) return invoke<string>("ai_parse_http", { documentText, schemaJson });
+  return browserAiHttp(documentText, schemaJson);
+}
+
+export async function aiParseWs(documentText: string, schemaJson: string): Promise<string> {
+  if (isTauri()) return invoke<string>("ai_parse_ws", { documentText, schemaJson });
+  return browserAiWs(documentText, schemaJson);
+}
+
+const AI_INSTRUCTIONS =
+  "Extract the retainer fields defined in `schema` from `document`. " +
+  "Respond with ONLY a JSON object whose keys are the schema field names.";
+
+async function browserAiHttp(documentText: string, schemaJson: string): Promise<string> {
+  const ai = browserVault.resolveAi();
+  if (!ai || !ai.apiKey) throw new Error("No AI provider configured (unlock the vault).");
+  const body = JSON.stringify({
+    provider: ai.providerName,
+    document: documentText,
+    schema: JSON.parse(schemaJson),
+    instructions: AI_INSTRUCTIONS,
+  });
+  const resp = await fetch(ai.endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${ai.apiKey}`, "x-api-key": ai.apiKey },
+    body,
+  });
+  const text = await resp.text();
+  if (!resp.ok) throw new Error(`AI provider returned HTTP ${resp.status}: ${text}`);
+  return text;
+}
+
+async function browserAiWs(documentText: string, schemaJson: string): Promise<string> {
+  const ai = browserVault.resolveAi();
+  if (!ai || !ai.apiKey) throw new Error("No AI provider configured (unlock the vault).");
+  // Browsers cannot set custom WebSocket headers; the key travels in the
+  // opening message for the fallback path.
+  const payload = JSON.stringify({
+    provider: ai.providerName,
+    apiKey: ai.apiKey,
+    document: documentText,
+    schema: JSON.parse(schemaJson),
+  });
+  return new Promise<string>((resolve, reject) => {
+    const ws = new WebSocket(ai.endpoint);
+    let collected = "";
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("AI WebSocket timed out"));
+    }, 30_000);
+    ws.onopen = () => ws.send(payload);
+    ws.onmessage = (ev) => {
+      collected += typeof ev.data === "string" ? ev.data : "";
+      try {
+        JSON.parse(collected.trim());
+        clearTimeout(timer);
+        ws.close();
+        resolve(collected);
+      } catch {
+        // keep collecting until a complete JSON payload arrives
+      }
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("AI WebSocket error"));
+    };
+    ws.onclose = () => {
+      clearTimeout(timer);
+      if (collected.trim()) resolve(collected);
+      else reject(new Error("AI WebSocket returned no data"));
+    };
+  });
 }

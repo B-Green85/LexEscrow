@@ -37,6 +37,7 @@ export interface ParsedRetainerPayload {
   // ── Verification / trust-anchor context (populated by the app, not AI) ────
   barNumber: string;
   clientName?: string; // proper noun extracted from the document
+  extractedBarNumber?: string | null; // bar number as written in the document (AnchorMatcher)
   attorneyName?: string; // identity returned by bar verification
   lawFirmBillingApi?: string;
   releaseDocument?: string;

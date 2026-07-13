@@ -24,6 +24,7 @@ export function ParsedOutputReview() {
   const {
     payload,
     corrections,
+    providerLabel,
     scrollCompleted,
     acknowledged,
     markScrollCompleted,
@@ -63,6 +64,7 @@ export function ParsedOutputReview() {
         LexGuard reviewed and validated the AI output. Review the complete parsed output carefully —
         errors in parsing will affect fund distribution.
       </p>
+      {providerLabel && <p className="mt-1 text-xs text-slate-400">Parsed via {providerLabel}.</p>}
 
       <div className="card mt-5 overflow-hidden">
         <div

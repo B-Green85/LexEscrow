@@ -5,9 +5,11 @@
 //!   * `ArtifactGuardState` — session-scoped SHA-256 registry (Phase 2).
 //!   * `Db`                  — SQLite pool + hash-chained audit trail (Phase 3).
 
+mod ai;
 mod artifact_guard;
 mod db;
 mod notify;
+mod vault;
 
 use artifact_guard::ArtifactGuardState;
 use tauri::Manager;
@@ -27,6 +29,9 @@ pub fn run() {
             let db_path = data_dir.join("lexescrow.db");
             let db = tauri::async_runtime::block_on(db::Db::connect_and_migrate(&db_path))?;
             app.manage(db);
+
+            // Credential vault (locked until the user provides a password).
+            app.manage(vault::VaultState::new(&data_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -47,6 +52,19 @@ pub fn run() {
             db::verify_audit_chain,
             // Notifications
             notify::send_client_notification,
+            // Credential vault
+            vault::vault_status,
+            vault::vault_unlock,
+            vault::vault_lock,
+            vault::vault_get_public,
+            vault::vault_set_ai,
+            vault::vault_set_smtp,
+            vault::vault_set_twilio,
+            vault::vault_delete,
+            vault::vault_change_password,
+            // AI provider transport
+            ai::ai_parse_http,
+            ai::ai_parse_ws,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

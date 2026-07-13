@@ -33,8 +33,9 @@ cre/secrets.yaml
 !**/config.json.example
 .secrets
 
-# ── CRE reference template (kept locally as reference only) ────
+# ── Reference implementations (kept locally as reference only) ────
 cre-templates-main/
+reference/
 
 # ── Editor / OS ───────────────────────────────────────────────
 .DS_Store

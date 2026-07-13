@@ -1,21 +1,13 @@
 /**
- * Document parsing layer.
- *
- * In production this is where the AI model call lives: normalized artifact text
- * + the VDB structured context go in, structured retainer metadata comes out.
- * For a self-contained build we extract deterministically with labeled-field
- * heuristics. Either way the output is an untrusted `ParsedRetainerPayload` that
- * LexGuard validates independently against the artifact — the guarantee the
- * whole system rests on does not depend on how the extraction was produced.
+ * Deterministic heuristic document parser — the `LocalHeuristicProvider`
+ * implementation and the fallback when no AI provider is configured in the
+ * vault. Anchor-free: it returns document-derived values only; the store
+ * applies trust-anchor context afterward. Whatever produces the payload (this
+ * or a real AI provider), LexGuard validates it independently against the
+ * artifact — the guarantee does not depend on the extractor.
  */
 
-import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
-
-export interface ExtractionResult {
-  payload: ParsedRetainerPayload;
-  extractedClientName: string | null;
-  extractedBarNumber: string | null;
-}
+import { ExecutionPath, type ParsedRetainerPayload } from "../lexguard/types";
 
 function money(match: RegExpMatchArray | null): number | null {
   if (!match) return null;
@@ -48,7 +40,7 @@ const RE = {
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 /** Parse normalized retainer text into an (untrusted) structured payload. */
-export function parseRetainerDocument(text: string, anchors: TrustAnchors): ExtractionResult {
+export function parseRetainerDocument(text: string): ParsedRetainerPayload {
   const totalHeld = money(text.match(RE.total)) ?? 0;
   const earnedFees = money(text.match(RE.earned)) ?? 0;
   const unearnedBalance = money(text.match(RE.unearned)) ?? 0;
@@ -66,7 +58,9 @@ export function parseRetainerDocument(text: string, anchors: TrustAnchors): Extr
   const anomaliesFlagged: string[] = [];
   const anomalyMatches = text.match(RE.anomalies);
   if (anomalyMatches) {
-    anomaliesFlagged.push(`Anomaly language present: ${[...new Set(anomalyMatches.map((m) => m.toLowerCase()))].join(", ")}`);
+    anomaliesFlagged.push(
+      `Anomaly language present: ${[...new Set(anomalyMatches.map((m) => m.toLowerCase()))].join(", ")}`,
+    );
   }
   if (disputedHours > 0 || disputedAmount > 0) {
     anomaliesFlagged.push("Disputed billing present");
@@ -77,7 +71,7 @@ export function parseRetainerDocument(text: string, anchors: TrustAnchors): Extr
       ? ExecutionPath.ArbitrationEscrow
       : ExecutionPath.DirectSettlement;
 
-  const payload: ParsedRetainerPayload = {
+  return {
     clientId,
     lawFirmWallet,
     clientWallet,
@@ -90,12 +84,10 @@ export function parseRetainerDocument(text: string, anchors: TrustAnchors): Extr
     recommendedPath,
     anomaliesFlagged,
     anomaliesSuppressed: false,
-    barNumber: anchors.attorneyBarNumber,
-    clientName: extractedClientName ?? anchors.clientFullLegalName,
-    attorneyName: undefined,
+    barNumber: extractedBarNumber ?? "",
+    clientName: extractedClientName ?? undefined,
+    extractedBarNumber,
   };
-
-  return { payload, extractedClientName, extractedBarNumber };
 }
 
 /** The fields AI reads/populates for a retainer release (for ScopeGuard). */

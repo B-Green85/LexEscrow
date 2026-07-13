@@ -2,15 +2,17 @@
  * LexEscrow session store (Zustand).
  *
  * Owns the whole workflow: trust anchors → hashing → attorney verification →
- * AI parse → LexGuard co-validation (nudge / correct / escalate) → forced
- * review acknowledgment → final blocking re-verify → CRE execution → client
- * notification. Every consequential step is written to the append-only,
- * hash-chained audit trail.
+ * AI parse (provider resolved from the credential vault) → LexGuard
+ * co-validation (nudge / correct / escalate) → forced review acknowledgment →
+ * final blocking re-verify → CRE execution → client notification. Every
+ * consequential step is written to the append-only, hash-chained audit trail.
  */
 
 import { create } from "zustand";
 import * as backend from "../lib/backend";
-import { AI_ACCESSED_FIELDS, parseRetainerDocument } from "../lib/aiParse";
+import { AI_ACCESSED_FIELDS } from "../lib/aiParse";
+import { resolveProvider } from "../lib/ai/providers";
+import { RETAINER_SCHEMA } from "../lib/ai/schema";
 import {
   ExecutionPath,
   type ParsedRetainerPayload,
@@ -28,7 +30,7 @@ import { matchBarNumber, matchClientName } from "../lexguard/anchor-matcher";
 import { detectAnomalySuppression } from "../lexguard/anomaly-watcher";
 import { detectScopeViolation } from "../lexguard/scope-guard";
 
-export type Screen = "load" | "processing" | "review" | "execution" | "escalation";
+export type Screen = "load" | "processing" | "review" | "execution" | "escalation" | "config";
 export type StepStatus = "pending" | "active" | "done" | "error";
 
 export interface ProcessingStep {
@@ -102,7 +104,9 @@ function newId(prefix: string): string {
 
 interface SessionState {
   screen: Screen;
+  prevScreen: Screen;
   operator: string;
+  providerLabel: string | null;
   anchors: TrustAnchors;
   sessionId: string | null;
   file: File | null;
@@ -123,6 +127,8 @@ interface SessionState {
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setFile: (file: File | null) => void;
+  openConfig: () => void;
+  closeConfig: () => void;
   reset: () => void;
   beginProcessing: () => Promise<void>;
   markScrollCompleted: () => void;
@@ -153,7 +159,9 @@ export const useSession = create<SessionState>((set, get) => {
 
   return {
     screen: "load",
+    prevScreen: "load",
     operator: OPERATOR_DEFAULT,
+    providerLabel: null,
     anchors: emptyAnchors,
     sessionId: null,
     file: null,
@@ -180,10 +188,14 @@ export const useSession = create<SessionState>((set, get) => {
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setFile: (file) => set({ file }),
+    openConfig: () =>
+      set((s) => ({ prevScreen: s.screen === "config" ? s.prevScreen : s.screen, screen: "config" })),
+    closeConfig: () => set((s) => ({ screen: s.prevScreen })),
 
     reset: () =>
       set({
         screen: "load",
+        providerLabel: null,
         anchors: emptyAnchors,
         sessionId: null,
         file: null,
@@ -262,15 +274,20 @@ export const useSession = create<SessionState>((set, get) => {
         }
         setStep("bar", "done");
 
-        // 3) AI parse + VDB prime.
+        // 3) AI parse (provider resolved from the vault) + VDB prime.
         setStep("ai", "active");
         await backend.updateSessionState(sessionId, "PARSING");
         const vdb = await primeVDB(artifact.normalizedText, artifact.hash, sessionId);
-        const { payload, extractedClientName, extractedBarNumber } = parseRetainerDocument(
-          artifact.normalizedText,
-          anchors,
-        );
-        set({ vdb, payload });
+        const provider = await resolveProvider();
+        const parsed = await provider.parse(artifact.normalizedText, RETAINER_SCHEMA);
+        // Trust anchors are authoritative — apply them over the doc extraction.
+        const payload: ParsedRetainerPayload = {
+          ...parsed,
+          barNumber: anchors.attorneyBarNumber,
+          clientName: parsed.clientName ?? anchors.clientFullLegalName,
+        };
+        set({ vdb, payload, providerLabel: provider.label });
+        await log("ai_parse", { provider: provider.label });
         setStep("ai", "done");
 
         // 4) LexGuard co-validation.
@@ -280,8 +297,6 @@ export const useSession = create<SessionState>((set, get) => {
           vdb,
           anchors,
           chainlinkVerifiedBar: anchors.attorneyBarNumber,
-          extractedClientName,
-          extractedBarNumber,
         });
         set({ payload: result.payload, corrections: result.corrections, escalation: result.escalation });
 
@@ -428,7 +443,7 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     buildAuditReport: async () => {
-      const { sessionId, anchors, artifact, payload } = get();
+      const { sessionId, anchors, artifact, payload, providerLabel } = get();
       if (!sessionId) return "{}";
       const trail = await backend.getAuditTrail(sessionId);
       const chain = await backend.verifyAuditChain();
@@ -439,6 +454,7 @@ export const useSession = create<SessionState>((set, get) => {
           client: anchors.clientFullLegalName,
           attorney_bar_number: anchors.attorneyBarNumber,
           document_hash: artifact?.hash ?? null,
+          ai_provider: providerLabel,
           recommended_path: payload?.recommendedPath ?? null,
           chain_verification: chain,
           audit_trail: trail,
@@ -457,8 +473,6 @@ interface LexGuardInput {
   vdb: VDBStore;
   anchors: TrustAnchors;
   chainlinkVerifiedBar: string;
-  extractedClientName: string | null;
-  extractedBarNumber: string | null;
 }
 
 interface LexGuardResult {
@@ -492,9 +506,13 @@ function runLexGuard(input: LexGuardInput): LexGuardResult {
   }
 
   const arithmeticBroken = !validateArithmetic(payload);
-  const barOk = matchBarNumber(input.extractedBarNumber, input.anchors.attorneyBarNumber, input.chainlinkVerifiedBar);
-  const clientNameOk = input.extractedClientName
-    ? matchClientName(input.extractedClientName, input.anchors.clientFullLegalName)
+  const barOk = matchBarNumber(
+    payload.extractedBarNumber ?? null,
+    input.anchors.attorneyBarNumber,
+    input.chainlinkVerifiedBar,
+  );
+  const clientNameOk = payload.clientName
+    ? matchClientName(payload.clientName, input.anchors.clientFullLegalName)
     : true;
   const suppressed = detectAnomalySuppression(payload.anomaliesFlagged, payload.anomaliesSuppressed, payload.recommendedPath);
   const scopeViolations = detectScopeViolation(AI_ACCESSED_FIELDS);
@@ -528,7 +546,7 @@ function runLexGuard(input: LexGuardInput): LexGuardResult {
       module: "anchor-matcher",
       field: "barNumber",
       fieldLabel: "Attorney Bar Number",
-      aiValue: input.extractedBarNumber ?? "—",
+      aiValue: payload.extractedBarNumber ?? "—",
       observedValue: input.anchors.attorneyBarNumber,
       recommendation: "The bar number found in the document does not match the verified attorney identity.",
     };
@@ -537,7 +555,7 @@ function runLexGuard(input: LexGuardInput): LexGuardResult {
       module: "anchor-matcher",
       field: "clientName",
       fieldLabel: "Client Name",
-      aiValue: input.extractedClientName ?? "—",
+      aiValue: payload.clientName ?? "—",
       observedValue: input.anchors.clientFullLegalName,
       recommendation: "The client name in the document does not match the name entered at document load.",
     };
@@ -565,7 +583,7 @@ function runLexGuard(input: LexGuardInput): LexGuardResult {
   return { payload, corrections, escalation };
 }
 
-// ── Notifications (Phase 7 wires the Rust SMTP/Twilio backend) ───────────────
+// ── Notifications (Rust SMTP/Twilio backend, or browser simulation) ──────────
 
 async function sendNotifications(
   anchors: TrustAnchors,

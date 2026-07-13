@@ -6,9 +6,12 @@
 //! funds move, and the audit log records the true delivery status).
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
 
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+
+use crate::vault::{SmtpEntry, TwilioEntry, VaultState};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,16 +80,27 @@ fn today() -> String {
     chrono::Utc::now().format("%B %-d, %Y").to_string()
 }
 
-async fn send_email(req: &NotifyRequest) -> NotifyResult {
+async fn send_email(req: &NotifyRequest, vault_smtp: Option<SmtpEntry>) -> NotifyResult {
     let skipped = NotifyResult::new("email", &req.to, "skipped");
 
-    let host = match env("SMTP_HOST") {
-        Some(h) => h,
-        None => return skipped,
+    // Prefer vault credentials; fall back to environment variables.
+    let (host, port, username, password, from) = match vault_smtp {
+        Some(s) if !s.host.is_empty() => {
+            let from = env("SMTP_FROM").unwrap_or_else(|| s.username.clone());
+            (s.host, s.port, s.username, s.password, from)
+        }
+        _ => match env("SMTP_HOST") {
+            Some(host) => (
+                host,
+                env_or("SMTP_PORT", "587").parse().unwrap_or(587),
+                env_or("SMTP_USERNAME", ""),
+                env_or("SMTP_PASSWORD", ""),
+                env_or("SMTP_FROM", "no-reply@lawfirm.example"),
+            ),
+            None => return skipped,
+        },
     };
     let firm = env_or("LAW_FIRM_NAME", "Your Law Firm");
-    let from = env_or("SMTP_FROM", "no-reply@lawfirm.example");
-    let port: u16 = env_or("SMTP_PORT", "587").parse().unwrap_or(587);
     let amount = format_usd(req.amount_cents);
     let reference = short_ref(&req.reference);
 
@@ -123,8 +137,8 @@ async fn send_email(req: &NotifyRequest) -> NotifyResult {
         Ok(b) => b.port(port),
         Err(_) => return NotifyResult::new("email", &req.to, "failed"),
     };
-    if let (Some(user), Some(pass)) = (env("SMTP_USERNAME"), env("SMTP_PASSWORD")) {
-        builder = builder.credentials(Credentials::new(user, pass));
+    if !username.is_empty() {
+        builder = builder.credentials(Credentials::new(username, password));
     }
     let mailer = builder.build();
 
@@ -137,17 +151,25 @@ async fn send_email(req: &NotifyRequest) -> NotifyResult {
     }
 }
 
-async fn send_sms(req: &NotifyRequest) -> NotifyResult {
+async fn send_sms(req: &NotifyRequest, vault_twilio: Option<TwilioEntry>) -> NotifyResult {
     let skipped = NotifyResult::new("sms", &req.to, "skipped");
 
-    let sid = match env("TWILIO_ACCOUNT_SID") {
-        Some(s) => s,
-        None => return skipped,
-    };
-    let token = env_or("TWILIO_AUTH_TOKEN", "");
-    let from = match env("TWILIO_FROM") {
-        Some(f) => f,
-        None => return skipped,
+    // Prefer vault credentials; fall back to environment variables.
+    let (sid, token, from) = match vault_twilio {
+        Some(t) if !t.account_sid.is_empty() && !t.from_number.is_empty() => {
+            (t.account_sid, t.auth_token, t.from_number)
+        }
+        _ => {
+            let sid = match env("TWILIO_ACCOUNT_SID") {
+                Some(s) => s,
+                None => return skipped,
+            };
+            let from = match env("TWILIO_FROM") {
+                Some(f) => f,
+                None => return skipped,
+            };
+            (sid, env_or("TWILIO_AUTH_TOKEN", ""), from)
+        }
     };
     let firm = env_or("LAW_FIRM_NAME", "Your Law Firm");
     let amount = format_usd(req.amount_cents);
@@ -183,10 +205,15 @@ async fn send_sms(req: &NotifyRequest) -> NotifyResult {
 /// Post-settlement client notification. Dispatched by the workflow only after
 /// CRE confirms settlement — never before funds move.
 #[tauri::command]
-pub async fn send_client_notification(request: NotifyRequest) -> Result<NotifyResult, String> {
+pub async fn send_client_notification(
+    vault: State<'_, VaultState>,
+    request: NotifyRequest,
+) -> Result<NotifyResult, String> {
+    let smtp = vault.resolve_smtp();
+    let twilio = vault.resolve_twilio();
     match request.channel.as_str() {
-        "email" => Ok(send_email(&request).await),
-        "sms" => Ok(send_sms(&request).await),
+        "email" => Ok(send_email(&request, smtp).await),
+        "sms" => Ok(send_sms(&request, twilio).await),
         other => Err(format!("unknown notification channel: {other}")),
     }
 }
