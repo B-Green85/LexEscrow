@@ -1,0 +1,21 @@
+# ==========================================================================
+# LexEscrow CRE WORKFLOW SETTINGS
+# ==========================================================================
+# Run from this directory:
+#   cre workflow simulate . --target local-simulation
+# ==========================================================================
+local-simulation:
+  user-workflow:
+    workflow-name: "lexescrow-workflow"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.json"
+    secrets-path: "./secrets.yaml"
+
+staging:
+  user-workflow:
+    workflow-name: "lexescrow-workflow"
+  workflow-artifacts:
+    workflow-path: "./main.ts"
+    config-path: "./config.json"
+    secrets-path: "./secrets.yaml"

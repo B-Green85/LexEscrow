@@ -1,0 +1,16 @@
+# ==========================================================================
+# LexEscrow CRE PROJECT SETTINGS
+# ==========================================================================
+local-simulation:
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: <YOUR RPC URL>
+
+staging:
+  cre-cli:
+    don-family: "zone-a"
+  account:
+    workflow-owner-address: "(optional) Multi-signature contract address"
+  rpcs:
+    - chain-name: ethereum-testnet-sepolia
+      url: https://sepolia.infura.io/v3/YOUR_API_KEY

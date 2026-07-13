@@ -1,0 +1,11 @@
+{
+  "barVerifyUrl": "https://your-adapter.example.com/calbar/{bar}",
+  "notificationUrl": "http://127.0.0.1:8787/notify",
+  "evms": [
+    {
+      "retainerReleaseAddress": "0xYOUR_DEPLOYED_RETAINER_RELEASE_CONTRACT",
+      "chainSelectorName": "ethereum-testnet-sepolia",
+      "gasLimit": "1000000"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+[package]
+name = "lexescrow"
+version = "0.1.0"
+description = "LexEscrow — AI-Governed Legal Retainer Release"
+authors = ["Brandon Green"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix keeps the lib name unique so it doesn't conflict with the
+# bin name (only an issue on Windows, see rust-lang/cargo#8519).
+name = "lexescrow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ArtifactGuard — SHA-256 hashing + hex encoding
+sha2 = "0.10"
+hex = "0.4"
+
+# Persistence — SQLite via sqlx (async, tokio runtime, bundled SQLite)
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "migrate",
+    "macros",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+
+# Identifiers & time
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "2"
+
+# Notification layer — SMTP email (lettre) + Twilio SMS (reqwest), rustls only
+# (no system OpenSSL required).
+lettre = { version = "0.11", default-features = false, features = [
+    "builder",
+    "smtp-transport",
+    "tokio1",
+    "tokio1-rustls-tls",
+] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+
+# Load SMTP/Twilio config from a local .env at startup.
+dotenvy = "0.15"
+
+[profile.dev]
+# Faster incremental builds during the hackathon.
+incremental = true

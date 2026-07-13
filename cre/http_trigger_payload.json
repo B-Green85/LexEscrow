@@ -1,0 +1,12 @@
+{
+  "barNumber": "123456",
+  "clientId": "C-001",
+  "clientWallet": "0x1111111111111111111111111111111111111111",
+  "lawFirmWallet": "0x2222222222222222222222222222222222222222",
+  "totalHeldCents": "500000",
+  "earnedFeesCents": "80000",
+  "unearnedBalanceCents": "420000",
+  "disputedAmountCents": "0",
+  "recommendedPath": "DirectSettlement",
+  "documentHash": "0x7f3a1b2c3d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff"
+}
