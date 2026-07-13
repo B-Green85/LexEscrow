@@ -63,8 +63,8 @@ pub fn run() {
             vault::vault_delete,
             vault::vault_change_password,
             // AI provider transport
-            ai::ai_parse_http,
-            ai::ai_parse_ws,
+            ai::ai_request_http,
+            ai::ai_request_ws,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

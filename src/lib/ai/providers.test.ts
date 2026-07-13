@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractJson, coercePayload } from "./providers";
+import { extractJson, validateAndConvert } from "./providers";
 import { ExecutionPath } from "../../lexguard/types";
 
 describe("extractJson", () => {
@@ -22,35 +22,61 @@ describe("extractJson", () => {
   });
 });
 
-describe("coercePayload", () => {
-  it("coerces money strings and types into a payload", () => {
-    const p = coercePayload({
-      clientId: "C-1",
-      totalHeld: "$5,000.00",
-      earnedFees: 800,
-      unearnedBalance: "4200",
-      recommendedPath: "ArbitrationEscrow",
-      signaturesVerified: true,
-      clientName: "Jane Anderson",
-      barNumberInDocument: "123456",
-      anomaliesFlagged: ["ledger gap"],
-    });
-    expect(p.totalHeld).toBe(5000);
-    expect(p.earnedFees).toBe(800);
-    expect(p.unearnedBalance).toBe(4200);
-    expect(p.recommendedPath).toBe(ExecutionPath.ArbitrationEscrow);
-    expect(p.clientName).toBe("Jane Anderson");
-    expect(p.extractedBarNumber).toBe("123456");
-    expect(p.anomaliesFlagged).toEqual(["ledger gap"]);
+const validCents = {
+  clientId: "C-1",
+  lawFirmWallet: "0xFirm",
+  clientWallet: "0xClient",
+  totalHeld: 500000,
+  earnedFees: 80000,
+  unearnedBalance: 420000,
+  disputedHours: 0,
+  disputedAmount: 0,
+  signaturesVerified: true,
+  recommendedPath: "DirectSettlement",
+  anomaliesFlagged: [],
+  anomaliesSuppressed: false,
+};
+
+describe("validateAndConvert (Zod + cents→dollars)", () => {
+  it("validates integer cents and converts to dollars", () => {
+    const r = validateAndConvert(validCents);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.payload.totalHeld).toBe(5000);
+      expect(r.payload.earnedFees).toBe(800);
+      expect(r.payload.unearnedBalance).toBe(4200);
+      expect(r.payload.recommendedPath).toBe(ExecutionPath.DirectSettlement);
+    }
   });
 
-  it("defaults missing fields safely (no floats leaking as NaN)", () => {
-    const p = coercePayload({});
-    expect(p.totalHeld).toBe(0);
-    expect(p.earnedFees).toBe(0);
-    expect(p.recommendedPath).toBe(ExecutionPath.DirectSettlement);
-    expect(p.clientName).toBeUndefined();
-    expect(p.extractedBarNumber).toBeNull();
-    expect(p.anomaliesFlagged).toEqual([]);
+  it("coerces string-number cents", () => {
+    const r = validateAndConvert({ ...validCents, totalHeld: "500000" });
+    expect(r.success && r.payload.totalHeld).toBe(5000);
+  });
+
+  it("applies defaults for optional fields", () => {
+    const minimal = { totalHeld: 500000, earnedFees: 80000, unearnedBalance: 420000, recommendedPath: "ArbitrationEscrow" };
+    const r = validateAndConvert(minimal);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.payload.clientId).toBe("C-UNKNOWN");
+      expect(r.payload.disputedAmount).toBe(0);
+      expect(r.payload.recommendedPath).toBe(ExecutionPath.ArbitrationEscrow);
+    }
+  });
+
+  it("fails when required money fields are missing (triggers retry)", () => {
+    expect(validateAndConvert({ recommendedPath: "DirectSettlement" }).success).toBe(false);
+  });
+
+  it("fails when recommendedPath is missing or invalid", () => {
+    const { recommendedPath, ...noPath } = validCents;
+    void recommendedPath;
+    expect(validateAndConvert(noPath).success).toBe(false);
+    expect(validateAndConvert({ ...validCents, recommendedPath: "Whatever" }).success).toBe(false);
+  });
+
+  it("fails on a completely empty / junk object", () => {
+    expect(validateAndConvert({}).success).toBe(false);
   });
 });

@@ -9,6 +9,8 @@
  * integer-cents form used for persistence and CRE execution.
  */
 
+import { z } from "zod";
+
 export enum ExecutionPath {
   DirectSettlement = "DirectSettlement",
   ArbitrationEscrow = "ArbitrationEscrow",
@@ -63,3 +65,32 @@ export interface TrustAnchors {
   clientEmail: string;
   clientPhone?: string;
 }
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const finiteNumber = z.coerce.number().refine((n) => Number.isFinite(n), {
+  message: "must be a finite number",
+});
+
+/**
+ * Zod schema for the AI's raw extraction. Monetary fields are **integer cents**
+ * (as the system prompt instructs the model); the provider converts them to the
+ * dollar-denominated `ParsedRetainerPayload` after validation. Required fields
+ * (the money values and `recommendedPath`) failing validation trigger the
+ * single retry, then a plain-English error.
+ */
+export const AiExtractionSchema = z.object({
+  clientId: z.string().default("C-UNKNOWN"),
+  lawFirmWallet: z.string().default(ZERO_ADDRESS),
+  clientWallet: z.string().default(ZERO_ADDRESS),
+  totalHeld: finiteNumber, // integer cents
+  earnedFees: finiteNumber, // integer cents
+  unearnedBalance: finiteNumber, // integer cents
+  disputedHours: finiteNumber.default(0),
+  disputedAmount: finiteNumber.default(0), // integer cents
+  signaturesVerified: z.boolean().default(false),
+  recommendedPath: z.enum(["DirectSettlement", "ArbitrationEscrow"]),
+  anomaliesFlagged: z.array(z.string()).default([]),
+  anomaliesSuppressed: z.boolean().default(false),
+});
+
+export type AiExtraction = z.infer<typeof AiExtractionSchema>;

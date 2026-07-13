@@ -3,8 +3,13 @@
 //! Two commands mirror the two connection types stored in the vault. Both pull
 //! the API key + endpoint from the unlocked vault *inside the Rust core* — the
 //! secret is injected into the request here and never crosses IPC to the
-//! WebView. The raw model response text is returned to the TS provider layer,
-//! which shapes it into a `ParsedRetainerPayload` and hands it to LexGuard.
+//! WebView. The TS provider layer supplies the system prompt and the user
+//! content (the document text, or a correction prompt); the raw model response
+//! is returned for the provider to validate + shape.
+//!
+//! The request body carries `model` (from the vault's provider name — nothing
+//! hardcoded), a top-level `system`/`user`, and a `messages` array, so both
+//! adapter endpoints and chat-style APIs can read it.
 
 use std::time::Duration;
 
@@ -16,34 +21,31 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::vault::VaultState;
 
-/// Adapter-convention request body: the endpoint receives the document + the
-/// field schema and returns JSON. (A thin adapter fronts direct provider APIs;
-/// the TS layer also tolerates raw Anthropic/OpenAI chat response shapes.)
-fn request_body(provider: &str, document_text: &str, schema_json: &str) -> String {
-    let schema: serde_json::Value = serde_json::from_str(schema_json).unwrap_or(serde_json::Value::Null);
+fn request_body(model: &str, system: &str, user: &str) -> String {
     json!({
-        "provider": provider,
-        "document": document_text,
-        "schema": schema,
-        "instructions":
-            "Extract the retainer fields defined in `schema` from `document`. \
-             Respond with ONLY a JSON object whose keys are the schema field names."
+        "model": model,
+        "system": system,
+        "user": user,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
     })
     .to_string()
 }
 
 #[tauri::command]
-pub async fn ai_parse_http(
+pub async fn ai_request_http(
     state: State<'_, VaultState>,
-    document_text: String,
-    schema_json: String,
+    system: String,
+    user: String,
 ) -> Result<String, String> {
     // Clone the credential out under lock, then release before any await.
     let ai = state.resolve_ai().ok_or("No AI provider configured (unlock the vault).".to_string())?;
     if ai.api_key.is_empty() {
         return Err("Configured AI provider has no API key.".into());
     }
-    let body = request_body(&ai.provider_name, &document_text, &schema_json);
+    let body = request_body(&ai.provider_name, &system, &user);
 
     let client = reqwest::Client::new();
     let resp = client
@@ -65,16 +67,16 @@ pub async fn ai_parse_http(
 }
 
 #[tauri::command]
-pub async fn ai_parse_ws(
+pub async fn ai_request_ws(
     state: State<'_, VaultState>,
-    document_text: String,
-    schema_json: String,
+    system: String,
+    user: String,
 ) -> Result<String, String> {
     let ai = state.resolve_ai().ok_or("No AI provider configured (unlock the vault).".to_string())?;
     if ai.api_key.is_empty() {
         return Err("Configured AI provider has no API key.".into());
     }
-    let body = request_body(&ai.provider_name, &document_text, &schema_json);
+    let body = request_body(&ai.provider_name, &system, &user);
 
     let mut request = ai
         .endpoint

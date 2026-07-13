@@ -31,7 +31,7 @@ function StepIcon({ status }: { status: ProcessingStep["status"] }) {
 }
 
 export function Processing() {
-  const { steps, error, reset } = useSession();
+  const { steps, error, configHint, reset, openConfig } = useSession();
 
   return (
     <div className="mx-auto w-full max-w-lg">
@@ -65,9 +65,16 @@ export function Processing() {
         <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4">
           <div className="text-sm font-semibold text-red-800">Processing halted</div>
           <div className="mt-1 text-sm text-red-700">{error}</div>
-          <button className="btn btn-secondary mt-3" onClick={() => reset()}>
-            Back to document load
-          </button>
+          <div className="mt-3 flex gap-2">
+            {configHint && (
+              <button className="btn btn-primary" onClick={() => openConfig()}>
+                {configHint === "locked" ? "Unlock vault" : "Open Configuration"}
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={() => reset()}>
+              Back to document load
+            </button>
+          </div>
         </div>
       )}
     </div>

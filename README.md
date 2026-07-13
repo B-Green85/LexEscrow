@@ -35,7 +35,8 @@ LexEscrow/
 │   │   ├── payload-diff.ts  #   BigInt integer-cents arithmetic + numeric diff
 │   │   ├── anchor-matcher.ts#   proper-noun + bar-number matching
 │   │   ├── anomaly-watcher.ts#  anomaly-suppression detection
-│   │   └── scope-guard.ts   #   field-access whitelist enforcement
+│   │   ├── scope-guard.ts   #   field-access whitelist enforcement
+│   │   └── pipeline.ts      #   async co-validation + AI nudge loop
 │   ├── lib/                 # backend bridge, AI providers, browser vault fallback
 │   │   ├── ai/              #   model-agnostic providers (HTTP / WebSocket / local)
 │   │   ├── backend.ts       #   Tauri-or-browser bridge (incl. vault + AI transport)
@@ -130,15 +131,26 @@ prefer vault credentials over environment variables.
 
 Document parsing is **model-agnostic** via the `AIParserProvider` interface. The
 provider is resolved at runtime from the vault's AI metadata — `connection_type`
-selects `HTTPProvider` vs `WebSocketProvider`, and the endpoint + API key are
-pulled from the vault *inside the Rust core* at parse time, so the WebView never
-sees the key. When no provider is configured (or the vault is locked), a
-deterministic local heuristic stands in. LexGuard validates the output the same
-way regardless of which provider produced it.
+selects `HTTPProvider` vs `WebSocketProvider` (no model or provider is
+hardcoded), and the endpoint + API key are pulled from the vault *inside the Rust
+core* at parse time, so the WebView never sees the key. The model receives a
+system prompt instructing it to return **only** a JSON object of integer-cent
+fields; the response is validated with a Zod schema (`AiExtractionSchema` in
+`lexguard/types.ts`), retried once on failure, then converted cents→dollars into
+`ParsedRetainerPayload`. LexGuard then co-validates — the VDB cross-reference and
+five modules run, and numeric discrepancies are **nudged back to the same
+provider** (up to three times) before escalating to the user.
+
+A configured, unlocked provider is required to parse: a locked vault prompts to
+unlock, a missing provider redirects to Configuration, and network / unparseable
+responses surface a plain-English error without proceeding. The endpoint is a
+parse adapter or compatible API accepting `{model, system, user, messages}` and
+returning the JSON object (Anthropic / OpenAI response shapes are also
+tolerated).
 
 > Outside Tauri, the vault falls back to a Web-Crypto AES-GCM vault using PBKDF2
-> (the browser analogue of scrypt) persisted to localStorage, so the whole flow
-> is demoable in a plain browser.
+> (the browser analogue of scrypt) persisted to localStorage, so the vault and
+> provider flow are demoable in a plain browser.
 
 ## Tests
 

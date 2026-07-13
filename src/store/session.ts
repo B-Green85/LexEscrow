@@ -3,32 +3,21 @@
  *
  * Owns the whole workflow: trust anchors → hashing → attorney verification →
  * AI parse (provider resolved from the credential vault) → LexGuard
- * co-validation (nudge / correct / escalate) → forced review acknowledgment →
- * final blocking re-verify → CRE execution → client notification. Every
- * consequential step is written to the append-only, hash-chained audit trail.
+ * co-validation with the nudge loop → forced review acknowledgment → final
+ * blocking re-verify → CRE execution → client notification. Every consequential
+ * step is written to the append-only, hash-chained audit trail.
  */
 
 import { create } from "zustand";
 import * as backend from "../lib/backend";
-import { AI_ACCESSED_FIELDS } from "../lib/aiParse";
-import { resolveProvider } from "../lib/ai/providers";
+import { resolveProvider, ProviderUnavailableError } from "../lib/ai/providers";
 import { RETAINER_SCHEMA } from "../lib/ai/schema";
-import {
-  ExecutionPath,
-  type ParsedRetainerPayload,
-  type TrustAnchors,
-} from "../lexguard/types";
-import { primeVDB, queryVDB, type VDBStore } from "../lexguard/vdb";
-import {
-  diffNumericsWithVDB,
-  formatUsd,
-  toCents,
-  toPayloadCents,
-  validateArithmetic,
-} from "../lexguard/payload-diff";
-import { matchBarNumber, matchClientName } from "../lexguard/anchor-matcher";
-import { detectAnomalySuppression } from "../lexguard/anomaly-watcher";
-import { detectScopeViolation } from "../lexguard/scope-guard";
+import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from "../lexguard/pipeline";
+import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
+import { primeVDB, type VDBStore } from "../lexguard/vdb";
+import { toPayloadCents } from "../lexguard/payload-diff";
+
+export type { LexGuardCorrection, Escalation } from "../lexguard/pipeline";
 
 export type Screen = "load" | "processing" | "review" | "execution" | "escalation" | "config";
 export type StepStatus = "pending" | "active" | "done" | "error";
@@ -37,25 +26,6 @@ export interface ProcessingStep {
   key: string;
   label: string;
   status: StepStatus;
-}
-
-export interface LexGuardCorrection {
-  module: string;
-  field: string;
-  aiValue: string | number;
-  observedValue: string | number;
-  nudgeCount: number;
-  resolved: boolean;
-  timestamp: string;
-}
-
-export interface Escalation {
-  module: string;
-  field: string;
-  fieldLabel: string;
-  aiValue: string;
-  observedValue: string;
-  recommendation: string;
 }
 
 export interface NotificationStatus {
@@ -92,8 +62,6 @@ function initialSteps(): ProcessingStep[] {
   ];
 }
 
-const formatDollars = (n: number): string => formatUsd(toCents(n));
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A deterministic UUID-ish id without Math.random dependence at module load.
@@ -107,6 +75,7 @@ interface SessionState {
   prevScreen: Screen;
   operator: string;
   providerLabel: string | null;
+  configHint: "locked" | "unconfigured" | null;
   anchors: TrustAnchors;
   sessionId: string | null;
   file: File | null;
@@ -162,6 +131,7 @@ export const useSession = create<SessionState>((set, get) => {
     prevScreen: "load",
     operator: OPERATOR_DEFAULT,
     providerLabel: null,
+    configHint: null,
     anchors: emptyAnchors,
     sessionId: null,
     file: null,
@@ -196,6 +166,7 @@ export const useSession = create<SessionState>((set, get) => {
       set({
         screen: "load",
         providerLabel: null,
+        configHint: null,
         anchors: emptyAnchors,
         sessionId: null,
         file: null,
@@ -226,6 +197,7 @@ export const useSession = create<SessionState>((set, get) => {
         screen: "processing",
         steps: initialSteps(),
         error: null,
+        configHint: null,
         busy: true,
       });
 
@@ -274,12 +246,39 @@ export const useSession = create<SessionState>((set, get) => {
         }
         setStep("bar", "done");
 
-        // 3) AI parse (provider resolved from the vault) + VDB prime.
+        // 3) AI parse — provider resolved from the vault.
         setStep("ai", "active");
         await backend.updateSessionState(sessionId, "PARSING");
         const vdb = await primeVDB(artifact.normalizedText, artifact.hash, sessionId);
-        const provider = await resolveProvider();
-        const parsed = await provider.parse(artifact.normalizedText, RETAINER_SCHEMA);
+
+        let provider;
+        try {
+          provider = await resolveProvider();
+        } catch (e) {
+          if (e instanceof ProviderUnavailableError) {
+            setStep("ai", "error");
+            set({
+              error: e.message,
+              configHint: e.code === "VAULT_LOCKED" ? "locked" : "unconfigured",
+              busy: false,
+            });
+            await backend.updateSessionState(sessionId, "FAILED");
+            return;
+          }
+          throw e;
+        }
+
+        let parsed: ParsedRetainerPayload;
+        try {
+          parsed = await provider.parse(artifact.normalizedText, RETAINER_SCHEMA);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          setStep("ai", "error");
+          set({ error: `AI parsing failed: ${message}`, busy: false });
+          await backend.updateSessionState(sessionId, "FAILED");
+          return;
+        }
+
         // Trust anchors are authoritative — apply them over the doc extraction.
         const payload: ParsedRetainerPayload = {
           ...parsed,
@@ -290,13 +289,14 @@ export const useSession = create<SessionState>((set, get) => {
         await log("ai_parse", { provider: provider.label });
         setStep("ai", "done");
 
-        // 4) LexGuard co-validation.
+        // 4) LexGuard co-validation (VDB cross-reference + nudge loop).
         setStep("lexguard", "active");
-        const result = runLexGuard({
+        const result = await runLexGuardPipeline({
           payload,
           vdb,
           anchors,
           chainlinkVerifiedBar: anchors.attorneyBarNumber,
+          provider,
         });
         set({ payload: result.payload, corrections: result.corrections, escalation: result.escalation });
 
@@ -465,123 +465,6 @@ export const useSession = create<SessionState>((set, get) => {
     },
   };
 });
-
-// ── LexGuard orchestration ──────────────────────────────────────────────────
-
-interface LexGuardInput {
-  payload: ParsedRetainerPayload;
-  vdb: VDBStore;
-  anchors: TrustAnchors;
-  chainlinkVerifiedBar: string;
-}
-
-interface LexGuardResult {
-  payload: ParsedRetainerPayload;
-  corrections: LexGuardCorrection[];
-  escalation: Escalation | null;
-}
-
-function runLexGuard(input: LexGuardInput): LexGuardResult {
-  const corrections: LexGuardCorrection[] = [];
-  const payload = { ...input.payload };
-  const now = () => new Date().toISOString();
-
-  // 1) VDB-assisted numeric diff. If AI's unearned balance disagrees with a
-  // single confident VDB observation, nudge once and adopt it (logged).
-  let diffs = diffNumericsWithVDB(payload, input.vdb);
-  const uniqueUnearned = [...new Set(queryVDB(input.vdb, "numeric", "unearnedBalance").map((e) => Number(e.value)))];
-  if (diffs.some((d) => d.field === "unearnedBalance") && uniqueUnearned.length === 1) {
-    const observed = uniqueUnearned[0];
-    corrections.push({
-      module: "payload-diff",
-      field: "unearnedBalance",
-      aiValue: payload.unearnedBalance,
-      observedValue: observed,
-      nudgeCount: 1,
-      resolved: true,
-      timestamp: now(),
-    });
-    payload.unearnedBalance = observed;
-    diffs = diffNumericsWithVDB(payload, input.vdb);
-  }
-
-  const arithmeticBroken = !validateArithmetic(payload);
-  const barOk = matchBarNumber(
-    payload.extractedBarNumber ?? null,
-    input.anchors.attorneyBarNumber,
-    input.chainlinkVerifiedBar,
-  );
-  const clientNameOk = payload.clientName
-    ? matchClientName(payload.clientName, input.anchors.clientFullLegalName)
-    : true;
-  const suppressed = detectAnomalySuppression(payload.anomaliesFlagged, payload.anomaliesSuppressed, payload.recommendedPath);
-  const scopeViolations = detectScopeViolation(AI_ACCESSED_FIELDS);
-
-  // First unresolved discrepancy becomes the escalation.
-  let escalation: Escalation | null = null;
-  const unearnedDiff = diffs.find((d) => d.field === "unearnedBalance");
-  if (unearnedDiff) {
-    escalation = {
-      module: "payload-diff",
-      field: "unearnedBalance",
-      fieldLabel: "Unearned Balance",
-      aiValue: formatDollars(Number(unearnedDiff.aiValue)),
-      observedValue: formatDollars(Number(unearnedDiff.observedValue)),
-      recommendation: "Review the billing records section of the retainer agreement before proceeding.",
-    };
-  } else if (arithmeticBroken) {
-    escalation = {
-      module: "payload-diff",
-      field: "arithmetic",
-      fieldLabel: "Retainer Arithmetic",
-      aiValue: `${formatDollars(payload.earnedFees)} + ${formatDollars(payload.unearnedBalance)} = ${formatDollars(
-        payload.earnedFees + payload.unearnedBalance,
-      )}`,
-      observedValue: `${formatDollars(payload.totalHeld)} total held`,
-      recommendation:
-        "Earned fees plus unearned balance do not equal the total retainer held. Review the billing reconciliation section before proceeding.",
-    };
-  } else if (!barOk) {
-    escalation = {
-      module: "anchor-matcher",
-      field: "barNumber",
-      fieldLabel: "Attorney Bar Number",
-      aiValue: payload.extractedBarNumber ?? "—",
-      observedValue: input.anchors.attorneyBarNumber,
-      recommendation: "The bar number found in the document does not match the verified attorney identity.",
-    };
-  } else if (!clientNameOk) {
-    escalation = {
-      module: "anchor-matcher",
-      field: "clientName",
-      fieldLabel: "Client Name",
-      aiValue: payload.clientName ?? "—",
-      observedValue: input.anchors.clientFullLegalName,
-      recommendation: "The client name in the document does not match the name entered at document load.",
-    };
-  } else if (suppressed) {
-    escalation = {
-      module: "anomaly-watcher",
-      field: "anomaliesSuppressed",
-      fieldLabel: "Flagged Anomalies",
-      aiValue: "Routed to direct settlement",
-      observedValue: `${payload.anomaliesFlagged.length} anomaly(ies) flagged`,
-      recommendation:
-        "Anomalies were flagged during parsing but the workflow would proceed to direct settlement. Route to arbitration or resolve the anomalies.",
-    };
-  } else if (scopeViolations.length > 0) {
-    escalation = {
-      module: "scope-guard",
-      field: scopeViolations[0],
-      fieldLabel: "Field Access",
-      aiValue: scopeViolations.join(", "),
-      observedValue: "authorized fields only",
-      recommendation: "AI accessed one or more fields outside the authorized set for a retainer release.",
-    };
-  }
-
-  return { payload, corrections, escalation };
-}
 
 // ── Notifications (Rust SMTP/Twilio backend, or browser simulation) ──────────
 

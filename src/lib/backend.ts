@@ -341,49 +341,54 @@ export async function vaultChangePassword(current: string, next: string): Promis
 
 // ── AI transport (secret stays in the backend / browser vault) ───────────────
 
-export async function aiParseHttp(documentText: string, schemaJson: string): Promise<string> {
-  if (isTauri()) return invoke<string>("ai_parse_http", { documentText, schemaJson });
-  return browserAiHttp(documentText, schemaJson);
+export async function aiRequestHttp(system: string, user: string): Promise<string> {
+  if (isTauri()) return invoke<string>("ai_request_http", { system, user });
+  return browserAiHttp(system, user);
 }
 
-export async function aiParseWs(documentText: string, schemaJson: string): Promise<string> {
-  if (isTauri()) return invoke<string>("ai_parse_ws", { documentText, schemaJson });
-  return browserAiWs(documentText, schemaJson);
+export async function aiRequestWs(system: string, user: string): Promise<string> {
+  if (isTauri()) return invoke<string>("ai_request_ws", { system, user });
+  return browserAiWs(system, user);
 }
 
-const AI_INSTRUCTIONS =
-  "Extract the retainer fields defined in `schema` from `document`. " +
-  "Respond with ONLY a JSON object whose keys are the schema field names.";
+function aiBody(providerName: string, system: string, user: string): string {
+  return JSON.stringify({
+    model: providerName,
+    system,
+    user,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+}
 
-async function browserAiHttp(documentText: string, schemaJson: string): Promise<string> {
+async function browserAiHttp(system: string, user: string): Promise<string> {
   const ai = browserVault.resolveAi();
   if (!ai || !ai.apiKey) throw new Error("No AI provider configured (unlock the vault).");
-  const body = JSON.stringify({
-    provider: ai.providerName,
-    document: documentText,
-    schema: JSON.parse(schemaJson),
-    instructions: AI_INSTRUCTIONS,
-  });
   const resp = await fetch(ai.endpoint, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${ai.apiKey}`, "x-api-key": ai.apiKey },
-    body,
+    body: aiBody(ai.providerName, system, user),
   });
   const text = await resp.text();
   if (!resp.ok) throw new Error(`AI provider returned HTTP ${resp.status}: ${text}`);
   return text;
 }
 
-async function browserAiWs(documentText: string, schemaJson: string): Promise<string> {
+async function browserAiWs(system: string, user: string): Promise<string> {
   const ai = browserVault.resolveAi();
   if (!ai || !ai.apiKey) throw new Error("No AI provider configured (unlock the vault).");
-  // Browsers cannot set custom WebSocket headers; the key travels in the
-  // opening message for the fallback path.
+  // Browsers cannot set custom WebSocket headers; the key travels in the message.
   const payload = JSON.stringify({
-    provider: ai.providerName,
+    model: ai.providerName,
     apiKey: ai.apiKey,
-    document: documentText,
-    schema: JSON.parse(schemaJson),
+    system,
+    user,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
   });
   return new Promise<string>((resolve, reject) => {
     const ws = new WebSocket(ai.endpoint);
