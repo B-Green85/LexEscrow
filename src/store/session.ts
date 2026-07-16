@@ -10,7 +10,7 @@
 
 import { create } from "zustand";
 import * as backend from "../lib/backend";
-import { resolveProvider, ProviderUnavailableError } from "../lib/ai/providers";
+import { resolveProvider, ProviderUnavailableError, type AIParserProvider } from "../lib/ai/providers";
 import { RETAINER_SCHEMA } from "../lib/ai/schema";
 import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from "../lexguard/pipeline";
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
@@ -19,8 +19,17 @@ import { toPayloadCents } from "../lexguard/payload-diff";
 
 export type { LexGuardCorrection, Escalation } from "../lexguard/pipeline";
 
-export type Screen = "load" | "processing" | "review" | "execution" | "escalation" | "config";
+export type Screen =
+  | "load"
+  | "processing"
+  | "review"
+  | "execution"
+  | "escalation"
+  | "config"
+  | "batch";
 export type StepStatus = "pending" | "active" | "done" | "error";
+export type EntryMode = "ai" | "manual";
+export type ProcPhase = "choose" | "running" | "manual";
 
 export interface ProcessingStep {
   key: string;
@@ -43,6 +52,51 @@ export interface ExecutionState {
   notifications: NotificationStatus[];
 }
 
+/** Values a human types in Manual Entry mode. Money fields are dollars. */
+export interface ManualEntryFields {
+  clientId: string;
+  lawFirmWallet: string;
+  clientWallet: string;
+  totalHeld: number;
+  earnedFees: number;
+  unearnedBalance: number;
+  disputedHours: number;
+  disputedAmount: number;
+  signaturesVerified: boolean;
+  recommendedPath: ExecutionPath;
+  anomaliesFlagged: string[];
+}
+
+/** What the batch screen hands to loadBatchItem (kept structural to avoid a store cycle). */
+export interface BatchHydration {
+  itemId: string;
+  sessionId: string;
+  file: File;
+  artifact: backend.LoadedArtifact;
+  vdb: VDBStore;
+  payload: ParsedRetainerPayload;
+  corrections: LexGuardCorrection[];
+  escalation: Escalation | null;
+  anchors: TrustAnchors;
+  providerLabel: string;
+}
+
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+
+/**
+ * Provider stand-in for manually entered payloads. LexGuard cannot ask a human
+ * to "re-extract" one field mid-pipeline, so `correct` returns null — any
+ * discrepancy surfaces to the reviewer as an escalation instead of being
+ * auto-corrected. The system does not trust humans blindly either.
+ */
+const manualProvider: AIParserProvider = {
+  label: "Manual entry",
+  parse: async () => {
+    throw new Error("manual entry has no parse step");
+  },
+  correct: async () => null,
+};
+
 const OPERATOR_DEFAULT = "paralegal@lawfirm.com";
 
 const emptyAnchors: TrustAnchors = {
@@ -53,13 +107,17 @@ const emptyAnchors: TrustAnchors = {
   clientPhone: "",
 };
 
-function initialSteps(): ProcessingStep[] {
+function stepsFor(mode: EntryMode): ProcessingStep[] {
   return [
     { key: "hash", label: "Hashing artifacts", status: "pending" },
     { key: "bar", label: "Verifying attorney", status: "pending" },
-    { key: "ai", label: "AI parsing", status: "pending" },
+    { key: "ai", label: mode === "manual" ? "Manual entry" : "AI parsing", status: "pending" },
     { key: "lexguard", label: "LexGuard validating", status: "pending" },
   ];
+}
+
+function initialSteps(): ProcessingStep[] {
+  return stepsFor("ai");
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,6 +134,10 @@ interface SessionState {
   operator: string;
   providerLabel: string | null;
   configHint: "locked" | "unconfigured" | null;
+  entryMode: EntryMode;
+  procPhase: ProcPhase;
+  activeBatchItemId: string | null;
+  fromBatch: boolean;
   anchors: TrustAnchors;
   sessionId: string | null;
   file: File | null;
@@ -96,10 +158,16 @@ interface SessionState {
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setFile: (file: File | null) => void;
+  setEntryMode: (mode: EntryMode) => void;
   openConfig: () => void;
   closeConfig: () => void;
+  openBatch: () => void;
+  returnToBatch: () => void;
+  loadBatchItem: (h: BatchHydration) => void;
   reset: () => void;
+  goToProcessing: () => void;
   beginProcessing: () => Promise<void>;
+  submitManualEntry: (fields: ManualEntryFields) => Promise<void>;
   markScrollCompleted: () => void;
   setAcknowledged: (v: boolean) => Promise<void>;
   proceedToExecution: () => Promise<void>;
@@ -126,12 +194,74 @@ export const useSession = create<SessionState>((set, get) => {
   const setStep = (key: string, status: StepStatus) =>
     set((s) => ({ steps: stepStatus(s.steps, key, status) }));
 
+  // Shared tail: run the LexGuard pipeline on a payload (from AI or manual
+  // entry), persist integer cents, and route to review or escalation.
+  const runPipelineAndRoute = async (
+    payload: ParsedRetainerPayload,
+    vdb: VDBStore,
+    sessionId: string,
+    anchors: TrustAnchors,
+    provider: AIParserProvider,
+    entryMode: EntryMode,
+  ) => {
+    setStep("lexguard", "active");
+    const result = await runLexGuardPipeline({
+      payload,
+      vdb,
+      anchors,
+      chainlinkVerifiedBar: anchors.attorneyBarNumber,
+      provider,
+    });
+    set({ payload: result.payload, corrections: result.corrections, escalation: result.escalation });
+
+    for (const c of result.corrections) {
+      await log("lexguard_correction", {
+        module: c.module,
+        field: c.field,
+        aiValue: c.aiValue,
+        observedValue: c.observedValue,
+        nudgeCount: c.nudgeCount,
+        resolved: c.resolved,
+      });
+    }
+
+    const cents = toPayloadCents(result.payload);
+    await backend.savePayload({
+      payloadId: newId("pl"),
+      sessionId,
+      totalHeldCents: Number(cents.totalHeldCents),
+      earnedFeesCents: Number(cents.earnedFeesCents),
+      unearnedBalanceCents: Number(cents.unearnedBalanceCents),
+      disputedHours: cents.disputedHours,
+      disputedAmountCents: Number(cents.disputedAmountCents),
+    });
+    setStep("lexguard", "done");
+
+    if (result.escalation) {
+      await backend.updateSessionState(sessionId, "ESCALATED");
+      set({ screen: "escalation", busy: false });
+    } else {
+      set({
+        screen: "review",
+        reviewOpenedAt: Date.now(),
+        scrollCompleted: false,
+        acknowledged: false,
+        busy: false,
+      });
+      await log("review_screen_opened", { entry_mode: entryMode });
+    }
+  };
+
   return {
     screen: "load",
     prevScreen: "load",
     operator: OPERATOR_DEFAULT,
     providerLabel: null,
     configHint: null,
+    entryMode: "ai",
+    procPhase: "choose",
+    activeBatchItemId: null,
+    fromBatch: false,
     anchors: emptyAnchors,
     sessionId: null,
     file: null,
@@ -158,15 +288,46 @@ export const useSession = create<SessionState>((set, get) => {
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setFile: (file) => set({ file }),
+    setEntryMode: (mode) => set({ entryMode: mode }),
     openConfig: () =>
       set((s) => ({ prevScreen: s.screen === "config" ? s.prevScreen : s.screen, screen: "config" })),
     closeConfig: () => set((s) => ({ screen: s.prevScreen })),
+    openBatch: () => set({ screen: "batch" }),
+    returnToBatch: () => set({ screen: "batch", activeBatchItemId: null, fromBatch: false }),
+
+    loadBatchItem: (h) =>
+      set({
+        activeBatchItemId: h.itemId,
+        fromBatch: true,
+        sessionId: h.sessionId,
+        file: h.file,
+        artifact: h.artifact,
+        vdb: h.vdb,
+        payload: h.payload,
+        corrections: h.corrections,
+        escalation: h.escalation,
+        anchors: h.anchors,
+        providerLabel: h.providerLabel,
+        barActive: true,
+        error: null,
+        configHint: null,
+        procPhase: "running",
+        execution: { phase: "idle", path: null, txHash: null, clientCents: 0n, firmCents: 0n, notifications: [] },
+        reviewOpenedAt: h.escalation ? null : Date.now(),
+        scrollCompleted: false,
+        acknowledged: false,
+        screen: h.escalation ? "escalation" : "review",
+      }),
 
     reset: () =>
       set({
         screen: "load",
         providerLabel: null,
         configHint: null,
+        entryMode: "ai",
+        procPhase: "choose",
+        activeBatchItemId: null,
+        fromBatch: false,
         anchors: emptyAnchors,
         sessionId: null,
         file: null,
@@ -185,8 +346,34 @@ export const useSession = create<SessionState>((set, get) => {
         busy: false,
       }),
 
+    // DocumentLoad → Processing screen, showing the entry-mode toggle before
+    // anything runs.
+    goToProcessing: () => {
+      const { file } = get();
+      if (!file) {
+        set({ error: "Please add a retainer document before continuing." });
+        return;
+      }
+      set({
+        screen: "processing",
+        procPhase: "choose",
+        steps: initialSteps(),
+        error: null,
+        configHint: null,
+        payload: null,
+        corrections: [],
+        escalation: null,
+        reviewOpenedAt: null,
+        scrollCompleted: false,
+        acknowledged: false,
+        execution: { phase: "idle", path: null, txHash: null, clientCents: 0n, firmCents: 0n, notifications: [] },
+      });
+    },
+
+    // Start button on the Processing screen. Hashes + verifies the attorney,
+    // then either runs AI parsing or shows the manual-entry form.
     beginProcessing: async () => {
-      const { file, anchors } = get();
+      const { file, anchors, entryMode } = get();
       if (!file) {
         set({ error: "Please add a retainer document before continuing." });
         return;
@@ -194,8 +381,8 @@ export const useSession = create<SessionState>((set, get) => {
       const sessionId = newId("wf");
       set({
         sessionId,
-        screen: "processing",
-        steps: initialSteps(),
+        procPhase: "running",
+        steps: stepsFor(entryMode),
         error: null,
         configHint: null,
         busy: true,
@@ -213,11 +400,7 @@ export const useSession = create<SessionState>((set, get) => {
           attorneyBarNumber: anchors.attorneyBarNumber,
           documentHash: artifact.hash,
         });
-        await log("document_loaded", {
-          filename: artifact.filename,
-          hash: artifact.hash,
-          size: artifact.size,
-        });
+        await log("document_loaded", { filename: artifact.filename, hash: artifact.hash, size: artifact.size });
         await log("trust_anchors_provided", {
           bar_last4: anchors.attorneyBarNumber.slice(-4),
           state: anchors.state,
@@ -225,7 +408,7 @@ export const useSession = create<SessionState>((set, get) => {
         });
         setStep("hash", "done");
 
-        // 2) Verify attorney (simulated CA State Bar check).
+        // 2) Verify attorney (simulated CA State Bar check) — both modes.
         setStep("bar", "active");
         const active = /^\d{5,8}$/.test(anchors.attorneyBarNumber.trim()) && anchors.state === "California";
         set({ barActive: active });
@@ -246,11 +429,19 @@ export const useSession = create<SessionState>((set, get) => {
         }
         setStep("bar", "done");
 
-        // 3) AI parse — provider resolved from the vault.
-        setStep("ai", "active");
+        // 3) Prime the VDB from the artifact (both modes validate against it).
         await backend.updateSessionState(sessionId, "PARSING");
         const vdb = await primeVDB(artifact.normalizedText, artifact.hash, sessionId);
+        set({ vdb });
 
+        // Manual entry: stop here and let the human fill the form.
+        if (entryMode === "manual") {
+          set({ procPhase: "manual", busy: false });
+          return;
+        }
+
+        // 4) AI parse — provider resolved from the vault.
+        setStep("ai", "active");
         let provider;
         try {
           provider = await resolveProvider();
@@ -285,55 +476,54 @@ export const useSession = create<SessionState>((set, get) => {
           barNumber: anchors.attorneyBarNumber,
           clientName: parsed.clientName ?? anchors.clientFullLegalName,
         };
-        set({ vdb, payload, providerLabel: provider.label });
-        await log("ai_parse", { provider: provider.label });
+        set({ payload, providerLabel: provider.label });
+        await log("parse", { entry_mode: "ai", provider: provider.label });
         setStep("ai", "done");
 
-        // 4) LexGuard co-validation (VDB cross-reference + nudge loop).
-        setStep("lexguard", "active");
-        const result = await runLexGuardPipeline({
-          payload,
-          vdb,
-          anchors,
-          chainlinkVerifiedBar: anchors.attorneyBarNumber,
-          provider,
-        });
-        set({ payload: result.payload, corrections: result.corrections, escalation: result.escalation });
-
-        for (const c of result.corrections) {
-          await log("lexguard_correction", {
-            module: c.module,
-            field: c.field,
-            aiValue: c.aiValue,
-            observedValue: c.observedValue,
-            nudgeCount: c.nudgeCount,
-            resolved: c.resolved,
-          });
-        }
-
-        const cents = toPayloadCents(result.payload);
-        await backend.savePayload({
-          payloadId: newId("pl"),
-          sessionId,
-          totalHeldCents: Number(cents.totalHeldCents),
-          earnedFeesCents: Number(cents.earnedFeesCents),
-          unearnedBalanceCents: Number(cents.unearnedBalanceCents),
-          disputedHours: cents.disputedHours,
-          disputedAmountCents: Number(cents.disputedAmountCents),
-        });
-        setStep("lexguard", "done");
-
-        // 5) Route to escalation or review.
-        if (result.escalation) {
-          await backend.updateSessionState(sessionId, "ESCALATED");
-          set({ screen: "escalation", busy: false });
-        } else {
-          set({ screen: "review", reviewOpenedAt: Date.now(), scrollCompleted: false, acknowledged: false, busy: false });
-          await log("review_screen_opened", {});
-        }
+        // 5) LexGuard co-validation + route.
+        await runPipelineAndRoute(payload, vdb, sessionId, anchors, provider, "ai");
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         set({ error: `Processing failed: ${message}`, busy: false });
+        setStep("lexguard", "error");
+      }
+    },
+
+    // Manual-entry form submit — LexGuard runs on the human's payload exactly as
+    // it would against AI output. The system does not trust humans blindly.
+    submitManualEntry: async (f) => {
+      const { artifact, vdb, sessionId, anchors } = get();
+      if (!artifact || !vdb || !sessionId) {
+        set({ error: "Manual entry is not ready — reload the document." });
+        return;
+      }
+      set({ procPhase: "running", busy: true, error: null });
+      setStep("ai", "done");
+
+      try {
+        const payload: ParsedRetainerPayload = {
+          clientId: f.clientId || "C-UNKNOWN",
+          lawFirmWallet: f.lawFirmWallet || ZERO_ADDR,
+          clientWallet: f.clientWallet || ZERO_ADDR,
+          totalHeld: f.totalHeld,
+          earnedFees: f.earnedFees,
+          unearnedBalance: f.unearnedBalance,
+          disputedHours: f.disputedHours,
+          disputedAmount: f.disputedAmount,
+          signaturesVerified: f.signaturesVerified,
+          recommendedPath: f.recommendedPath,
+          anomaliesFlagged: f.anomaliesFlagged,
+          anomaliesSuppressed: false,
+          barNumber: anchors.attorneyBarNumber,
+          clientName: anchors.clientFullLegalName,
+          extractedBarNumber: null,
+        };
+        set({ payload, providerLabel: "Manual entry" });
+        await log("parse", { entry_mode: "manual", provider: "manual" });
+        await runPipelineAndRoute(payload, vdb, sessionId, anchors, manualProvider, "manual");
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Manual entry failed: ${message}`, busy: false });
         setStep("lexguard", "error");
       }
     },

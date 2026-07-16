@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSession } from "../store/session";
+import { useBatch } from "../store/batch";
 import { ExecutionPath } from "../lexguard/types";
 import { formatUsd } from "../lexguard/payload-diff";
 import * as backend from "../lib/backend";
@@ -17,7 +18,7 @@ function shortRef(hash: string | null): string {
 }
 
 export function ExecutionConfirmation() {
-  const { execution, buildAuditReport, sessionId, reset } = useSession();
+  const { execution, buildAuditReport, sessionId, reset, activeBatchItemId, fromBatch, returnToBatch } = useSession();
   const [chain, setChain] = useState<backend.ChainVerification | null>(null);
   const done = execution.phase === "done";
   const isDirect = execution.path === ExecutionPath.DirectSettlement;
@@ -26,6 +27,14 @@ export function ExecutionConfirmation() {
   useEffect(() => {
     if (done) backend.verifyAuditChain().then(setChain).catch(() => setChain(null));
   }, [done]);
+
+  // When this settlement came from a batch item, reflect it back into the batch
+  // table (Settled + tx hash inline).
+  useEffect(() => {
+    if (done && activeBatchItemId && execution.txHash) {
+      useBatch.getState().markSettled(activeBatchItemId, execution.txHash);
+    }
+  }, [done, activeBatchItemId, execution.txHash]);
 
   const onDownload = async () => {
     const json = await buildAuditReport();
@@ -150,10 +159,16 @@ export function ExecutionConfirmation() {
             </button>
           </div>
 
-          <div className="mt-6 flex justify-center">
-            <button className="btn btn-secondary" onClick={() => reset()}>
-              Start a new release
-            </button>
+          <div className="mt-6 flex justify-center gap-2">
+            {fromBatch ? (
+              <button className="btn btn-primary" onClick={() => returnToBatch()}>
+                Back to batch
+              </button>
+            ) : (
+              <button className="btn btn-secondary" onClick={() => reset()}>
+                Start a new release
+              </button>
+            )}
           </div>
         </>
       )}

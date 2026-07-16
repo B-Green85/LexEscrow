@@ -42,7 +42,7 @@ LexEscrow/
 │   │   ├── backend.ts       #   Tauri-or-browser bridge (incl. vault + AI transport)
 │   │   ├── browserVault.ts  #   Web-Crypto AES-GCM + PBKDF2 fallback vault
 │   │   └── aiParse.ts       #   deterministic heuristic parser (local provider)
-│   ├── screens/             # Six screens (Load, Processing, Review, Execute, Escalation, Configuration)
+│   ├── screens/             # Seven screens (Load, Processing, Review, Execute, Escalation, Configuration, Batch)
 │   ├── store/               # Zustand session store
 │   └── components/          # Shared UI primitives
 ├── src-tauri/               # Rust backend (Tauri v2)
@@ -155,6 +155,28 @@ tolerated).
 > Outside Tauri, the vault falls back to a Web-Crypto AES-GCM vault using PBKDF2
 > (the browser analogue of scrypt) persisted to localStorage, so the vault and
 > provider flow are demoable in a plain browser.
+
+## Manual entry & batch processing
+
+**Manual entry.** The Processing screen offers an entry-mode toggle before
+parsing — *AI Parse* or *Manual Entry*. Manual entry skips AI and shows a
+structured form for every `ParsedRetainerPayload` field (money entered as dollars,
+stored/validated as integer cents). On submit, the **full LexGuard pipeline runs
+against the typed payload exactly as it would against AI output** — arithmetic,
+anchor matching, anomaly-suppression, scope, and VDB cross-reference — and routes
+to the same forced-acknowledgment review or an escalation. The audit log records
+`entry_mode: "manual"` vs `"ai"`. LexGuard does not trust AI or humans blindly.
+
+**Batch processing** (7th screen, folder icon). Load a folder of retainer
+documents; up to **3 parse concurrently**. Each document gets its own
+ArtifactGuard hash and its own SQLite session (audit entries carry a shared
+`batch_id`), and LexGuard validates each independently — clean → **Parsed**,
+discrepancy → **Flagged**. A summary bar shows *X ready | Y flagged | Z pending*;
+**Review** opens the standard single-document review for that retainer, and a
+settled row shows its transaction hash inline. Entry mode is per-document
+(default AI; switch a row to Manual). The batch summary exports as CSV. Batch uses
+the same credential vault for the AI provider across all documents (falling back
+to the local parser when none is configured).
 
 ## On-chain settlement
 

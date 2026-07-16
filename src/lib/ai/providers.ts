@@ -235,3 +235,16 @@ export async function resolveProvider(): Promise<AIParserProvider> {
     ? new WebSocketProvider(ai.providerName)
     : new HTTPProvider(ai.providerName);
 }
+
+/**
+ * Provider resolution for batch processing. Uses the same vault provider as the
+ * single-document flow, but falls back to the deterministic local heuristic
+ * when the vault is locked / unconfigured so a batch can still be triaged.
+ */
+export async function resolveProviderForBatch(): Promise<AIParserProvider> {
+  try {
+    return await resolveProvider();
+  } catch {
+    return new LocalHeuristicProvider();
+  }
+}

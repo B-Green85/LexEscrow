@@ -1,4 +1,5 @@
 import { useSession, type ProcessingStep } from "../store/session";
+import { ManualEntryForm } from "../components/ManualEntryForm";
 
 function Spinner() {
   return (
@@ -30,14 +31,107 @@ function StepIcon({ status }: { status: ProcessingStep["status"] }) {
   return <div className="h-5 w-5 rounded-full border-2 border-slate-200" />;
 }
 
-export function Processing() {
-  const { steps, error, configHint, reset, openConfig } = useSession();
+function ModeOption({
+  selected,
+  onSelect,
+  title,
+  desc,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  title: string;
+  desc: string;
+}) {
+  return (
+    <button
+      onClick={onSelect}
+      className={`flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors ${
+        selected ? "border-brand-500 bg-brand-50/50 ring-1 ring-brand-500" : "border-slate-200 hover:bg-slate-50"
+      }`}
+    >
+      <span
+        className={`mt-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 ${
+          selected ? "border-brand-600" : "border-slate-300"
+        }`}
+      >
+        {selected && <span className="h-2 w-2 rounded-full bg-brand-600" />}
+      </span>
+      <span>
+        <span className="block text-sm font-semibold text-slate-800">{title}</span>
+        <span className="block text-xs text-slate-500">{desc}</span>
+      </span>
+    </button>
+  );
+}
 
+export function Processing() {
+  const {
+    procPhase,
+    entryMode,
+    setEntryMode,
+    beginProcessing,
+    submitManualEntry,
+    steps,
+    error,
+    configHint,
+    busy,
+    reset,
+    openConfig,
+  } = useSession();
+
+  // Phase 1 — choose entry mode before parsing begins.
+  if (procPhase === "choose") {
+    return (
+      <div className="mx-auto w-full max-w-lg">
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">How should this document be parsed?</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Either way, LexGuard validates the result against the document before you can proceed.
+        </p>
+        <div className="card mt-6 space-y-3 p-5">
+          <ModeOption
+            selected={entryMode === "ai"}
+            onSelect={() => setEntryMode("ai")}
+            title="AI Parse (recommended)"
+            desc="Extract the retainer fields with the configured AI provider."
+          />
+          <ModeOption
+            selected={entryMode === "manual"}
+            onSelect={() => setEntryMode("manual")}
+            title="Manual Entry"
+            desc="Type the fields yourself. LexGuard validates them the same way."
+          />
+          <div className="flex justify-end pt-1">
+            <button className="btn btn-primary btn-lg" disabled={busy} onClick={() => beginProcessing()}>
+              Start
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Phase 3 — manual entry form (after hashing + attorney verification).
+  if (procPhase === "manual") {
+    return (
+      <div className="mx-auto w-full max-w-2xl">
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">Manual entry</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Document hashed and attorney verified. Enter the retainer fields below.
+        </p>
+        <div className="mt-6">
+          <ManualEntryForm submitting={busy} onSubmit={(f) => submitManualEntry(f)} onCancel={() => reset()} />
+        </div>
+      </div>
+    );
+  }
+
+  // Phase 2 — running progress.
   return (
     <div className="mx-auto w-full max-w-lg">
       <h1 className="text-xl font-bold tracking-tight text-slate-900">Processing</h1>
       <p className="mt-1 text-sm text-slate-500">
-        LexEscrow is hashing the artifact, verifying the attorney, and validating the AI extraction.
+        LexEscrow is hashing the artifact, verifying the attorney, and validating the{" "}
+        {entryMode === "manual" ? "entered" : "extracted"} payload.
       </p>
 
       <div className="card mt-6 divide-y divide-slate-100">

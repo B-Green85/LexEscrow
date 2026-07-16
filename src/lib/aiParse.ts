@@ -33,7 +33,7 @@ const RE = {
   clientId: /client\s+id\s*[:\-]?\s*([A-Za-z0-9\-]+)/i,
   signature: /signature[s]?\s*(?:status)?\s*[:\-]?\s*(verified|signed|executed|complete|present|yes)/i,
   barInDoc: /bar\s*(?:no\.?|number|#)\s*[:\-]?\s*(\d{5,8})/i,
-  clientNameInDoc: /client\s*(?:full\s*legal\s*)?(?:name)?\s*[:\-]\s*([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)/,
+  clientNameInDoc: /client\s*(?:full\s*legal\s*)?(?:name)?\s*[:\-]\s*([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)+)/i,
   anomalies: /\b(anomal\w*|discrepanc\w*|withheld|irregular\w*|unreconciled)\b/gi,
 };
 

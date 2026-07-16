@@ -9,7 +9,7 @@ function bytesLabel(n: number): string {
 }
 
 export function DocumentLoad() {
-  const { anchors, setAnchor, file, setFile, beginProcessing, error, busy } = useSession();
+  const { anchors, setAnchor, file, setFile, goToProcessing, error, busy } = useSession();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const emailValid = /^\S+@\S+\.\S+$/.test(anchors.clientEmail.trim());
@@ -132,7 +132,7 @@ export function DocumentLoad() {
           <p className="max-w-xs text-xs text-slate-400">
             The bar number is verified against the California State Bar before any processing begins.
           </p>
-          <button className="btn btn-primary btn-lg" disabled={!canContinue} onClick={() => beginProcessing()}>
+          <button className="btn btn-primary btn-lg" disabled={!canContinue} onClick={() => goToProcessing()}>
             Continue
           </button>
         </div>
