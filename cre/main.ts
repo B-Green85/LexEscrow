@@ -103,12 +103,11 @@ const verifyBar = (
 };
 
 type NotificationData = {
-  action: "RetainerReleased";
+  action: string; // on-chain event name: RetainerSettled | ArbitrationResolved
   documentHash: string;
   clientWallet: string;
   clientAmount: string;
   firmAmount: string;
-  path: string;
 };
 
 const postNotification = (
@@ -219,8 +218,10 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
   return txHash;
 };
 
+// Events emitted by the RetainerRelease contract on settlement.
 const eventAbi = parseAbi([
-  "event RetainerReleased(bytes32 indexed documentHash, address indexed clientWallet, uint256 clientAmount, uint256 firmAmount, uint8 path)",
+  "event RetainerSettled(bytes32 indexed documentHash, address indexed clientWallet, address indexed firmWallet, uint256 clientAmount, uint256 firmAmount, uint256 timestamp)",
+  "event ArbitrationResolved(bytes32 indexed documentHash, address indexed resolvedBy, uint256 clientAmount, uint256 firmAmount, uint256 timestamp)",
 ]);
 
 const onLogTrigger = (runtime: Runtime<Config>, log: EVMLog): string => {
@@ -228,26 +229,35 @@ const onLogTrigger = (runtime: Runtime<Config>, log: EVMLog): string => {
     `0x${string}`,
     ...`0x${string}`[],
   ];
-  const decoded = decodeEventLog({ abi: eventAbi, data: bytesToHex(log.data), topics });
 
-  if (decoded.eventName !== "RetainerReleased") {
+  let decoded;
+  try {
+    decoded = decodeEventLog({ abi: eventAbi, data: bytesToHex(log.data), topics });
+  } catch {
+    return "No key event detected";
+  }
+  if (decoded.eventName !== "RetainerSettled" && decoded.eventName !== "ArbitrationResolved") {
     return "No key event detected";
   }
 
-  const { documentHash, clientWallet, clientAmount, firmAmount, path } = decoded.args;
-  runtime.log(`RetainerReleased detected for ${clientWallet} (${documentHash})`);
+  const args = decoded.args as unknown as {
+    documentHash: `0x${string}`;
+    clientWallet?: `0x${string}`;
+    clientAmount: bigint;
+    firmAmount: bigint;
+  };
+  runtime.log(`${decoded.eventName} detected (${args.documentHash})`);
 
   const httpClient = new cre.capabilities.HTTPClient();
   const result = httpClient
     .sendRequest(runtime, postNotification, consensusIdenticalAggregation<PostResponse>())(
       runtime.config,
       {
-        action: "RetainerReleased",
-        documentHash: documentHash as string,
-        clientWallet: clientWallet as string,
-        clientAmount: (clientAmount as bigint).toString(),
-        firmAmount: (firmAmount as bigint).toString(),
-        path: (path as number).toString(),
+        action: decoded.eventName,
+        documentHash: args.documentHash as string,
+        clientWallet: (args.clientWallet ?? "0x") as string,
+        clientAmount: args.clientAmount.toString(),
+        firmAmount: args.firmAmount.toString(),
       },
     )
     .result();

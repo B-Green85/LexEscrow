@@ -1,10 +1,12 @@
 # ==========================================================================
-# LexEscrow CRE PROJECT SETTINGS
+# LexEscrow CRE PROJECT SETTINGS — ETHEREUM SEPOLIA
 # ==========================================================================
+# NOTE: put your own RPC API key here at runtime. This file is committed, so it
+# must never contain a real key — keep the placeholder.
 local-simulation:
   rpcs:
     - chain-name: ethereum-testnet-sepolia
-      url: <YOUR RPC URL>
+      url: https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY
 
 staging:
   cre-cli:
@@ -13,4 +15,4 @@ staging:
     workflow-owner-address: "(optional) Multi-signature contract address"
   rpcs:
     - chain-name: ethereum-testnet-sepolia
-      url: https://sepolia.infura.io/v3/YOUR_API_KEY
+      url: https://eth-sepolia.g.alchemy.com/v2/YOUR_API_KEY

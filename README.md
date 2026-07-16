@@ -54,10 +54,14 @@ LexEscrow/
 │   │   ├── notify.rs        #   SMTP (lettre) + Twilio SMS (reqwest), vault-backed
 │   │   └── lib.rs           #   Tauri command registration
 │   └── migrations/          # SQLite schema (3 tables, hash-chained audit trail)
-└── cre/                     # Chainlink CRE workflow (bun + @chainlink/cre-sdk)
-    ├── main.ts              #   two-handler pattern: onHTTPTrigger + onLogTrigger
-    ├── workflow.yaml
-    └── config.json
+├── cre/                     # Chainlink CRE workflow (bun + @chainlink/cre-sdk)
+│   ├── main.ts              #   two-handler pattern: onHTTPTrigger + onLogTrigger
+│   ├── workflow.yaml
+│   └── config.json
+└── contracts/               # Solidity RetainerRelease receiver (Chainlink CRE)
+    ├── src/RetainerRelease.sol  # directSettle / lockArbitration / 2-of-3 resolve
+    ├── interfaces/          #   IReceiver, IERC165, ReceiverTemplate
+    └── 1_deploy.ts …        #   viem deploy + fund + test scripts
 ```
 
 ## Core invariants
@@ -151,6 +155,16 @@ tolerated).
 > Outside Tauri, the vault falls back to a Web-Crypto AES-GCM vault using PBKDF2
 > (the browser analogue of scrypt) persisted to localStorage, so the vault and
 > provider flow are demoable in a plain browser.
+
+## On-chain settlement
+
+The CRE workflow writes a signed report to the **`RetainerRelease`** Solidity
+receiver (`contracts/src/RetainerRelease.sol`), which settles in USDC on Ethereum
+Ethereum Sepolia — Path A pays client + firm atomically, Path B locks the total for a
+2-of-3 arbitration release. It implements the CRE `IReceiver` interface (via
+`ReceiverTemplate`), and the report tuple decoded on chain matches the workflow's
+`encodeAbiParameters` exactly. All amounts are USDC base units — no floats on
+chain. See `contracts/README.md` for compile / deploy / test steps.
 
 ## Tests
 

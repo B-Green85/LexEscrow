@@ -19,7 +19,7 @@ cp .env.example .env          # add a private key (dummy is fine for read-only s
 cp config.json.example config.json   # fill in your adapter/contract addresses
 ```
 
-Edit `project.yaml` with your Sepolia RPC URL.
+Edit `project.yaml` with your Ethereum Sepolia RPC URL.
 
 ## Typecheck
 
