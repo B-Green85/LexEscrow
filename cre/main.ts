@@ -91,7 +91,12 @@ const verifyBar = (
   config: Config,
   barNumber: string,
 ): BarStatus => {
-  const url = config.barVerifyUrl.replace("{bar}", encodeURIComponent(barNumber));
+  // Support both a `{bar}` template and a base URL the bar number is appended
+  // to (e.g. the mock adapter's `http://localhost:3001/calbar/`).
+  const encoded = encodeURIComponent(barNumber);
+  const url = config.barVerifyUrl.includes("{bar}")
+    ? config.barVerifyUrl.replace("{bar}", encoded)
+    : config.barVerifyUrl.replace(/\/?$/, "/") + encoded;
   const resp = sendRequester
     .sendRequest({
       url,

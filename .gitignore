@@ -59,3 +59,7 @@ audit-log.jsonl
 # ── Test / coverage ───────────────────────────────────────────
 coverage/
 .vitest/
+
+# CRE workflow build temp artifacts
+cre/.cre_build_tmp*
+cre/dist/

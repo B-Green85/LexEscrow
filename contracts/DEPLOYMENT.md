@@ -25,6 +25,21 @@
   clientAmount 4,200,000 + firmAmount 800,000 base units.
 - Escrow balance after settlement: **15 USDC**.
 
+## CRE workflow — full end-to-end simulation (verified)
+
+Ran `cre workflow simulate` (HTTP trigger, `--broadcast`) against the deployed
+contract with a local mock CA State Bar adapter (`src/mock/calbar-adapter.ts`).
+The workflow verified the attorney, converted USD→USDC, generated the signed
+report, and wrote it through the real Sepolia KeystoneForwarder
+(`0x15fC…9F88`) to the contract:
+
+- writeReport tx: [`0xad2d0338fc5cbca00967bbdd9a9e37353dd22eec006c3268c8eea05fe426b9de`](https://sepolia.etherscan.io/tx/0xad2d0338fc5cbca00967bbdd9a9e37353dd22eec006c3268c8eea05fe426b9de) (block 11281294)
+- `RetainerSettled` emitted: client `0x1111…1111` 10 USDC + firm `0x2222…2222` 5 USDC, documentHash `0xc2c88764…baa53`.
+- Escrow drained 15 → 0 USDC.
+
+(Payload amounts were sized to the 15 USDC escrow. In production the CA-bar mock
+is replaced by the real Chainlink Functions call to the State Bar portal.)
+
 ## Path B — ArbitrationEscrow
 
 Not yet exercised on-chain. `4_testArbitration.ts` locks a disputed retainer and

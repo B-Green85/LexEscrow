@@ -38,6 +38,28 @@ cre workflow simulate . --target local-simulation
 `http_trigger_payload.json` contains a sample validated payload (integer-cent
 strings, 32-byte document hash) shaped exactly as the desktop app posts it.
 
+### Full end-to-end run (HTTP trigger + mock bar adapter)
+
+`onHTTPTrigger` verifies the attorney against `barVerifyUrl` before anything
+else. For a self-contained end-to-end run, start the local mock CA State Bar
+adapter and point the config at it:
+
+```bash
+# 1) start the mock (returns HTTP 200 "active" for any bar number)
+bun ../src/mock/calbar-adapter.ts        # http://localhost:3001/calbar/:barNumber
+
+# 2) config.json → "barVerifyUrl": "http://localhost:3001/calbar/"
+# 3) run the HTTP trigger (index 1) with the validated payload, broadcasting:
+cre workflow simulate . --broadcast --target local-simulation \
+  --non-interactive --trigger-index 1 \
+  --http-payload ./http_trigger_payload.json --env ./.env
+```
+
+This has been verified on Sepolia end-to-end: attorney verified → USD→USDC →
+signed report → `writeReport` through the KeystoneForwarder → `RetainerSettled`
+emitted, escrow drained. In production the mock is replaced by the real
+Chainlink Functions call to the CA State Bar portal.
+
 ## Config
 
 | key                       | meaning                                                        |
