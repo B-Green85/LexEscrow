@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "stress:lexguard": "tsx src/stress/lexguard-stress.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -28,6 +29,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "tailwindcss": "^4.3.2",
+    "tsx": "^4.23.1",
     "typescript": "~5.8.3",
     "vite": "^7.0.4",
     "vitest": "^4.1.10"

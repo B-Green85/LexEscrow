@@ -21,6 +21,6 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
-  "exclude": ["src/mock"],
+  "exclude": ["src/mock", "src/stress"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
