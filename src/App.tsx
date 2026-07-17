@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { useSession } from "./store/session";
 import { Brand } from "./components/Brand";
+import { Splash } from "./components/Splash";
 import { WorkflowRail } from "./components/WorkflowRail";
 import { DocumentLoad } from "./screens/DocumentLoad";
 import { Processing } from "./screens/Processing";
@@ -39,12 +41,14 @@ function GearIcon() {
 
 function App() {
   const { screen, operator, openConfig, openBatch } = useSession();
+  const [showSplash, setShowSplash] = useState(true);
   const chromeless = screen === "config" || screen === "batch";
   const chromeLabel = screen === "config" ? "Configuration" : "Batch processing";
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
+      {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
+      <header className="sticky top-0 z-10 border-b border-[#1A2435] bg-[#0A0F1A]/85 backdrop-blur">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-3">
           <Brand />
           {chromeless ? (

@@ -1,10 +1,19 @@
 @import "tailwindcss";
 
 /* ============================================================================
-   LexEscrow design tokens — a restrained, authoritative legal-tech palette.
-   "brand" is a deep indigo used for primary/executive actions. Structural
-   chrome uses slate. Semantic colors: emerald = validated, amber = escalation,
-   red = halt/blocked.
+   LexEscrow — dark theme.
+
+   The app reads like the logo: near-black backgrounds, gold + blue accents.
+   Rather than touch every component, the Tailwind color scales are remapped so
+   the utilities already used across the screens resolve to dark values —
+   low shades (50–200) become dark surfaces/borders, high shades (400–900)
+   become light text. `white` is left as white (button/brand text stays crisp).
+
+   Palette (from the brand brief):
+     app bg #0A0F1A · panel #111827 · surface #1A2435 · border #2D3A4A
+     primary text #F8FAFC · secondary #94A3B8
+     accent blue #2563EB (hover #1D4ED8) · accent gold #B45309
+     success #16A34A · warning #D97706 · error #DC2626
    ========================================================================== */
 @theme {
   --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica,
@@ -12,25 +21,68 @@
   --font-mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas,
     monospace;
 
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-300: #a5b4fc;
-  --color-brand-400: #818cf8;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
-  --color-brand-700: #4338ca;
-  --color-brand-800: #3730a3;
-  --color-brand-900: #312e81;
+  /* Accent gold (logo scales-of-justice). */
+  --color-gold: #b45309;
+  --color-gold-bright: #d97706;
 
-  /* Deep ink navy for the app rail / headers */
-  --color-ink-800: #1e293b;
-  --color-ink-900: #0f172a;
-  --color-ink-950: #020617;
+  /* Structural chrome — slate remapped to a dark ramp.
+     bg/border use 50–300; text uses 400–900. */
+  --color-slate-50: #1a2435; /* secondary surface */
+  --color-slate-100: #1a2435; /* secondary surface / subtle divider */
+  --color-slate-200: #2d3a4a; /* borders / "pending" surfaces */
+  --color-slate-300: #3a4759; /* input borders / dim rule */
+  --color-slate-400: #64748b; /* faint text */
+  --color-slate-500: #94a3b8; /* secondary text */
+  --color-slate-600: #94a3b8; /* secondary text */
+  --color-slate-700: #cbd5e1; /* strong secondary text */
+  --color-slate-800: #e2e8f0; /* near-primary text */
+  --color-slate-900: #f8fafc; /* primary text */
+
+  /* Accent blue (replaces the old indigo "brand"). */
+  --color-brand-50: #172554; /* deep blue surface (badge bg) */
+  --color-brand-100: #1e3a8a;
+  --color-brand-200: #1e40af;
+  --color-brand-300: #2563eb; /* rail line */
+  --color-brand-400: #3b82f6; /* rail connector */
+  --color-brand-500: #3b82f6; /* focus ring */
+  --color-brand-600: #2563eb; /* primary / step active */
+  --color-brand-700: #1d4ed8; /* hover */
+  --color-brand-800: #1e40af; /* active */
+  --color-brand-900: #1e3a8a;
+
+  /* Warning / flagged (amber) — light text on deep amber surfaces. */
+  --color-amber-50: #2a1e05;
+  --color-amber-100: #3b2a08;
+  --color-amber-200: #4a340a;
+  --color-amber-300: #fbbf24;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b; /* solid dot (flagged step) */
+  --color-amber-600: #fbbf24; /* text */
+  --color-amber-700: #fcd34d; /* text */
+  --color-amber-800: #fde68a;
+  --color-amber-900: #fef3c7;
+
+  /* Success (emerald). */
+  --color-emerald-50: #0c2a1e;
+  --color-emerald-100: #123a29;
+  --color-emerald-200: #14532d;
+  --color-emerald-500: #16a34a; /* solid (step complete) */
+  --color-emerald-600: #34d399; /* text */
+  --color-emerald-700: #6ee7b7; /* text */
+  --color-emerald-800: #a7f3d0;
+
+  /* Error (red). */
+  --color-red-50: #2a0e0e;
+  --color-red-100: #3b1212;
+  --color-red-200: #7f1d1d;
+  --color-red-500: #ef4444;
+  --color-red-600: #dc2626; /* solid + error text */
+  --color-red-700: #ef4444; /* text / hover */
+  --color-red-800: #fca5a5;
 }
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 @layer base {
@@ -41,7 +93,7 @@
   }
 
   body {
-    @apply bg-slate-100 font-sans text-slate-900 antialiased;
+    @apply bg-[#0A0F1A] font-sans text-slate-100 antialiased;
   }
 
   * {
@@ -49,40 +101,54 @@
     user-select: none;
   }
 
-  /* Text inputs and content that must stay selectable/interactive */
   input,
   textarea,
   [data-selectable] {
     -webkit-user-select: text;
     user-select: text;
   }
+
+  /* Dark scrollbars. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0a0f1a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2d3a4a;
+    border-radius: 6px;
+    border: 2px solid #0a0f1a;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4759;
+  }
 }
 
 /* ============================================================================
-   Reusable component primitives — leaned on across the five screens.
+   Reusable component primitives (dark).
    ========================================================================== */
 @layer components {
   .card {
-    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+    @apply rounded-xl border border-[#2D3A4A] bg-[#111827] shadow-lg shadow-black/30;
   }
 
   .btn {
     @apply inline-flex select-none items-center justify-center gap-2 rounded-lg
       px-4 py-2.5 text-sm font-semibold transition-colors
       focus-visible:outline-none focus-visible:ring-2
-      focus-visible:ring-brand-500 focus-visible:ring-offset-2
-      disabled:pointer-events-none disabled:opacity-50;
+      focus-visible:ring-brand-500 disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* Compose in markup with the base, e.g. `btn btn-primary`. Tailwind v4
-     @apply only accepts real utilities, not other component classes. */
+  /* Compose in markup with the base, e.g. `btn btn-primary`. */
   .btn-primary {
     @apply bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800;
   }
 
   .btn-secondary {
-    @apply border border-slate-300 bg-white text-slate-700
-      hover:bg-slate-50 active:bg-slate-100;
+    @apply border border-[#2D3A4A] bg-[#1A2435] text-slate-200
+      hover:bg-[#22304A] active:bg-[#2D3A4A];
   }
 
   .btn-danger {
@@ -94,34 +160,66 @@
   }
 
   .label {
-    @apply mb-1.5 block text-sm font-medium text-slate-700;
+    @apply mb-1.5 block text-sm font-medium text-slate-300;
   }
 
   .input {
-    @apply w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5
-      text-sm text-slate-900 placeholder:text-slate-400
+    @apply w-full rounded-lg border border-[#2D3A4A] bg-[#1A2435] px-3.5 py-2.5
+      text-sm text-slate-100 placeholder:text-slate-500
       focus:border-brand-500 focus:outline-none focus:ring-2
-      focus:ring-brand-500/30 disabled:bg-slate-50 disabled:text-slate-500;
+      focus:ring-brand-500/30 disabled:opacity-60;
   }
 
   .badge {
     @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5
       text-xs font-medium;
   }
-  /* Compose in markup with the base, e.g. `badge badge-emerald`. */
+  /* Compose with the base, e.g. `badge badge-emerald`. */
   .badge-emerald {
-    @apply bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20;
+    @apply bg-emerald-50 text-emerald-700 ring-1 ring-emerald-500/25;
   }
   .badge-amber {
-    @apply bg-amber-50 text-amber-700 ring-1 ring-amber-600/20;
+    @apply bg-amber-50 text-amber-700 ring-1 ring-amber-500/25;
   }
   .badge-red {
-    @apply bg-red-50 text-red-700 ring-1 ring-red-600/20;
+    @apply bg-red-50 text-red-700 ring-1 ring-red-500/25;
   }
   .badge-slate {
-    @apply bg-slate-100 text-slate-600 ring-1 ring-slate-500/20;
+    @apply bg-slate-100 text-slate-400 ring-1 ring-slate-300/30;
   }
   .badge-brand {
-    @apply bg-brand-50 text-brand-700 ring-1 ring-brand-600/20;
+    @apply bg-brand-50 text-[#93C5FD] ring-1 ring-brand-500/30;
   }
+}
+
+/* ============================================================================
+   Splash screen animations.
+   ========================================================================== */
+@keyframes splash-fill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@keyframes splash-glow {
+  0%,
+  100% {
+    opacity: 0.85;
+    filter: drop-shadow(0 0 0 rgba(180, 83, 9, 0));
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 22px rgba(37, 99, 235, 0.28));
+  }
+}
+
+.splash-emblem {
+  animation: splash-glow 2.4s ease-in-out infinite;
+}
+
+.splash-bar {
+  animation: splash-fill 2s ease-out forwards;
 }

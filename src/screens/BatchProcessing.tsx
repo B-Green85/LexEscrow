@@ -30,7 +30,7 @@ function EntryModeToggle({ item }: { item: BatchItem }) {
           key={m}
           onClick={() => setItemEntryMode(item.id, m)}
           className={`px-2 py-0.5 ${
-            item.entryMode === m ? "bg-brand-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+            item.entryMode === m ? "bg-brand-600 text-white" : "bg-[#1A2435] text-slate-400 hover:bg-[#22304A]"
           }`}
         >
           {m === "ai" ? "AI" : "Manual"}
@@ -225,7 +225,7 @@ export function BatchProcessing() {
 
       {/* Manual entry drawer */}
       {manualItem && (
-        <div className="fixed inset-0 z-20 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-6">
+        <div className="fixed inset-0 z-20 flex items-start justify-center overflow-y-auto bg-black/60 p-6">
           <div className="mt-8 w-full max-w-2xl">
             <div className="mb-2 flex items-center justify-between text-white">
               <span className="text-sm font-medium">Manual entry — {manualItem.fileName}</span>

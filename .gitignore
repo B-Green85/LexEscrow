@@ -63,3 +63,6 @@ coverage/
 # CRE workflow build temp artifacts
 cre/.cre_build_tmp*
 cre/dist/
+
+# Original source logo — imported/processed assets live in src/assets/
+Asset/
