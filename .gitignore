@@ -64,5 +64,7 @@ coverage/
 cre/.cre_build_tmp*
 cre/dist/
 
-# Original source logo — imported/processed assets live in src/assets/
-Asset/
+# Large source images only — the generated app icons in Assets/ ARE tracked
+# (tauri.conf.json references ../Assets/*), the bulky originals are not.
+Assets/LexEscrow.png
+Assets/LexEscrow_ICON.png

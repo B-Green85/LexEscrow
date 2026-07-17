@@ -82,13 +82,35 @@ export function DocumentLoad() {
           </div>
           <div>
             <label className="label">State</label>
-            <select
-              className="input"
-              value={anchors.state}
-              onChange={(e) => setAnchor({ state: e.target.value })}
-            >
-              <option>California</option>
-            </select>
+            {/* The native <select> paints its selected value unreliably on dark
+                backgrounds, so its own text is transparent and the value is
+                shown by the overlay span below (always renders). */}
+            <div className="relative">
+              <select
+                className="input appearance-none pr-9 text-transparent"
+                value={anchors.state}
+                onChange={(e) => setAnchor({ state: e.target.value })}
+              >
+                <option value="California" className="bg-[#1A2435] text-[#F8FAFC]">
+                  California
+                </option>
+              </select>
+              <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-[#F8FAFC]">
+                {anchors.state}
+              </span>
+              <svg
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M5.3 7.3a1 1 0 011.4 0L10 10.6l3.3-3.3a1 1 0 111.4 1.4l-4 4a1 1 0 01-1.4 0l-4-4a1 1 0 010-1.4z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </div>
           </div>
           <div className="col-span-2">
             <label className="label">Client full legal name</label>

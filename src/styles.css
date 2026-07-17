@@ -93,7 +93,7 @@
   }
 
   body {
-    @apply bg-[#0A0F1A] font-sans text-slate-100 antialiased;
+    @apply bg-[#0A0F1A] font-sans text-[#F8FAFC] antialiased;
   }
 
   * {
@@ -147,7 +147,7 @@
   }
 
   .btn-secondary {
-    @apply border border-[#2D3A4A] bg-[#1A2435] text-slate-200
+    @apply border border-[#2D3A4A] bg-[#1A2435] text-[#E2E8F0]
       hover:bg-[#22304A] active:bg-[#2D3A4A];
   }
 
@@ -165,7 +165,7 @@
 
   .input {
     @apply w-full rounded-lg border border-[#2D3A4A] bg-[#1A2435] px-3.5 py-2.5
-      text-sm text-slate-100 placeholder:text-slate-500
+      text-sm text-[#F8FAFC] placeholder:text-slate-500
       focus:border-brand-500 focus:outline-none focus:ring-2
       focus:ring-brand-500/30 disabled:opacity-60;
   }
