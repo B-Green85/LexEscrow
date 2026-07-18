@@ -256,6 +256,100 @@ pub fn normalize_text(raw: String) -> String {
 }
 
 // ============================================================================
+// AnchorReceipt — HMAC seal (spec §8)
+// ============================================================================
+//
+// ArtifactGuard answers "have these bytes changed this session". The seal
+// answers a second, different question: "did *this system* attest this exact
+// fingerprint for these exact bytes". A bare SHA-256 travelling between parties
+// can be swapped wholesale — substitute both the document and its hash and the
+// pair still verifies. Keying the digest defeats that: only a holder of the
+// seal key can produce a seal that matches a given (hash, size).
+//
+// Size is bound into the sealed material alongside the hash because it is the
+// cheapest independent check a counterparty can run on a document they hold,
+// and sealing it stops a fingerprint being re-pointed at a different artifact
+// that happens to share a truncated hash prefix in some downstream display.
+
+use base64::Engine as _;
+use hmac::{Hmac, Mac};
+use std::sync::OnceLock;
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// V1 application seal secret.
+///
+/// Deliberately *stable across restarts*, not per-process-random: spec §8's
+/// registry claim is "was this exact document version ever registered, and
+/// when" — a provenance claim across time. A key regenerated each launch would
+/// make every seal issued before the last restart unreproducible, which is
+/// exactly the cross-session lookup the layer exists to provide.
+///
+/// V2 sources this from the AES-256-GCM credential vault (`vault.rs`) so the
+/// seal key is per-install and password-gated rather than compiled in. Until
+/// then the seal is an integrity primitive, not a secrecy one — it binds a
+/// fingerprint to *a LexEscrow build*, and the on-chain registration (which is
+/// public and decentralized) carries the stronger trust claim.
+const APP_SEAL_SECRET: &[u8] = b"lexescrow.anchor-receipt.seal.v1";
+
+/// Domain separator — keeps this key distinct from any other HMAC LexEscrow
+/// might later derive from the same secret.
+const SEAL_KEY_DOMAIN: &[u8] = b"lexescrow/anchor-receipt/seal/v1\x1f";
+
+/// Derived once per process; the derivation itself is deterministic.
+static SEAL_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
+fn seal_key() -> &'static [u8; 32] {
+    SEAL_KEY.get_or_init(|| {
+        let mut hasher = Sha256::new();
+        hasher.update(SEAL_KEY_DOMAIN);
+        hasher.update(APP_SEAL_SECRET);
+        hasher.finalize().into()
+    })
+}
+
+/// The exact bytes the seal covers: `"{hash}|{size}"`.
+///
+/// Pulled out as its own function so the canonical form is defined in one
+/// place — a seal is only comparable across parties if every implementation
+/// agrees on the string byte-for-byte.
+pub fn seal_material(hash: &str, size: u64) -> String {
+    format!("{hash}|{size}")
+}
+
+/// HMAC-SHA256 over the canonical material, base64url-encoded without padding
+/// (matching the receipt format in spec §8, which shows an unpadded seal).
+pub fn compute_seal(hash: &str, size: u64) -> String {
+    // `new_from_slice` only errors for key lengths HMAC cannot accept; a
+    // 32-byte key is always valid, so this cannot fail in practice.
+    let mut mac = HmacSha256::new_from_slice(seal_key()).expect("HMAC accepts a 32-byte key");
+    mac.update(seal_material(hash, size).as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+/// Seal a fingerprint for AnchorReceipt registration.
+///
+/// Takes `ArtifactGuardState` so a poisoned registry surfaces here rather than
+/// letting a seal be issued by a backend whose integrity baseline has already
+/// failed — sealing a fingerprint is an attestation, and attesting from a
+/// broken guard is precisely what must not happen.
+#[tauri::command]
+pub async fn compute_hmac_seal(
+    state: tauri::State<'_, ArtifactGuardState>,
+    hash: String,
+    size: u64,
+) -> Result<String, String> {
+    // Scoped so the (non-Send) guard is dropped before this future can yield.
+    {
+        let _guard = state
+            .0
+            .lock()
+            .map_err(|e| format!("integrity registry unavailable: {e}"))?;
+    }
+    Ok(compute_seal(&hash, size))
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -333,5 +427,56 @@ mod tests {
     fn normalization_drops_control_but_keeps_tab() {
         let raw = "col1\tcol2\u{0007}end"; // BEL should vanish, tab survives
         assert_eq!(normalize_artifact_text(raw), "col1\tcol2end");
+    }
+
+    // ── AnchorReceipt seal (spec §8) ────────────────────────────────────────
+
+    #[test]
+    fn seal_material_is_the_canonical_hash_pipe_size() {
+        assert_eq!(seal_material("sha256:abc", 1024), "sha256:abc|1024");
+    }
+
+    #[test]
+    fn seal_is_deterministic_across_calls() {
+        let h = hash_artifact(b"retainer agreement");
+        assert_eq!(compute_seal(&h, 42), compute_seal(&h, 42));
+    }
+
+    #[test]
+    fn seal_changes_when_the_hash_changes() {
+        let a = compute_seal(&hash_artifact(b"$3,200.00"), 9);
+        let b = compute_seal(&hash_artifact(b"$4,200.00"), 9);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn seal_binds_size_not_just_hash() {
+        // The whole point of sealing size alongside the digest.
+        let h = hash_artifact(b"same bytes");
+        assert_ne!(compute_seal(&h, 100), compute_seal(&h, 101));
+    }
+
+    #[test]
+    fn seal_is_unpadded_base64url() {
+        let seal = compute_seal(&hash_artifact(b"doc"), 7);
+        // 32 HMAC bytes → 43 base64 chars, no '=' padding.
+        assert_eq!(seal.len(), 43);
+        assert!(!seal.contains('='));
+        assert!(!seal.contains('+') && !seal.contains('/'));
+        assert!(seal
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
+
+    #[test]
+    fn seal_is_keyed_not_a_bare_digest() {
+        // A plain SHA-256 of the material would be forgeable by anyone; the
+        // seal must not equal it.
+        let h = hash_artifact(b"doc");
+        let mut plain = Sha256::new();
+        plain.update(seal_material(&h, 5).as_bytes());
+        let unkeyed =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(plain.finalize());
+        assert_ne!(compute_seal(&h, 5), unkeyed);
     }
 }

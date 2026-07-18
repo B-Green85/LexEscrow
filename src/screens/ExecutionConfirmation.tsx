@@ -22,6 +22,8 @@ import { ExecutionPath } from "../lexguard/types";
 import { formatUsd, toCents, toPayloadCents } from "../lexguard/payload-diff";
 import * as backend from "../lib/backend";
 import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
+import { AnchorReceiptCard } from "../components/AnchorReceiptCard";
+import type { AnchorReceipt } from "../lib/anchor-receipt";
 import type { AssetClass } from "../lib/assetClasses";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
 import {
@@ -158,11 +160,13 @@ function NotificationCard({ execution }: { execution: ExecutionState }) {
 function DirectSettlementView({
   execution,
   cannaVerify,
+  anchorReceipt,
   footer,
   onDownload,
 }: {
   execution: ExecutionState;
   cannaVerify: React.ReactNode;
+  anchorReceipt: React.ReactNode;
   footer: React.ReactNode;
   onDownload: () => void;
 }) {
@@ -233,6 +237,7 @@ function DirectSettlementView({
             </div>
           </div>
 
+          {anchorReceipt}
           <NotificationCard execution={execution} />
           <AuditCard onDownload={onDownload} />
           {footer}
@@ -281,6 +286,7 @@ function ArbitrationView({
   error,
   onSign,
   cannaVerify,
+  anchorReceipt,
   footer,
   onDownload,
 }: {
@@ -290,6 +296,7 @@ function ArbitrationView({
   error: string | null;
   onSign: (signer: ArbitrationSigner) => void;
   cannaVerify: React.ReactNode;
+  anchorReceipt: React.ReactNode;
   footer: React.ReactNode;
   onDownload: () => void;
 }) {
@@ -381,6 +388,7 @@ function ArbitrationView({
 
       {resolved && (
         <>
+          {anchorReceipt}
           <NotificationCard execution={execution} />
           <AuditCard onDownload={onDownload} />
           {footer}
@@ -745,6 +753,7 @@ function StagedReleaseView({
   onApprove,
   onRelease,
   cannaVerify,
+  anchorReceipt,
   footer,
   onDownload,
 }: {
@@ -759,6 +768,7 @@ function StagedReleaseView({
   onApprove: (milestoneId: string) => void;
   onRelease: (milestoneId: string, recipient: string) => void;
   cannaVerify: React.ReactNode;
+  anchorReceipt: React.ReactNode;
   footer: React.ReactNode;
   onDownload: () => void;
 }) {
@@ -838,6 +848,7 @@ function StagedReleaseView({
 
       {complete && (
         <>
+          {anchorReceipt}
           <NotificationCard execution={execution} />
           <AuditCard onDownload={onDownload} />
           {footer}
@@ -861,6 +872,9 @@ export interface ExecutionConfirmationViewProps {
   fromBatch: boolean;
   cannaVerifyConditions: CannaVerifyConditionsData | null;
   cannaVerifyRunning: boolean;
+  /** Portable receipt for the session document (spec §8). Null if none issued. */
+  anchorReceipt: AnchorReceipt | null;
+  onDownloadAnchorReceipt: () => void;
   onRunCannaVerify: () => void;
   onSignArbitration: (signer: ArbitrationSigner) => void;
   onInitStagedRelease: (milestones: MilestoneInput[]) => void;
@@ -898,6 +912,12 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
     <FooterNav fromBatch={fromBatch} onReset={onReset} onReturnToBatch={onReturnToBatch} />
   );
 
+  // Rendered inside each path's completion block, so the receipt appears only
+  // once the transaction it attests to has actually finished.
+  const anchorReceipt = props.anchorReceipt ? (
+    <AnchorReceiptCard receipt={props.anchorReceipt} onDownload={props.onDownloadAnchorReceipt} />
+  ) : null;
+
   return (
     <div className="mx-auto w-full max-w-2xl">
       {execution.path === ExecutionPath.ArbitrationEscrow ? (
@@ -908,6 +928,7 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
           error={props.error}
           onSign={props.onSignArbitration}
           cannaVerify={cannaVerify}
+          anchorReceipt={anchorReceipt}
           footer={footer}
           onDownload={props.onDownload}
         />
@@ -924,6 +945,7 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
           onApprove={props.onApproveMilestone}
           onRelease={props.onReleaseMilestone}
           cannaVerify={cannaVerify}
+          anchorReceipt={anchorReceipt}
           footer={footer}
           onDownload={props.onDownload}
         />
@@ -931,6 +953,7 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
         <DirectSettlementView
           execution={execution}
           cannaVerify={cannaVerify}
+          anchorReceipt={anchorReceipt}
           footer={footer}
           onDownload={props.onDownload}
         />
@@ -954,6 +977,8 @@ export function ExecutionConfirmation() {
     activeBatchItemId,
     cannaVerifyConditions,
     cannaVerifyRunning,
+    anchorReceipt,
+    downloadAnchorReceipt,
     runCannaVerify,
     signArbitration,
     initStagedRelease,
@@ -998,6 +1023,8 @@ export function ExecutionConfirmation() {
       fromBatch={fromBatch}
       cannaVerifyConditions={cannaVerifyConditions}
       cannaVerifyRunning={cannaVerifyRunning}
+      anchorReceipt={anchorReceipt}
+      onDownloadAnchorReceipt={() => downloadAnchorReceipt()}
       onRunCannaVerify={() => void runCannaVerify()}
       onSignArbitration={(signer) => void signArbitration(signer)}
       onInitStagedRelease={(milestones) => void initStagedRelease(milestones)}

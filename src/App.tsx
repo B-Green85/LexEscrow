@@ -11,6 +11,7 @@ import { ExecutionConfirmation } from "./screens/ExecutionConfirmation";
 import { LexGuardEscalation } from "./screens/LexGuardEscalation";
 import { Configuration } from "./screens/Configuration";
 import { BatchProcessing } from "./screens/BatchProcessing";
+import { AnchorReceiptConsole } from "./screens/AnchorReceiptConsole";
 
 const STAGE_INDEX: Record<string, number> = {
   load: 0,
@@ -29,6 +30,19 @@ function BatchIcon() {
   );
 }
 
+/** Seal / receipt mark — a stamped ribbon rosette, for AnchorReceipt. */
+function AnchorReceiptIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+      <path
+        fillRule="evenodd"
+        d="M10 1.5a5.75 5.75 0 013.03 10.63l1.6 5.06a.6.6 0 01-.84.71L10 16.1l-3.79 1.8a.6.6 0 01-.84-.71l1.6-5.06A5.75 5.75 0 0110 1.5zm0 2a3.75 3.75 0 100 7.5 3.75 3.75 0 000-7.5z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
@@ -42,10 +56,15 @@ function GearIcon() {
 }
 
 function App() {
-  const { screen, operator, openConfig, openBatch } = useSession();
+  const { screen, operator, openConfig, openBatch, openAnchorReceiptConsole } = useSession();
   const [showSplash, setShowSplash] = useState(true);
-  const chromeless = screen === "config" || screen === "batch";
-  const chromeLabel = screen === "config" ? "Configuration" : "Batch processing";
+  const chromeless = screen === "config" || screen === "batch" || screen === "anchor-receipt";
+  const chromeLabel =
+    screen === "config"
+      ? "Configuration"
+      : screen === "anchor-receipt"
+        ? "AnchorReceipt Console"
+        : "Batch processing";
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -72,6 +91,14 @@ function App() {
               <BatchIcon />
             </button>
             <button
+              onClick={() => openAnchorReceiptConsole()}
+              aria-label="AnchorReceipt Console"
+              title="AnchorReceipt Console"
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+            >
+              <AnchorReceiptIcon />
+            </button>
+            <button
               onClick={() => openConfig()}
               aria-label="Configuration"
               title="Configuration"
@@ -92,6 +119,7 @@ function App() {
         {screen === "execution" && <ExecutionConfirmation />}
         {screen === "config" && <Configuration />}
         {screen === "batch" && <BatchProcessing />}
+        {screen === "anchor-receipt" && <AnchorReceiptConsole />}
       </main>
 
       <footer className="border-t border-slate-200 py-3 text-center text-xs text-slate-400">

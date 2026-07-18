@@ -377,6 +377,21 @@ export async function saveRegisteredFingerprint(args: RegisteredFingerprintArgs)
   // browser: nothing to persist
 }
 
+/**
+ * AnchorReceipt HMAC seal over `"{hash}|{size}"` (spec §8).
+ *
+ * Keyed sealing only happens in the Rust backend — the seal key must never
+ * cross into the WebView, or the attestation it represents would be forgeable
+ * by anything running in the page. The browser fallback is therefore an
+ * explicitly-labelled `DEMO-HMAC-` stand-in rather than a JS HMAC: a demo build
+ * has no seal key to keep, and a real-looking seal computed in the browser
+ * would misrepresent what was actually attested.
+ */
+export async function computeHmacSeal(hash: string, size: number): Promise<string> {
+  if (isTauri()) return invoke<string>("compute_hmac_seal", { hash, size });
+  return `DEMO-HMAC-${hash.slice(0, 8)}`;
+}
+
 // ── Release paths — Path C milestones, Path B arbitration (spec §6) ──────────
 
 // Browser-mode stores. Unlike the write-only tables above (CannaVerify results,

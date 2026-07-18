@@ -29,6 +29,7 @@ import { resolveESignProvider, isTerminal } from "../lib/esign";
 import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
 import { normalizeName } from "../lexguard/anchor-matcher";
 import * as releasePaths from "../lib/releasePaths";
+import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 import type {
   ArbitrationSigner,
   ArbitrationState,
@@ -59,7 +60,8 @@ export type Screen =
   | "execution"
   | "escalation"
   | "config"
-  | "batch";
+  | "batch"
+  | "anchor-receipt";
 export type StepStatus = "pending" | "active" | "done" | "error";
 export type EntryMode = "ai" | "manual";
 export type ProcPhase = "choose" | "running" | "manual";
@@ -112,6 +114,8 @@ export interface BatchHydration {
   escalation: Escalation | null;
   anchors: TrustAnchors;
   providerLabel: string;
+  /** The item's own AnchorReceipt, issued when the batch hashed it. */
+  anchorReceipt: AnchorReceipt | null;
 }
 
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
@@ -140,9 +144,14 @@ const emptyAnchors: TrustAnchors = {
   clientPhone: "",
 };
 
+// Spec §12 Screen 3 — "Hashing → Registering → Parsing → Validating". The
+// AnchorReceipt registration is its own visible stage, not a silent step
+// folded into hashing: it is the moment the document acquires a provenance
+// claim, and the officer needs to see it happen.
 function stepsFor(mode: EntryMode): ProcessingStep[] {
   return [
     { key: "hash", label: "Hashing artifacts", status: "pending" },
+    { key: "anchor", label: "Registering with AnchorReceipt", status: "pending" },
     { key: "bar", label: "Verifying attorney", status: "pending" },
     { key: "ai", label: mode === "manual" ? "Manual entry" : "AI parsing", status: "pending" },
     { key: "lexguard", label: "LexGuard validating", status: "pending" },
@@ -258,6 +267,11 @@ interface SessionState {
   /** True once `proceedToExecution` has routed to a release path. */
   releasePathChosen: boolean;
 
+  // ── AnchorReceipt (spec §8) ──────────────────────────────────────────────
+  /** Portable receipt for this session's document. Issued during processing. */
+  anchorReceipt: AnchorReceipt | null;
+  anchorReceiptIssuing: boolean;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
@@ -268,6 +282,8 @@ interface SessionState {
   openConfig: () => void;
   closeConfig: () => void;
   openBatch: () => void;
+  openAnchorReceiptConsole: () => void;
+  downloadAnchorReceipt: () => void;
   returnToBatch: () => void;
   loadBatchItem: (h: BatchHydration) => void;
   reset: () => void;
@@ -476,6 +492,8 @@ export const useSession = create<SessionState>((set, get) => {
     arbitrationState: null,
     stagedReleaseState: null,
     releasePathChosen: false,
+    anchorReceipt: null,
+    anchorReceiptIssuing: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -486,6 +504,21 @@ export const useSession = create<SessionState>((set, get) => {
       set((s) => ({ prevScreen: s.screen === "config" ? s.prevScreen : s.screen, screen: "config" })),
     closeConfig: () => set((s) => ({ screen: s.prevScreen })),
     openBatch: () => set({ screen: "batch" }),
+
+    /** Screen 8 — standalone fingerprinting, outside any escrow workflow.
+     *  Remembers where the officer came from so closing returns them there. */
+    openAnchorReceiptConsole: () =>
+      set((s) => ({
+        prevScreen: s.screen === "anchor-receipt" ? s.prevScreen : s.screen,
+        screen: "anchor-receipt",
+      })),
+
+    downloadAnchorReceipt: () => {
+      const { anchorReceipt } = get();
+      if (!anchorReceipt) return;
+      downloadReceipt(anchorReceipt);
+    },
+
     returnToBatch: () => set({ screen: "batch", activeBatchItemId: null, fromBatch: false }),
 
     loadBatchItem: (h) =>
@@ -501,6 +534,8 @@ export const useSession = create<SessionState>((set, get) => {
         escalation: h.escalation,
         anchors: h.anchors,
         providerLabel: h.providerLabel,
+        anchorReceipt: h.anchorReceipt,
+        anchorReceiptIssuing: false,
         barActive: true,
         error: null,
         configHint: null,
@@ -550,6 +585,8 @@ export const useSession = create<SessionState>((set, get) => {
         arbitrationState: null,
         stagedReleaseState: null,
         releasePathChosen: false,
+        anchorReceipt: null,
+        anchorReceiptIssuing: false,
       });
     },
 
@@ -618,6 +655,39 @@ export const useSession = create<SessionState>((set, get) => {
           client_name: anchors.clientFullLegalName,
         });
         setStep("hash", "done");
+
+        // 1b) AnchorReceipt — seal the fingerprint, anchor it on-chain, issue
+        // the portable receipt (spec §8). Runs after `createSession` because
+        // the fingerprint registry row is foreign-keyed to the session.
+        //
+        // Registration failure does not halt processing: the document is
+        // already hashed and the workflow's integrity guarantees (ArtifactGuard
+        // baseline, final blocking re-verify) do not depend on the receipt. The
+        // step is marked `error` so the officer can see the provenance claim is
+        // missing rather than assuming a receipt exists.
+        setStep("anchor", "active");
+        set({ anchorReceiptIssuing: true });
+        try {
+          const receipt = await issueReceipt({
+            sessionId,
+            assetClass,
+            items: [{ label: artifact.filename, hash: artifact.hash, size: artifact.size }],
+          });
+          set({ anchorReceipt: receipt, anchorReceiptIssuing: false });
+          await log("anchor_receipt_issued", {
+            receipt_id: receipt.receiptId,
+            on_chain_tx: receipt.items[0]?.onChainTx ?? null,
+            hmac: receipt.items[0]?.hmac ?? null,
+            receipt_hash: receipt.receiptHash,
+            overall_status: receipt.summary.overallStatus,
+          });
+          setStep("anchor", "done");
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          set({ anchorReceiptIssuing: false });
+          setStep("anchor", "error");
+          await log("anchor_receipt_failed", { error: message });
+        }
 
         // 2) Verify attorney (simulated CA State Bar check) — both modes.
         setStep("bar", "active");

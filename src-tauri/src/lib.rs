@@ -42,6 +42,7 @@ pub fn run() {
             artifact_guard::verify_artifact,
             artifact_guard::final_verify_before_execution,
             artifact_guard::normalize_text,
+            artifact_guard::compute_hmac_seal,
             // Persistence + audit
             db::create_session,
             db::update_session_state,

@@ -45,6 +45,8 @@ function props(over: Partial<ExecutionConfirmationViewProps> = {}): ExecutionCon
     fromBatch: false,
     cannaVerifyConditions: null,
     cannaVerifyRunning: false,
+    anchorReceipt: null,
+    onDownloadAnchorReceipt: () => {},
     onRunCannaVerify: () => {},
     onSignArbitration: () => {},
     onInitStagedRelease: () => {},

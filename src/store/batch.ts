@@ -20,6 +20,7 @@ import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { formatUsd, toCents, toPayloadCents } from "../lexguard/payload-diff";
 import { useSession, type EntryMode, type ManualEntryFields } from "./session";
 import { oneSamplePerClass, sampleToFile } from "../lib/samples";
+import { issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 
 export type BatchStatus =
   | "queued"
@@ -40,6 +41,8 @@ export interface BatchItem {
   status: BatchStatus;
   sessionId: string | null;
   artifact: backend.LoadedArtifact | null;
+  /** This item's own portable receipt (spec §8), issued when it was hashed. */
+  anchorReceipt: AnchorReceipt | null;
   vdb: VDBStore | null;
   payload: ParsedRetainerPayload | null;
   corrections: LexGuardCorrection[];
@@ -106,6 +109,7 @@ function newItem(file: File, assetClass: AssetClass = "legal"): BatchItem {
     status: "queued",
     sessionId: null,
     artifact: null,
+    anchorReceipt: null,
     vdb: null,
     payload: null,
     corrections: [],
@@ -189,9 +193,36 @@ export const useBatch = create<BatchState>((set, get) => {
     // Attach sessionId before logging so audit entries resolve the asset_class.
     update(id, { sessionId });
     await log(sessionId, "batch_item_loaded", { file: artifact.filename, hash: artifact.hash, size: artifact.size });
+
+    // AnchorReceipt per item (spec §8) — every document the batch touches gets
+    // its own provenance claim, not one shared receipt for the folder. The
+    // items settle independently and are handed to different counterparties,
+    // so a receipt covering the whole batch would over-attest for each of them.
+    //
+    // As in the single-document flow, a failed registration does not fail the
+    // item: the parse pipeline's guarantees are independent of the receipt.
+    let anchorReceipt: AnchorReceipt | null = null;
+    try {
+      anchorReceipt = await issueReceipt({
+        sessionId,
+        assetClass: item.assetClass,
+        items: [{ label: artifact.filename, hash: artifact.hash, size: artifact.size }],
+      });
+      await log(sessionId, "anchor_receipt_issued", {
+        receipt_id: anchorReceipt.receiptId,
+        on_chain_tx: anchorReceipt.items[0]?.onChainTx ?? null,
+        hmac: anchorReceipt.items[0]?.hmac ?? null,
+        receipt_hash: anchorReceipt.receiptHash,
+        overall_status: anchorReceipt.summary.overallStatus,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await log(sessionId, "anchor_receipt_failed", { error: message });
+    }
+
     const vdb = await primeVDB(artifact.normalizedText, artifact.hash, sessionId);
-    update(id, { artifact, vdb });
-    return { ...item, artifact, vdb, sessionId };
+    update(id, { artifact, vdb, anchorReceipt });
+    return { ...item, artifact, vdb, sessionId, anchorReceipt };
   };
 
   // Persist + finalize an item's status from a LexGuard result.
@@ -376,6 +407,7 @@ export const useBatch = create<BatchState>((set, get) => {
         escalation: item.escalation,
         anchors: anchorsFor(item),
         providerLabel: item.providerLabel || "Batch",
+        anchorReceipt: item.anchorReceipt,
       });
     },
 
