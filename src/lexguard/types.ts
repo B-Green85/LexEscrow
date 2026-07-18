@@ -14,6 +14,7 @@ import { z } from "zod";
 export enum ExecutionPath {
   DirectSettlement = "DirectSettlement",
   ArbitrationEscrow = "ArbitrationEscrow",
+  StagedRelease = "StagedRelease",
 }
 
 /**

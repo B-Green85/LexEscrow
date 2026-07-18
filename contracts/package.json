@@ -9,7 +9,8 @@
     "deploy": "tsx 1_deploy.ts",
     "fund": "tsx 2_fundEscrow.ts",
     "test:settle": "tsx 3_testSettle.ts",
-    "test:arbitration": "tsx 4_testArbitration.ts"
+    "test:arbitration": "tsx 4_testArbitration.ts",
+    "test:staged": "tsx 5_testStaged.ts"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",

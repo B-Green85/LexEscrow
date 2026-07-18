@@ -28,6 +28,13 @@ import type { CannaVerifyConditions } from "../lib/cannaverify/types";
 import { resolveESignProvider, isTerminal } from "../lib/esign";
 import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
 import { normalizeName } from "../lexguard/anchor-matcher";
+import * as releasePaths from "../lib/releasePaths";
+import type {
+  ArbitrationSigner,
+  ArbitrationState,
+  MilestoneInput,
+  StagedReleaseState,
+} from "../lib/releasePaths";
 
 export type { LexGuardCorrection, Escalation, EscalationDiscrepancy } from "../lexguard/pipeline";
 
@@ -243,6 +250,14 @@ interface SessionState {
   /** Interval handle, held so `reset()` and terminal states can clear it. */
   eSignPollTimer: ReturnType<typeof setInterval> | null;
 
+  // ── Release paths (spec §6) ──────────────────────────────────────────────
+  /** Path B tally. Non-null once the escrow is locked into arbitration. */
+  arbitrationState: ArbitrationState | null;
+  /** Path C schedule. Null until the officer has defined the milestones. */
+  stagedReleaseState: StagedReleaseState | null;
+  /** True once `proceedToExecution` has routed to a release path. */
+  releasePathChosen: boolean;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
@@ -273,6 +288,13 @@ interface SessionState {
   pollAllEnvelopes: () => Promise<void>;
   handleESignCompletion: (envelopeId: string) => Promise<void>;
   proceedToExecution: () => Promise<void>;
+  // Path B
+  signArbitration: (signer: ArbitrationSigner, notes?: string) => Promise<void>;
+  // Path C
+  initStagedRelease: (milestones: MilestoneInput[]) => Promise<void>;
+  submitEvidence: (milestoneId: string, file: File) => Promise<void>;
+  approveMilestone: (milestoneId: string) => Promise<void>;
+  releaseMilestone: (milestoneId: string, recipientAddress?: string) => Promise<void>;
   resolveEscalation: (choice: "review" | "ai" | "lexguard") => Promise<void>;
   resolveEscalationWithCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
   applyHumanCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
@@ -451,6 +473,9 @@ export const useSession = create<SessionState>((set, get) => {
     eSignEnvelopes: [],
     eSignPolling: false,
     eSignPollTimer: null,
+    arbitrationState: null,
+    stagedReleaseState: null,
+    releasePathChosen: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -522,6 +547,9 @@ export const useSession = create<SessionState>((set, get) => {
         eSignEnvelopes: [],
         eSignPolling: false,
         eSignPollTimer: null,
+        arbitrationState: null,
+        stagedReleaseState: null,
+        releasePathChosen: false,
       });
     },
 
@@ -992,7 +1020,49 @@ export const useSession = create<SessionState>((set, get) => {
       const path = payload.recommendedPath;
       await backend.setExecutionPath(sessionId, path);
       await backend.updateSessionState(sessionId, "APPROVED");
-      set({ screen: "execution", execution: { ...get().execution, phase: "verifying", path } });
+
+      // ── Path B — ArbitrationEscrow (spec §6) ─────────────────────────────
+      // Lock the escrow and stop. Nothing settles until the multi-sig
+      // threshold is met, so there is no phase progression to run here.
+      if (path === ExecutionPath.ArbitrationEscrow) {
+        set({
+          screen: "execution",
+          releasePathChosen: true,
+          execution: { ...get().execution, phase: "idle", path },
+        });
+        const arbitrationState = await releasePaths.initArbitration(sessionId, payload);
+        set({
+          arbitrationState,
+          execution: { ...get().execution, path, txHash: arbitrationState.lockTxHash ?? null },
+          busy: false,
+        });
+        return;
+      }
+
+      // ── Path C — StagedRelease (spec §6) ─────────────────────────────────
+      // The milestone schedule does not exist yet; the officer defines it on
+      // the execution screen and `initStagedRelease` takes over from there.
+      if (path === ExecutionPath.StagedRelease) {
+        set({
+          screen: "execution",
+          releasePathChosen: true,
+          stagedReleaseState: null,
+          execution: { ...get().execution, phase: "idle", path },
+        });
+        await log("staged_release_awaiting_definition", {
+          workflow_id: sessionId,
+          execution_path: path,
+        });
+        set({ busy: false });
+        return;
+      }
+
+      // ── Path A — DirectSettlement (unchanged) ────────────────────────────
+      set({
+        screen: "execution",
+        releasePathChosen: true,
+        execution: { ...get().execution, phase: "verifying", path },
+      });
       await log("cre_execution_started", { workflow_id: sessionId, execution_path: path });
       await sleep(700);
 
@@ -1025,6 +1095,127 @@ export const useSession = create<SessionState>((set, get) => {
 
       set({ execution: { phase: "done", path, txHash, clientCents, firmCents, notifications } });
       set({ busy: false });
+    },
+
+    // ── Path B — Arbitration signatures (spec §6) ───────────────────────────
+
+    /**
+     * Cast one party's signature. When the threshold is reached the escrow
+     * releases and the client notification fires — the same post-settlement
+     * treatment Path A gets, because from the client's side the money moved.
+     */
+    signArbitration: async (signer, notes) => {
+      const { sessionId, payload, anchors } = get();
+      if (!sessionId || !payload) return;
+
+      set({ busy: true, error: null });
+      try {
+        const { resolved, txHash } = await releasePaths.signArbitrationRelease(sessionId, signer, notes);
+        const arbitrationState = await releasePaths.getArbitrationState(sessionId);
+        set({ arbitrationState, busy: false });
+
+        if (!resolved) return;
+
+        // Threshold met — the full locked balance is released.
+        const clientCents = toPayloadCents(payload).totalHeldCents;
+        set({
+          execution: { ...get().execution, phase: "notifying", txHash: txHash ?? null, clientCents },
+        });
+        const notifications = await sendNotifications(anchors, clientCents, txHash ?? "", log);
+        set({
+          execution: { ...get().execution, phase: "done", txHash: txHash ?? null, clientCents, notifications },
+          busy: false,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Arbitration signature failed: ${message}`, busy: false });
+      }
+    },
+
+    // ── Path C — Staged release (spec §6) ───────────────────────────────────
+
+    /**
+     * Commit the milestone schedule. `staged.ts` rejects a schedule whose
+     * amounts do not exactly exhaust the escrow total, so the error surfaces
+     * here rather than stranding funds.
+     */
+    initStagedRelease: async (milestones) => {
+      const { sessionId, payload } = get();
+      if (!sessionId || !payload) return;
+
+      set({ busy: true, error: null });
+      try {
+        const totalCents = toPayloadCents(payload).totalHeldCents;
+        const stagedReleaseState = await releasePaths.initStagedRelease(sessionId, milestones, totalCents);
+        set({
+          stagedReleaseState,
+          execution: { ...get().execution, txHash: releasePaths.stagedDepositTx(sessionId) },
+          busy: false,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: message, busy: false });
+      }
+    },
+
+    submitEvidence: async (milestoneId, file) => {
+      const { sessionId } = get();
+      if (!sessionId) return;
+      set({ busy: true, error: null });
+      try {
+        await releasePaths.submitMilestoneEvidence(sessionId, milestoneId, file);
+        set({ stagedReleaseState: await releasePaths.getStagedReleaseState(sessionId), busy: false });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Evidence submission failed: ${message}`, busy: false });
+      }
+    },
+
+    approveMilestone: async (milestoneId) => {
+      const { sessionId, operator } = get();
+      if (!sessionId) return;
+      set({ busy: true, error: null });
+      try {
+        await releasePaths.approveMilestone(sessionId, milestoneId, operator);
+        set({ stagedReleaseState: await releasePaths.getStagedReleaseState(sessionId), busy: false });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Milestone approval failed: ${message}`, busy: false });
+      }
+    },
+
+    /**
+     * Release one milestone's funds. `recipientAddress` defaults to the
+     * client wallet on the payload — the officer can override it per stage.
+     * The client notification fires only on the final release, when the whole
+     * escrow has been paid out.
+     */
+    releaseMilestone: async (milestoneId, recipientAddress) => {
+      const { sessionId, payload, operator, anchors } = get();
+      if (!sessionId || !payload) return;
+
+      set({ busy: true, error: null });
+      try {
+        const recipient = recipientAddress?.trim() || payload.clientWallet;
+        const milestone = await releasePaths.releaseMilestone(sessionId, milestoneId, recipient, operator);
+        const stagedReleaseState = await releasePaths.getStagedReleaseState(sessionId);
+        set({ stagedReleaseState, busy: false });
+
+        const complete = stagedReleaseState !== null && stagedReleaseState.remainingCents === 0n;
+        if (!complete) return;
+
+        const txHash = milestone.txHash ?? null;
+        const clientCents = stagedReleaseState.releasedCents;
+        set({ execution: { ...get().execution, phase: "notifying", txHash, clientCents } });
+        const notifications = await sendNotifications(anchors, clientCents, txHash ?? "", log);
+        set({
+          execution: { ...get().execution, phase: "done", txHash, clientCents, notifications },
+          busy: false,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Milestone release failed: ${message}`, busy: false });
+      }
     },
 
     resolveEscalation: async (choice) => {

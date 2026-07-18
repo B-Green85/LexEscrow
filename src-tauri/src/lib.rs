@@ -52,6 +52,13 @@ pub fn run() {
             db::save_docusign_envelope,
             db::update_docusign_envelope,
             db::save_registered_fingerprint,
+            // Release paths — Path C milestones, Path B arbitration
+            db::create_milestone,
+            db::update_milestone_status,
+            db::get_milestones,
+            db::create_arbitration,
+            db::update_arbitration,
+            db::get_arbitration,
             db::log_event,
             db::get_audit_trail,
             db::verify_audit_chain,

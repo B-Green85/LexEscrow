@@ -94,6 +94,47 @@ pub struct ParsedPayload {
     pub payload_json: Option<String>,
 }
 
+/// One Path C milestone (spec §6 Path C). `amount_cents` crosses IPC as `i64`
+/// because Tauri's JSON transport has no bigint; the frontend widens it back to
+/// `bigint` at the `lib/releasePaths` boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct MilestoneRow {
+    pub milestone_id: String,
+    pub session_id: String,
+    pub label: String,
+    pub description: String,
+    pub amount_cents: i64,
+    pub condition_type: String,
+    pub release_date: Option<String>,
+    pub evidence_required: Option<String>,
+    pub status: String,
+    pub sort_order: i64,
+    pub submitted_at: Option<String>,
+    pub approved_at: Option<String>,
+    pub released_at: Option<String>,
+    pub tx_hash: Option<String>,
+    pub evidence_hash: Option<String>,
+    pub created_at: String,
+}
+
+/// Path B 2-of-3 multi-sig tally (spec §6 Path B). `locked_at` doubles as the
+/// lock flag — a row with a timestamp is a locked escrow.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ArbitrationRow {
+    pub session_id: String,
+    pub locked_at: Option<String>,
+    pub arbiter_address: Option<String>,
+    pub party1_signed: i64,
+    pub party2_signed: i64,
+    pub arbiter_signed: i64,
+    pub threshold: i64,
+    pub resolved_at: Option<String>,
+    pub resolution_tx_hash: Option<String>,
+    pub resolution_notes: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEntry {
@@ -384,6 +425,185 @@ impl Db {
         Ok(())
     }
 
+    // ---- milestones — Path C StagedRelease (spec §6) ----------------------
+
+    /// Insert one milestone. Status starts at `pending`; the lifecycle is
+    /// driven forward exclusively by [`Db::update_milestone_status`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_milestone(
+        &self,
+        session_id: &str,
+        milestone_id: &str,
+        label: &str,
+        description: &str,
+        amount_cents: i64,
+        condition_type: &str,
+        release_date: Option<&str>,
+        evidence_required: Option<&str>,
+        sort_order: i32,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO milestones
+                (milestone_id, session_id, label, description, amount_cents,
+                 condition_type, release_date, evidence_required, status, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+        )
+        .bind(milestone_id)
+        .bind(session_id)
+        .bind(label)
+        .bind(description)
+        .bind(amount_cents)
+        .bind(condition_type)
+        .bind(release_date)
+        .bind(evidence_required)
+        .bind(sort_order)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Advance a milestone's status, writing only the fields the caller
+    /// supplied.
+    ///
+    /// Every optional column is written through `COALESCE(?, col)` so a `None`
+    /// argument *preserves* the stored value rather than nulling it. This is
+    /// deliberate and load-bearing: the lifecycle is incremental (submit sets
+    /// `submitted_at`, approve sets `approved_at`, release sets `released_at`
+    /// and `tx_hash`), so a blind overwrite would erase the earlier stages'
+    /// timestamps — and those timestamps are the audit evidence that the
+    /// human-authorization gate was actually passed.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_milestone_status(
+        &self,
+        milestone_id: &str,
+        status: &str,
+        submitted_at: Option<&str>,
+        approved_at: Option<&str>,
+        released_at: Option<&str>,
+        tx_hash: Option<&str>,
+        evidence_hash: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE milestones
+                SET status        = ?,
+                    submitted_at  = COALESCE(?, submitted_at),
+                    approved_at   = COALESCE(?, approved_at),
+                    released_at   = COALESCE(?, released_at),
+                    tx_hash       = COALESCE(?, tx_hash),
+                    evidence_hash = COALESCE(?, evidence_hash)
+             WHERE milestone_id = ?",
+        )
+        .bind(status)
+        .bind(submitted_at)
+        .bind(approved_at)
+        .bind(released_at)
+        .bind(tx_hash)
+        .bind(evidence_hash)
+        .bind(milestone_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// All milestones for a session, in definition order.
+    pub async fn get_milestones(&self, session_id: &str) -> Result<Vec<MilestoneRow>, DbError> {
+        let rows = sqlx::query_as::<_, MilestoneRow>(
+            "SELECT milestone_id, session_id, label, description, amount_cents,
+                    COALESCE(condition_type, 'manual') AS condition_type,
+                    release_date, evidence_required,
+                    COALESCE(status, 'pending') AS status,
+                    sort_order, submitted_at, approved_at, released_at,
+                    tx_hash, evidence_hash, created_at
+             FROM milestones
+             WHERE session_id = ?
+             ORDER BY sort_order ASC, created_at ASC",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    // ---- arbitration — Path B ArbitrationEscrow (spec §6) -----------------
+
+    /// Lock a session into arbitration, stamping `locked_at`.
+    ///
+    /// `INSERT OR REPLACE` keeps the call idempotent: re-locking an already
+    /// locked session resets the signature tally rather than erroring, which is
+    /// the right behavior for a re-opened dispute.
+    pub async fn create_arbitration(
+        &self,
+        session_id: &str,
+        arbiter_address: Option<&str>,
+        threshold: i32,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO arbitration_state
+                (session_id, locked_at, arbiter_address, party1_signed,
+                 party2_signed, arbiter_signed, threshold)
+             VALUES (?, CURRENT_TIMESTAMP, ?, 0, 0, 0, ?)",
+        )
+        .bind(session_id)
+        .bind(arbiter_address)
+        .bind(threshold)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record a signature and/or the final resolution.
+    ///
+    /// Same `COALESCE` discipline as milestones — signing as party 2 must not
+    /// clear party 1's signature, or the 2-of-3 threshold could never be met.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_arbitration(
+        &self,
+        session_id: &str,
+        party1_signed: Option<bool>,
+        party2_signed: Option<bool>,
+        arbiter_signed: Option<bool>,
+        resolved_at: Option<&str>,
+        resolution_tx_hash: Option<&str>,
+        resolution_notes: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE arbitration_state
+                SET party1_signed      = COALESCE(?, party1_signed),
+                    party2_signed      = COALESCE(?, party2_signed),
+                    arbiter_signed     = COALESCE(?, arbiter_signed),
+                    resolved_at        = COALESCE(?, resolved_at),
+                    resolution_tx_hash = COALESCE(?, resolution_tx_hash),
+                    resolution_notes   = COALESCE(?, resolution_notes)
+             WHERE session_id = ?",
+        )
+        .bind(party1_signed.map(i64::from))
+        .bind(party2_signed.map(i64::from))
+        .bind(arbiter_signed.map(i64::from))
+        .bind(resolved_at)
+        .bind(resolution_tx_hash)
+        .bind(resolution_notes)
+        .bind(session_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_arbitration(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<ArbitrationRow>, DbError> {
+        let row = sqlx::query_as::<_, ArbitrationRow>(
+            "SELECT session_id, locked_at, arbiter_address, party1_signed,
+                    party2_signed, arbiter_signed, threshold, resolved_at,
+                    resolution_tx_hash, resolution_notes
+             FROM arbitration_state WHERE session_id = ?",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     // ---- audit trail -----------------------------------------------------
 
     /// Append one entry to the hash-chained audit trail and return it.
@@ -665,6 +885,121 @@ pub async fn save_registered_fingerprint(
         .map_err(err)
 }
 
+// ---- milestones — Path C ---------------------------------------------------
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn create_milestone(
+    state: State<'_, Db>,
+    session_id: String,
+    milestone_id: String,
+    label: String,
+    description: String,
+    amount_cents: i64,
+    condition_type: String,
+    release_date: Option<String>,
+    evidence_required: Option<String>,
+    sort_order: i32,
+) -> Result<(), String> {
+    state
+        .create_milestone(
+            &session_id,
+            &milestone_id,
+            &label,
+            &description,
+            amount_cents,
+            &condition_type,
+            release_date.as_deref(),
+            evidence_required.as_deref(),
+            sort_order,
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_milestone_status(
+    state: State<'_, Db>,
+    milestone_id: String,
+    status: String,
+    submitted_at: Option<String>,
+    approved_at: Option<String>,
+    released_at: Option<String>,
+    tx_hash: Option<String>,
+    evidence_hash: Option<String>,
+) -> Result<(), String> {
+    state
+        .update_milestone_status(
+            &milestone_id,
+            &status,
+            submitted_at.as_deref(),
+            approved_at.as_deref(),
+            released_at.as_deref(),
+            tx_hash.as_deref(),
+            evidence_hash.as_deref(),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn get_milestones(
+    state: State<'_, Db>,
+    session_id: String,
+) -> Result<Vec<MilestoneRow>, String> {
+    state.get_milestones(&session_id).await.map_err(err)
+}
+
+// ---- arbitration — Path B --------------------------------------------------
+
+#[tauri::command]
+pub async fn create_arbitration(
+    state: State<'_, Db>,
+    session_id: String,
+    arbiter_address: Option<String>,
+    threshold: i32,
+) -> Result<(), String> {
+    state
+        .create_arbitration(&session_id, arbiter_address.as_deref(), threshold)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_arbitration(
+    state: State<'_, Db>,
+    session_id: String,
+    party1_signed: Option<bool>,
+    party2_signed: Option<bool>,
+    arbiter_signed: Option<bool>,
+    resolved_at: Option<String>,
+    resolution_tx_hash: Option<String>,
+    resolution_notes: Option<String>,
+) -> Result<(), String> {
+    state
+        .update_arbitration(
+            &session_id,
+            party1_signed,
+            party2_signed,
+            arbiter_signed,
+            resolved_at.as_deref(),
+            resolution_tx_hash.as_deref(),
+            resolution_notes.as_deref(),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn get_arbitration(
+    state: State<'_, Db>,
+    session_id: String,
+) -> Result<Option<ArbitrationRow>, String> {
+    state.get_arbitration(&session_id).await.map_err(err)
+}
+
 #[tauri::command]
 pub async fn log_event(
     state: State<'_, Db>,
@@ -775,6 +1110,96 @@ mod tests {
         assert!(v.valid);
         assert_eq!(v.entries, 3);
         assert!(v.broken_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn milestone_lifecycle_preserves_earlier_timestamps() {
+        let db = temp_db().await;
+        db.create_session(&new_session("s5")).await.unwrap();
+        db.create_milestone(
+            "s5",
+            "m1",
+            "Due diligence complete",
+            "Buyer completes review",
+            250_000,
+            "document",
+            None,
+            Some("Diligence memo"),
+            0,
+        )
+        .await
+        .unwrap();
+
+        // submit → approve → release, each supplying only its own timestamp.
+        db.update_milestone_status("m1", "submitted", Some("2026-07-18T10:00:00Z"), None, None, None, Some("sha256:eee"))
+            .await
+            .unwrap();
+        db.update_milestone_status("m1", "approved", None, Some("2026-07-18T11:00:00Z"), None, None, None)
+            .await
+            .unwrap();
+        db.update_milestone_status("m1", "released", None, None, Some("2026-07-18T12:00:00Z"), Some("0xmilestone-abc"), None)
+            .await
+            .unwrap();
+
+        let rows = db.get_milestones("s5").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let m = &rows[0];
+        assert_eq!(m.status, "released");
+        assert_eq!(m.amount_cents, 250_000);
+        // The whole point: releasing did not erase the submit/approve trail.
+        assert_eq!(m.submitted_at.as_deref(), Some("2026-07-18T10:00:00Z"));
+        assert_eq!(m.approved_at.as_deref(), Some("2026-07-18T11:00:00Z"));
+        assert_eq!(m.released_at.as_deref(), Some("2026-07-18T12:00:00Z"));
+        assert_eq!(m.evidence_hash.as_deref(), Some("sha256:eee"));
+        assert_eq!(m.tx_hash.as_deref(), Some("0xmilestone-abc"));
+    }
+
+    #[tokio::test]
+    async fn milestones_come_back_in_definition_order() {
+        let db = temp_db().await;
+        db.create_session(&new_session("s6")).await.unwrap();
+        for (id, order) in [("m-c", 2), ("m-a", 0), ("m-b", 1)] {
+            db.create_milestone("s6", id, "L", "D", 100, "manual", None, None, order)
+                .await
+                .unwrap();
+        }
+        let ids: Vec<String> = db
+            .get_milestones("s6")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.milestone_id)
+            .collect();
+        assert_eq!(ids, vec!["m-a", "m-b", "m-c"]);
+    }
+
+    #[tokio::test]
+    async fn arbitration_signatures_accumulate() {
+        let db = temp_db().await;
+        db.create_session(&new_session("s7")).await.unwrap();
+        assert!(db.get_arbitration("s7").await.unwrap().is_none());
+
+        db.create_arbitration("s7", Some("0xarbiter"), 2).await.unwrap();
+        let a = db.get_arbitration("s7").await.unwrap().unwrap();
+        assert!(a.locked_at.is_some(), "locking must stamp locked_at");
+        assert_eq!(a.threshold, 2);
+        assert_eq!((a.party1_signed, a.party2_signed, a.arbiter_signed), (0, 0, 0));
+
+        db.update_arbitration("s7", Some(true), None, None, None, None, None).await.unwrap();
+        db.update_arbitration("s7", None, Some(true), None, None, None, None).await.unwrap();
+
+        let a = db.get_arbitration("s7").await.unwrap().unwrap();
+        // Party 2 signing must not have cleared party 1 — else 2-of-3 is unreachable.
+        assert_eq!(a.party1_signed, 1);
+        assert_eq!(a.party2_signed, 1);
+        assert_eq!(a.arbiter_signed, 0);
+
+        db.update_arbitration("s7", None, None, None, Some("2026-07-18T12:00:00Z"), Some("0xarb-resolve-1234"), Some("split agreed"))
+            .await
+            .unwrap();
+        let a = db.get_arbitration("s7").await.unwrap().unwrap();
+        assert_eq!(a.resolution_tx_hash.as_deref(), Some("0xarb-resolve-1234"));
+        assert_eq!(a.party1_signed, 1);
     }
 
     #[tokio::test]

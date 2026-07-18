@@ -102,6 +102,88 @@ export interface RegisteredFingerprintArgs {
   onChainTx?: string | null;
 }
 
+/**
+ * One Path C milestone as it crosses IPC (spec §6 Path C).
+ *
+ * `amountCents` is `number`, not `bigint` — Tauri's JSON transport cannot
+ * serialize bigint. `lib/releasePaths` widens it back to `bigint` immediately
+ * on the way in, so no arithmetic is ever performed on the `number` form.
+ */
+export interface MilestoneRow {
+  milestoneId: string;
+  sessionId: string;
+  label: string;
+  description: string;
+  amountCents: number;
+  conditionType: string;
+  releaseDate: string | null;
+  evidenceRequired: string | null;
+  status: string;
+  sortOrder: number;
+  submittedAt: string | null;
+  approvedAt: string | null;
+  releasedAt: string | null;
+  txHash: string | null;
+  evidenceHash: string | null;
+  createdAt: string;
+}
+
+export interface CreateMilestoneArgs {
+  sessionId: string;
+  milestoneId: string;
+  label: string;
+  description: string;
+  amountCents: number;
+  conditionType: string; // document | time | event | manual
+  releaseDate?: string | null;
+  evidenceRequired?: string | null;
+  sortOrder: number;
+}
+
+/**
+ * Milestone status advance. Every optional field is COALESCE'd in SQL, so
+ * omitting one preserves the stored value instead of nulling it.
+ */
+export interface UpdateMilestoneStatusArgs {
+  milestoneId: string;
+  status: string; // pending | submitted | approved | released | disputed
+  submittedAt?: string | null;
+  approvedAt?: string | null;
+  releasedAt?: string | null;
+  txHash?: string | null;
+  evidenceHash?: string | null;
+}
+
+/** Path B 2-of-3 multi-sig tally as it crosses IPC (spec §6 Path B). */
+export interface ArbitrationRow {
+  sessionId: string;
+  lockedAt: string | null;
+  arbiterAddress: string | null;
+  party1Signed: number; // SQLite INTEGER boolean
+  party2Signed: number;
+  arbiterSigned: number;
+  threshold: number;
+  resolvedAt: string | null;
+  resolutionTxHash: string | null;
+  resolutionNotes: string | null;
+}
+
+export interface CreateArbitrationArgs {
+  sessionId: string;
+  arbiterAddress?: string | null;
+  threshold: number;
+}
+
+export interface UpdateArbitrationArgs {
+  sessionId: string;
+  party1Signed?: boolean | null;
+  party2Signed?: boolean | null;
+  arbiterSigned?: boolean | null;
+  resolvedAt?: string | null;
+  resolutionTxHash?: string | null;
+  resolutionNotes?: string | null;
+}
+
 // ── Environment detection ────────────────────────────────────────────────────
 
 export function isTauri(): boolean {
@@ -293,6 +375,102 @@ export async function updateDocusignEnvelope(args: DocusignEnvelopeUpdateArgs): 
 export async function saveRegisteredFingerprint(args: RegisteredFingerprintArgs): Promise<void> {
   if (isTauri()) return invoke<void>("save_registered_fingerprint", { ...args });
   // browser: nothing to persist
+}
+
+// ── Release paths — Path C milestones, Path B arbitration (spec §6) ──────────
+
+// Browser-mode stores. Unlike the write-only tables above (CannaVerify results,
+// fingerprints), release-path rows are *read back* to drive the execution UI —
+// so a no-op fallback would leave Path B and Path C blank under `npm run dev`.
+// These mirror the SQLite tables, including the COALESCE update semantics.
+const memMilestones = new Map<string, MilestoneRow>();
+const memArbitration = new Map<string, ArbitrationRow>();
+
+/** COALESCE(?, col) — an omitted value preserves what is already stored. */
+function coalesce<T>(next: T | null | undefined, current: T | null): T | null {
+  return next === undefined || next === null ? current : next;
+}
+
+export async function createMilestone(args: CreateMilestoneArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("create_milestone", { ...args });
+  memMilestones.set(args.milestoneId, {
+    milestoneId: args.milestoneId,
+    sessionId: args.sessionId,
+    label: args.label,
+    description: args.description,
+    amountCents: args.amountCents,
+    conditionType: args.conditionType,
+    releaseDate: args.releaseDate ?? null,
+    evidenceRequired: args.evidenceRequired ?? null,
+    status: "pending",
+    sortOrder: args.sortOrder,
+    submittedAt: null,
+    approvedAt: null,
+    releasedAt: null,
+    txHash: null,
+    evidenceHash: null,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+export async function updateMilestoneStatus(args: UpdateMilestoneStatusArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("update_milestone_status", { ...args });
+  const row = memMilestones.get(args.milestoneId);
+  if (!row) return;
+  memMilestones.set(args.milestoneId, {
+    ...row,
+    status: args.status,
+    submittedAt: coalesce(args.submittedAt, row.submittedAt),
+    approvedAt: coalesce(args.approvedAt, row.approvedAt),
+    releasedAt: coalesce(args.releasedAt, row.releasedAt),
+    txHash: coalesce(args.txHash, row.txHash),
+    evidenceHash: coalesce(args.evidenceHash, row.evidenceHash),
+  });
+}
+
+export async function getMilestones(sessionId: string): Promise<MilestoneRow[]> {
+  if (isTauri()) return invoke<MilestoneRow[]>("get_milestones", { sessionId });
+  return [...memMilestones.values()]
+    .filter((m) => m.sessionId === sessionId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function createArbitration(args: CreateArbitrationArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("create_arbitration", { ...args });
+  memArbitration.set(args.sessionId, {
+    sessionId: args.sessionId,
+    lockedAt: new Date().toISOString(),
+    arbiterAddress: args.arbiterAddress ?? null,
+    party1Signed: 0,
+    party2Signed: 0,
+    arbiterSigned: 0,
+    threshold: args.threshold,
+    resolvedAt: null,
+    resolutionTxHash: null,
+    resolutionNotes: null,
+  });
+}
+
+export async function updateArbitration(args: UpdateArbitrationArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("update_arbitration", { ...args });
+  const row = memArbitration.get(args.sessionId);
+  if (!row) return;
+  const flag = (next: boolean | null | undefined, current: number): number =>
+    next === undefined || next === null ? current : next ? 1 : 0;
+  memArbitration.set(args.sessionId, {
+    ...row,
+    party1Signed: flag(args.party1Signed, row.party1Signed),
+    party2Signed: flag(args.party2Signed, row.party2Signed),
+    arbiterSigned: flag(args.arbiterSigned, row.arbiterSigned),
+    resolvedAt: coalesce(args.resolvedAt, row.resolvedAt),
+    resolutionTxHash: coalesce(args.resolutionTxHash, row.resolutionTxHash),
+    resolutionNotes: coalesce(args.resolutionNotes, row.resolutionNotes),
+  });
+}
+
+export async function getArbitration(sessionId: string): Promise<ArbitrationRow | null> {
+  if (isTauri()) return invoke<ArbitrationRow | null>("get_arbitration", { sessionId });
+  return memArbitration.get(sessionId) ?? null;
 }
 
 export async function logEvent(
