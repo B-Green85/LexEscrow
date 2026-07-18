@@ -89,7 +89,7 @@ export const AiExtractionSchema = z.object({
   disputedHours: finiteNumber.default(0),
   disputedAmount: finiteNumber.default(0), // integer cents
   signaturesVerified: z.boolean().default(false),
-  recommendedPath: z.enum(["DirectSettlement", "ArbitrationEscrow"]),
+  recommendedPath: z.enum(["DirectSettlement", "ArbitrationEscrow", "StagedRelease"]),
   anomaliesFlagged: z.array(z.string()).default([]),
   anomaliesSuppressed: z.boolean().default(false),
 });
