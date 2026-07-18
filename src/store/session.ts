@@ -13,7 +13,13 @@ import * as backend from "../lib/backend";
 import { resolveProvider, ProviderUnavailableError, type AIParserProvider } from "../lib/ai/providers";
 import { schemaFor } from "../lib/ai/assetSchemas";
 import { type AssetClass } from "../lib/assetClasses";
-import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from "../lexguard/pipeline";
+import {
+  runLexGuardPipeline,
+  type EscalationDiscrepancy,
+  type LexGuardCorrection,
+  type Escalation,
+} from "../lexguard/pipeline";
+import { auditValueFor, constraintFor, escalationFindings } from "../lib/corrections";
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
@@ -23,7 +29,20 @@ import { resolveESignProvider, isTerminal } from "../lib/esign";
 import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
 import { normalizeName } from "../lexguard/anchor-matcher";
 
-export type { LexGuardCorrection, Escalation } from "../lexguard/pipeline";
+export type { LexGuardCorrection, Escalation, EscalationDiscrepancy } from "../lexguard/pipeline";
+
+/** One field resolved in the escalation dialog. Value is in payload-native units. */
+export interface HumanCorrectionInput {
+  field: string;
+  value: number | string;
+}
+
+/** One Stage 4 override of a LexGuard correction (spec §30). */
+export interface HumanOverrideInput {
+  field: string;
+  overrideValue: number | string;
+  reason: string;
+}
 
 export type Screen =
   | "load"
@@ -255,6 +274,9 @@ interface SessionState {
   handleESignCompletion: (envelopeId: string) => Promise<void>;
   proceedToExecution: () => Promise<void>;
   resolveEscalation: (choice: "review" | "ai" | "lexguard") => Promise<void>;
+  resolveEscalationWithCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
+  applyHumanCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
+  applyHumanOverride: (override: HumanOverrideInput) => Promise<void>;
   buildAuditReport: () => Promise<string>;
 }
 
@@ -277,6 +299,58 @@ export const useSession = create<SessionState>((set, get) => {
   const setStep = (key: string, status: StepStatus) =>
     set((s) => ({ steps: stepStatus(s.steps, key, status) }));
 
+  /**
+   * HUMAN_CORRECTION (spec §32) — the officer restated a value the nudge loop
+   * could not resolve. Records all three AI attempts alongside the officer's
+   * value and identity: this is the liability-transfer moment, so the record has
+   * to show what the machine offered and what the human chose instead.
+   *
+   * Money is written to the trail as integer cents per the spec payload example,
+   * even though the in-memory payload carries dollars.
+   */
+  const logHumanCorrection = async (
+    finding: EscalationDiscrepancy & { constraint: string },
+    officerValue: number | string,
+  ) => {
+    await log("HUMAN_CORRECTION", {
+      field: finding.field,
+      lexguard_module: finding.module,
+      constraint: finding.constraint,
+      document_extracted_value: auditValueFor(finding.field, finding.observedValue),
+      ai_attempt_1: auditValueFor(finding.field, finding.aiAttempt1),
+      ai_attempt_2: auditValueFor(finding.field, finding.aiAttempt2),
+      ai_attempt_3: auditValueFor(finding.field, finding.aiAttempt3),
+      officer_corrected_value: auditValueFor(finding.field, officerValue),
+      officer_identity: get().operator,
+      attestation: true,
+      block_timestamp: new Date().toISOString(),
+    });
+  };
+
+  /**
+   * HUMAN_OVERRIDE (spec §32) — distinct from HUMAN_CORRECTION because it
+   * signals the officer consciously chose a value *different from* what
+   * automated validation produced. The reason text is the whole point of the
+   * record and is never optional at the call site.
+   */
+  const logHumanOverride = async (
+    field: string,
+    module: string,
+    lexGuardValue: number | string,
+    overrideValue: number | string,
+    reason: string,
+  ) => {
+    await log("HUMAN_OVERRIDE", {
+      field,
+      lexguard_module: module,
+      lexguard_corrected_value: auditValueFor(field, lexGuardValue),
+      officer_override_value: auditValueFor(field, overrideValue),
+      override_reason: reason,
+      officer_identity: get().operator,
+      block_timestamp: new Date().toISOString(),
+    });
+  };
+
   // Shared tail: run the LexGuard pipeline on a payload (from AI or manual
   // entry), persist integer cents, and route to review or escalation.
   const runPipelineAndRoute = async (
@@ -298,7 +372,7 @@ export const useSession = create<SessionState>((set, get) => {
     set({ payload: result.payload, corrections: result.corrections, escalation: result.escalation });
 
     for (const c of result.corrections) {
-      await log("lexguard_correction", {
+      await log("LEXGUARD_CORRECTION", {
         module: c.module,
         field: c.field,
         aiValue: c.aiValue,
@@ -980,6 +1054,115 @@ export const useSession = create<SessionState>((set, get) => {
       set({ payload: next, escalation: null, screen: "review", reviewOpenedAt: Date.now(), scrollCompleted: false, acknowledged: false });
       await backend.updateSessionState(sessionId, "PARSING");
       await log("review_screen_opened", { after_escalation: true });
+    },
+
+    /**
+     * Escalation-dialog entry point (spec §29). The officer has restated every
+     * discrepant field and attested to it; `applyHumanCorrections` carries out
+     * the write, the audit records and the re-validation.
+     *
+     * `resolveEscalation` above is deliberately left intact — the batch store
+     * still routes its flagged items through the original three-choice flow.
+     */
+    resolveEscalationWithCorrections: async (corrections) => {
+      await get().applyHumanCorrections(corrections);
+    },
+
+    /**
+     * Write the officer's corrections into the payload, log HUMAN_CORRECTION
+     * per field, then re-run the full pipeline against the corrected payload.
+     *
+     * Re-validation uses `manualProvider`, not the AI provider: the officer's
+     * value is authoritative, so LexGuard must not nudge it back to the model
+     * that just failed three times on the same field. A discrepancy that
+     * survives the corrected payload therefore escalates again rather than
+     * being auto-corrected — spec §29's "if new discrepancy, new escalation
+     * dialog fires; original correction preserved".
+     */
+    applyHumanCorrections: async (corrections) => {
+      const { escalation, payload, vdb, sessionId, anchors, entryMode } = get();
+      if (!payload || !sessionId) return;
+
+      set({ busy: true, error: null });
+      const findings = escalation ? escalationFindings(escalation) : [];
+      const next: ParsedRetainerPayload = { ...payload };
+      const writable = next as unknown as Record<string, number | string>;
+
+      for (const correction of corrections) {
+        const finding = findings.find((f) => f.field === correction.field);
+        // `correctionField` names the payload field a finding writes to —
+        // absent for findings that are attested to rather than restated (a
+        // scope violation, a suppressed anomaly), which are logged but never
+        // written back.
+        const target = finding?.correctionField;
+        if (target) {
+          writable[target] = correction.value;
+        } else if (correction.field in writable) {
+          writable[correction.field] = correction.value;
+        }
+
+        await logHumanCorrection(
+          {
+            field: correction.field,
+            module: finding?.module ?? "payload-diff",
+            aiValue: finding?.aiValue ?? "—",
+            observedValue: finding?.observedValue ?? "—",
+            aiAttempt1: finding?.aiAttempt1,
+            aiAttempt2: finding?.aiAttempt2,
+            aiAttempt3: finding?.aiAttempt3,
+            constraint: constraintFor(finding?.module ?? "payload-diff", correction.field),
+          },
+          correction.value,
+        );
+      }
+
+      set({ payload: next, escalation: null });
+      await backend.updateSessionState(sessionId, "PARSING");
+
+      if (!vdb) {
+        // No VDB to re-validate against (a hydrated batch item, say) — the
+        // corrections still stand; send the officer to review.
+        set({
+          screen: "review",
+          reviewOpenedAt: Date.now(),
+          scrollCompleted: false,
+          acknowledged: false,
+          busy: false,
+        });
+        await log("review_screen_opened", { after_human_correction: true });
+        return;
+      }
+
+      await runPipelineAndRoute(next, vdb, sessionId, anchors, manualProvider, entryMode);
+    },
+
+    /**
+     * Stage 4 override of a LexGuard correction (spec §30).
+     *
+     * The scroll/acknowledge gate resets so the officer re-reviews the payload
+     * they just changed, and LexGuard re-runs on the overridden value — an
+     * override does not disable validation, it just replaces one input to it.
+     */
+    applyHumanOverride: async ({ field, overrideValue, reason }) => {
+      const { payload, corrections, vdb, sessionId, anchors, entryMode } = get();
+      if (!payload || !sessionId) return;
+
+      // The value LexGuard landed on is the last resolved correction for the
+      // field; if none is recorded, the current payload value is what the
+      // officer is overriding.
+      const applied = [...corrections].reverse().find((c) => c.field === field && c.resolved);
+      const current = (payload as unknown as Record<string, number | string>)[field];
+      const lexGuardValue = applied?.observedValue ?? current;
+
+      const next: ParsedRetainerPayload = { ...payload };
+      const writable = next as unknown as Record<string, number | string>;
+      if (field in writable) writable[field] = overrideValue;
+
+      set({ payload: next, scrollCompleted: false, acknowledged: false, error: null });
+      await logHumanOverride(field, applied?.module ?? "payload-diff", lexGuardValue, overrideValue, reason);
+
+      if (!vdb) return;
+      await runPipelineAndRoute(next, vdb, sessionId, anchors, manualProvider, entryMode);
     },
 
     buildAuditReport: async () => {

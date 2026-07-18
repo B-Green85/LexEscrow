@@ -1,8 +1,10 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { useSession } from "../store/session";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useSession, type LexGuardCorrection } from "../store/session";
 import { ExecutionPath } from "../lexguard/types";
 import { formatUsd, toCents } from "../lexguard/payload-diff";
 import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
+import { CorrectedField } from "../components/CorrectedField";
+import { constraintFor, parseFieldInput } from "../lib/corrections";
 
 const $ = (n: number) => formatUsd(toCents(n));
 
@@ -15,9 +17,59 @@ function Row({ label, value, mono }: { label: string; value: ReactNode; mono?: b
   );
 }
 
+/**
+ * The correction LexGuard actually landed on for each field — the last
+ * *resolved* nudge. Unresolved attempts are history, not applied values, so
+ * highlighting them at Stage 4 would claim a change that never happened.
+ */
+function appliedCorrections(corrections: LexGuardCorrection[]): Map<string, LexGuardCorrection> {
+  const applied = new Map<string, LexGuardCorrection>();
+  for (const c of corrections) {
+    if (c.resolved) applied.set(c.field, c);
+  }
+  return applied;
+}
+
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
     <div className="mt-4 mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">{children}</div>
+  );
+}
+
+/**
+ * A money row, rendered as a corrected field when LexGuard changed it.
+ *
+ * Declared at module scope, not inside `ParsedOutputReview`. A component
+ * defined during render gets a fresh function identity every time, so React
+ * would unmount and remount this subtree on *any* store change — discarding a
+ * half-typed override dialog underneath the officer.
+ */
+function MoneyRow({
+  label,
+  field,
+  value,
+  correction,
+  overridden,
+  onOverride,
+}: {
+  label: string;
+  field: string;
+  value: number;
+  correction: LexGuardCorrection | undefined;
+  overridden: boolean;
+  onOverride: (field: string, value: string | number, reason: string) => void;
+}) {
+  if (!correction || overridden) return <Row label={label} value={$(value)} mono />;
+  return (
+    <CorrectedField
+      fieldName={field}
+      label={label}
+      correctedValue={value}
+      originalAiValue={correction.aiValue}
+      module={correction.module}
+      constraint={constraintFor(correction.module, field)}
+      onOverride={(overrideValue, reason) => onOverride(field, overrideValue, reason)}
+    />
   );
 }
 
@@ -37,8 +89,37 @@ export function ParsedOutputReview() {
     cannaVerifyConditions,
     cannaVerifyRunning,
     runCannaVerify,
+    applyHumanOverride,
   } = useSession();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Fields the officer has overridden this session, and the banner that tells
+  // them the review gate reopened because of it (spec §30).
+  const [overridden, setOverridden] = useState<Set<string>>(new Set());
+  const [overrideNotice, setOverrideNotice] = useState<string | null>(null);
+
+  const applied = useMemo(() => appliedCorrections(corrections), [corrections]);
+  const pendingCorrections = useMemo(
+    () => [...applied.keys()].filter((field) => !overridden.has(field)),
+    [applied, overridden],
+  );
+
+  const handleOverride = (field: string, raw: string | number, reason: string) => {
+    const value = typeof raw === "number" ? raw : parseFieldInput(field, raw);
+    // The dialog gates on a non-empty value, but a money field can still hold
+    // something unparseable — refuse rather than write NaN into a settlement.
+    if (value === null) return;
+    setOverridden((prev) => new Set(prev).add(field));
+    setOverrideNotice("Override applied — please re-review the full payload");
+    void applyHumanOverride({ field, overrideValue: value, reason });
+  };
+
+  const moneyRowProps = (field: string) => ({
+    field,
+    correction: applied.get(field),
+    overridden: overridden.has(field),
+    onOverride: handleOverride,
+  });
 
   // Cannabis IND: state licensure must verify before any funds move (spec §5).
   const isCannabis = assetClass === "cannabis_ind";
@@ -75,6 +156,29 @@ export function ParsedOutputReview() {
       </p>
       {providerLabel && <p className="mt-1 text-xs text-slate-400">Parsed via {providerLabel}.</p>}
 
+      {pendingCorrections.length > 0 && (
+        <div
+          className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          data-testid="corrections-banner"
+        >
+          <span className="font-semibold">
+            {pendingCorrections.length} LexGuard correction
+            {pendingCorrections.length > 1 ? "s" : ""} applied
+          </span>{" "}
+          — review highlighted fields below. Hover a corrected field to override it.
+        </div>
+      )}
+
+      {overrideNotice && (
+        <div
+          className="mt-3 rounded-lg border border-brand-500/40 bg-brand-50 px-4 py-3 text-sm text-[#93C5FD]"
+          role="status"
+          data-testid="override-notice"
+        >
+          {overrideNotice}
+        </div>
+      )}
+
       <div className="card mt-5 overflow-hidden">
         <div
           ref={scrollRef}
@@ -92,11 +196,19 @@ export function ParsedOutputReview() {
 
           <SectionTitle>Billing reconciliation</SectionTitle>
           <div className="divide-y divide-slate-100">
-            <Row label="Total retainer held" value={$(payload.totalHeld)} mono />
-            <Row label="Earned fees (firm)" value={$(payload.earnedFees)} mono />
-            <Row label="Unearned balance (client)" value={$(payload.unearnedBalance)} mono />
+            <MoneyRow label="Total retainer held" value={payload.totalHeld} {...moneyRowProps("totalHeld")} />
+            <MoneyRow label="Earned fees (firm)" value={payload.earnedFees} {...moneyRowProps("earnedFees")} />
+            <MoneyRow
+              label="Unearned balance (client)"
+              value={payload.unearnedBalance}
+              {...moneyRowProps("unearnedBalance")}
+            />
             <Row label="Disputed hours" value={payload.disputedHours.toFixed(1)} mono />
-            <Row label="Disputed amount" value={$(payload.disputedAmount)} mono />
+            <MoneyRow
+              label="Disputed amount"
+              value={payload.disputedAmount}
+              {...moneyRowProps("disputedAmount")}
+            />
           </div>
 
           <SectionTitle>Determination</SectionTitle>

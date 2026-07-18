@@ -217,7 +217,7 @@ export const useBatch = create<BatchState>((set, get) => {
       entryMode,
     });
     for (const c of result.corrections) {
-      await log(sessionId, "lexguard_correction", {
+      await log(sessionId, "LEXGUARD_CORRECTION", {
         module: c.module,
         field: c.field,
         aiValue: c.aiValue,
