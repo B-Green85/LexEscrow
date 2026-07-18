@@ -1,0 +1,10 @@
+{
+  "name": "lex-mock-adapters",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx index.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.1"
+  }
+}

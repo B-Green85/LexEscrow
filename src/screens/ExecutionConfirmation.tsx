@@ -4,6 +4,7 @@ import { useBatch } from "../store/batch";
 import { ExecutionPath } from "../lexguard/types";
 import { formatUsd } from "../lexguard/payload-diff";
 import * as backend from "../lib/backend";
+import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
 
 const PHASES: { key: string; label: string }[] = [
   { key: "verifying", label: "Verifying attorney & billing (Chainlink Functions)" },
@@ -18,7 +19,19 @@ function shortRef(hash: string | null): string {
 }
 
 export function ExecutionConfirmation() {
-  const { execution, buildAuditReport, sessionId, reset, activeBatchItemId, fromBatch, returnToBatch } = useSession();
+  const {
+    execution,
+    buildAuditReport,
+    sessionId,
+    reset,
+    activeBatchItemId,
+    fromBatch,
+    returnToBatch,
+    assetClass,
+    cannaVerifyConditions,
+    cannaVerifyRunning,
+    runCannaVerify,
+  } = useSession();
   const [chain, setChain] = useState<backend.ChainVerification | null>(null);
   const done = execution.phase === "done";
   const isDirect = execution.path === ExecutionPath.DirectSettlement;
@@ -85,6 +98,16 @@ export function ExecutionConfirmation() {
           );
         })}
       </div>
+
+      {/* Cannabis IND — regulatory condition state carried through settlement.
+          The blocking gate is on the review screen; this is the monitor view. */}
+      {assetClass === "cannabis_ind" && (
+        <CannaVerifyConditions
+          conditions={cannaVerifyConditions}
+          running={cannaVerifyRunning}
+          onRun={() => void runCannaVerify()}
+        />
+      )}
 
       {done && (
         <>

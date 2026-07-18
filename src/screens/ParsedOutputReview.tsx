@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useSession } from "../store/session";
 import { ExecutionPath } from "../lexguard/types";
 import { formatUsd, toCents } from "../lexguard/payload-diff";
+import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
 
 const $ = (n: number) => formatUsd(toCents(n));
 
@@ -32,8 +33,16 @@ export function ParsedOutputReview() {
     proceedToExecution,
     error,
     busy,
+    assetClass,
+    cannaVerifyConditions,
+    cannaVerifyRunning,
+    runCannaVerify,
   } = useSession();
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Cannabis IND: state licensure must verify before any funds move (spec §5).
+  const isCannabis = assetClass === "cannabis_ind";
+  const cannaBlocked = isCannabis && cannaVerifyConditions?.overallResult !== "PASS";
 
   // If the content isn't tall enough to scroll, there's nothing to enforce.
   useEffect(() => {
@@ -133,8 +142,19 @@ export function ParsedOutputReview() {
           </div>
         </div>
 
+        {/* Cannabis IND — regulatory conditions gate settlement (spec §5). */}
+        {isCannabis && (
+          <div className="px-6">
+            <CannaVerifyConditions
+              conditions={cannaVerifyConditions}
+              running={cannaVerifyRunning}
+              onRun={() => void runCannaVerify()}
+            />
+          </div>
+        )}
+
         {/* Acknowledgment footer */}
-        <div className="border-t border-slate-100 bg-slate-50/60 px-6 py-4">
+        <div className="mt-5 border-t border-slate-100 bg-slate-50/60 px-6 py-4">
           {!scrollCompleted ? (
             <p className="text-center text-sm text-slate-400">
               Scroll to the bottom of the parsed output to continue.
@@ -159,10 +179,16 @@ export function ParsedOutputReview() {
             </div>
           )}
 
+          {cannaBlocked && scrollCompleted && acknowledged && (
+            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              🌿 CannaVerify must pass before this cannabis transaction can settle.
+            </div>
+          )}
+
           <div className="mt-4 flex justify-end">
             <button
               className="btn btn-primary btn-lg"
-              disabled={!scrollCompleted || !acknowledged || busy}
+              disabled={!scrollCompleted || !acknowledged || busy || cannaBlocked}
               onClick={() => proceedToExecution()}
             >
               {busy ? "Verifying…" : "Proceed to Execution"}

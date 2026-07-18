@@ -83,7 +83,7 @@ function DarkSelect({
 }
 
 export function DocumentLoad() {
-  const { anchors, setAnchor, file, setFile, goToProcessing, error, busy, assetClass, setAssetClass } =
+  const { anchors, setAnchor, setRawAnchors, file, setFile, goToProcessing, error, busy, assetClass, setAssetClass } =
     useSession();
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -114,12 +114,16 @@ export function DocumentLoad() {
     setAssetClass(cls);
     setRaw(empty);
     setAnchor(anchorsToTrustAnchors(cls, empty));
+    setRawAnchors(empty);
   };
 
   const setValue = (key: string, v: string) => {
     const next = { ...raw, [key]: v };
     setRaw(next);
     setAnchor(anchorsToTrustAnchors(assetClass, next));
+    // The raw record too — TrustAnchors drops the class-specific fields that
+    // CannaVerify needs (Metrc facility ID, license type).
+    setRawAnchors(next);
   };
 
   const canContinue = !!file && anchorsComplete(assetClass, raw) && !busy;

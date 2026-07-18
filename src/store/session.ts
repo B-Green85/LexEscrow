@@ -17,6 +17,8 @@ import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from ".
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
+import { runCannaVerify as runCannaVerifyAdapters } from "../lib/cannaverify";
+import type { CannaVerifyConditions } from "../lib/cannaverify/types";
 
 export type { LexGuardCorrection, Escalation } from "../lexguard/pipeline";
 
@@ -141,6 +143,12 @@ interface SessionState {
   activeBatchItemId: string | null;
   fromBatch: boolean;
   anchors: TrustAnchors;
+  /**
+   * Per-class anchor record exactly as typed on Document Load, before it is
+   * projected onto the legal-shaped `TrustAnchors`. Cannabis needs the fields
+   * that projection drops — Metrc facility ID, license type, state.
+   */
+  rawAnchors: Record<string, string>;
   sessionId: string | null;
   file: File | null;
   artifact: backend.LoadedArtifact | null;
@@ -156,9 +164,13 @@ interface SessionState {
   scrollCompleted: boolean;
   acknowledged: boolean;
   busy: boolean;
+  cannaVerifyConditions: CannaVerifyConditions | null;
+  cannaVerifyRunning: boolean;
 
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
+  setRawAnchors: (raw: Record<string, string>) => void;
+  runCannaVerify: () => Promise<void>;
   setFile: (file: File | null) => void;
   setEntryMode: (mode: EntryMode) => void;
   setAssetClass: (cls: AssetClass) => void;
@@ -269,6 +281,7 @@ export const useSession = create<SessionState>((set, get) => {
     activeBatchItemId: null,
     fromBatch: false,
     anchors: emptyAnchors,
+    rawAnchors: {},
     sessionId: null,
     file: null,
     artifact: null,
@@ -291,8 +304,11 @@ export const useSession = create<SessionState>((set, get) => {
     scrollCompleted: false,
     acknowledged: false,
     busy: false,
+    cannaVerifyConditions: null,
+    cannaVerifyRunning: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
+    setRawAnchors: (raw) => set({ rawAnchors: raw }),
     setFile: (file) => set({ file }),
     setEntryMode: (mode) => set({ entryMode: mode }),
     setAssetClass: (cls) => set({ assetClass: cls }),
@@ -337,6 +353,7 @@ export const useSession = create<SessionState>((set, get) => {
         activeBatchItemId: null,
         fromBatch: false,
         anchors: emptyAnchors,
+        rawAnchors: {},
         sessionId: null,
         file: null,
         artifact: null,
@@ -352,6 +369,8 @@ export const useSession = create<SessionState>((set, get) => {
         scrollCompleted: false,
         acknowledged: false,
         busy: false,
+        cannaVerifyConditions: null,
+        cannaVerifyRunning: false,
       }),
 
     // DocumentLoad → Processing screen, showing the entry-mode toggle before
@@ -375,6 +394,9 @@ export const useSession = create<SessionState>((set, get) => {
         scrollCompleted: false,
         acknowledged: false,
         execution: { phase: "idle", path: null, txHash: null, clientCents: 0n, firmCents: 0n, notifications: [] },
+        // A new document invalidates any prior regulatory verification.
+        cannaVerifyConditions: null,
+        cannaVerifyRunning: false,
       });
     },
 
@@ -547,6 +569,45 @@ export const useSession = create<SessionState>((set, get) => {
       set({ acknowledged: v });
       if (v) {
         await log("acknowledgment_checked", { user: get().operator });
+      }
+    },
+
+    /**
+     * CannaVerify condition run (spec §5). Cannabis IND only — every cannabis
+     * transaction requires verified state licensure before funds move, so this
+     * gates settlement on the Parsed Output Review screen.
+     */
+    runCannaVerify: async () => {
+      const { assetClass, sessionId, anchors, rawAnchors, payload } = get();
+      if (assetClass !== "cannabis_ind" || !sessionId) return;
+
+      set({ cannaVerifyRunning: true, error: null });
+      try {
+        // The raw anchor record carries the cannabis-specific fields; the
+        // legal-shaped TrustAnchors projection keeps only the identifier.
+        const stateLicenseNum = rawAnchors.stateLicenseNumber || anchors.attorneyBarNumber;
+        const conditions = await runCannaVerifyAdapters({
+          sessionId,
+          stateLicenseNum,
+          metrcFacilityId: rawAnchors.metrcFacilityId ?? "",
+          licenseType: rawAnchors.licenseType ?? "",
+          // Cannabis anchors carry no state field of their own; the license
+          // number is state-scoped, so fall back to the CA demo default.
+          state: rawAnchors.state || anchors.state || "CA",
+          // Temporary bridge: the cannabis payload stows batch numbers in
+          // anomaliesFlagged. V2 gets proper cannabis-specific payload fields.
+          inventorySchedule: payload?.anomaliesFlagged ?? [],
+        });
+        set({ cannaVerifyConditions: conditions, cannaVerifyRunning: false });
+        await log("cannaverify_completed", {
+          overall_result: conditions.overallResult,
+          state_license_num: stateLicenseNum,
+          metrc_facility_id: conditions.metrcFacilityId,
+          checks: conditions.checks.map((c) => ({ type: c.checkType, result: c.result })),
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ cannaVerifyRunning: false, error: `CannaVerify failed: ${message}` });
       }
     },
 
