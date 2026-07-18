@@ -63,8 +63,12 @@ dotenvy = "0.15"
 aes-gcm = "0.10"
 scrypt = { version = "0.11", default-features = false }
 rand = "0.8"
-zeroize = "1"
+zeroize = { version = "1", features = ["zeroize_derive"] }
 base64 = "0.22"
+
+# DocuSign eSign — OAuth JWT Grant (RS256). `from_rsa_pem` parses both PKCS#1
+# and PKCS#8 DocuSign keypairs, so no separate RSA crate is needed.
+jsonwebtoken = "9"
 
 # WebSocket AI transport
 tokio-tungstenite = { version = "0.24", default-features = false, features = [

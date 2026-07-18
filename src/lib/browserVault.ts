@@ -12,6 +12,8 @@
 import type {
   AiInput,
   AiSecret,
+  DocuSignInput,
+  DocuSignPublic,
   SmtpInput,
   TwilioInput,
   UnlockResult,
@@ -36,10 +38,19 @@ interface TwilioStored {
   fromNumber: string;
   authToken: string;
 }
+interface DocuSignStored {
+  integrationKey: string;
+  userId: string;
+  accountId: string;
+  baseUri: string;
+  jwtPrivateKey: string;
+  environment: string;
+}
 interface VData {
   ai: AiStored | null;
   smtp: SmtpStored | null;
   twilio: TwilioStored | null;
+  docusign: DocuSignStored | null;
 }
 
 const STORAGE_KEY = "lexescrow.vault";
@@ -88,6 +99,16 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
 
 let state: { data: VData; key: CryptoKey; salt: Uint8Array } | null = null;
 
+function emptyData(): VData {
+  return { ai: null, smtp: null, twilio: null, docusign: null };
+}
+
+/** A vault written before a group existed decrypts without that key — fill in
+ *  the missing slots so callers never read `undefined`. */
+function hydrate(raw: Partial<VData>): VData {
+  return { ...emptyData(), ...raw };
+}
+
 async function persist(): Promise<void> {
   if (!state) return;
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -110,7 +131,7 @@ export async function unlock(password: string): Promise<UnlockResult> {
   if (raw === null) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const key = await deriveKey(password, salt);
-    state = { data: { ai: null, smtp: null, twilio: null }, key, salt };
+    state = { data: emptyData(), key, salt };
     await persist();
     return { ok: true, created: true };
   }
@@ -127,7 +148,7 @@ export async function unlock(password: string): Promise<UnlockResult> {
   const key = await deriveKey(password, salt);
   try {
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct as unknown as BufferSource);
-    state = { data: JSON.parse(dec.decode(pt)) as VData, key, salt };
+    state = { data: hydrate(JSON.parse(dec.decode(pt)) as Partial<VData>), key, salt };
     return { ok: true, created: false };
   } catch {
     return { ok: false, created: false, reason: "wrong_password", message: "Incorrect password." };
@@ -189,10 +210,52 @@ export async function setTwilio(input: TwilioInput): Promise<void> {
   await persist();
 }
 
-export async function deleteGroup(group: "ai" | "smtp" | "twilio"): Promise<void> {
+export async function deleteGroup(group: "ai" | "smtp" | "twilio" | "docusign"): Promise<void> {
   const s = requireUnlocked();
   s.data[group] = null;
   await persist();
+}
+
+// ── DocuSign (spec §24) ──────────────────────────────────────────────────────
+
+/** Configured means it could actually authenticate — metadata alone is not a
+ *  usable credential. Mirrors `VaultState::has_docusign` in vault.rs. */
+function usable(d: DocuSignStored | null): boolean {
+  return !!d && !!d.integrationKey && !!d.jwtPrivateKey && !!d.accountId;
+}
+
+export async function setDocusign(input: DocuSignInput): Promise<void> {
+  const s = requireUnlocked();
+  const prev = s.data.docusign;
+  // Blank secret on edit keeps the stored one (same rule as AI/SMTP).
+  const keep = (submitted: string, current: string | undefined) =>
+    submitted.length > 0 ? submitted : (current ?? "");
+  s.data.docusign = {
+    integrationKey: keep(input.integrationKey.trim(), prev?.integrationKey),
+    userId: input.userId.trim(),
+    accountId: input.accountId.trim(),
+    baseUri: input.baseUri.trim().replace(/\/+$/, ""),
+    jwtPrivateKey: keep(input.jwtPrivateKey.trim(), prev?.jwtPrivateKey),
+    environment: input.environment.trim(),
+  };
+  await persist();
+}
+
+export function getDocusignPublic(): DocuSignPublic {
+  const { data } = requireUnlocked();
+  const d = data.docusign;
+  if (!d) return { hasCredentials: false, environment: "", accountIdHint: "" };
+  return {
+    hasCredentials: usable(d),
+    environment: d.environment,
+    accountIdHint: d.accountId.length <= 4 ? d.accountId : d.accountId.slice(-4),
+  };
+}
+
+/** Presence flag. A locked vault reports `false` rather than throwing — the
+ *  provider resolver treats "not available" and "not configured" alike. */
+export function hasDocusign(): boolean {
+  return usable(state?.data.docusign ?? null);
 }
 
 export async function changePassword(current: string, next: string): Promise<void> {

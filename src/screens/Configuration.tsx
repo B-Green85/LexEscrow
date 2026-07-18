@@ -1,7 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
-import type { AiPublic, SmtpPublic, TwilioPublic, VaultPublic } from "../lib/vaultTypes";
+import type {
+  AiPublic,
+  DocuSignPublic,
+  SmtpPublic,
+  TwilioPublic,
+  VaultPublic,
+} from "../lib/vaultTypes";
 
 const PROVIDER_SUGGESTIONS = ["Claude", "GPT-4o", "Gemini", "Custom"];
 
@@ -372,6 +378,225 @@ function TwilioCard({ data, refresh }: { data: TwilioPublic | null; refresh: () 
   );
 }
 
+// ── DocuSign (spec §24) ──────────────────────────────────────────────────────
+
+const DEFAULT_BASE_URI = "https://demo.docusign.net";
+
+/** Multi-line variant of SecretInput — an RSA PEM is ~1,700 characters. */
+function SecretTextarea({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <textarea
+        // Masking a textarea needs a font substitution — `password` is not a
+        // valid textarea type. Hidden state keeps the PEM unreadable over a
+        // shoulder while preserving the newlines the parser depends on.
+        className={`input min-h-28 font-mono text-xs ${show ? "" : "text-transparent [text-shadow:0_0_7px_rgba(226,232,240,0.85)] selection:bg-transparent"}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        spellCheck={false}
+        autoComplete="off"
+      />
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        className="absolute right-2 top-2 rounded bg-[#111827] px-1.5 py-0.5 text-xs font-medium text-slate-500 hover:bg-slate-100"
+      >
+        {show ? "Hide" : "Show"}
+      </button>
+    </div>
+  );
+}
+
+function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [integrationKey, setIntegrationKey] = useState("");
+  const [userId, setUserId] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [baseUri, setBaseUri] = useState(DEFAULT_BASE_URI);
+  const [jwtPrivateKey, setJwtPrivateKey] = useState("");
+  const [environment, setEnvironment] = useState("sandbox");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  const configured = !!data?.hasCredentials;
+
+  const openEdit = () => {
+    // The public shape carries no key, user ID or full account ID by design, so
+    // an edit starts from the environment default rather than echoing secrets.
+    setIntegrationKey("");
+    setUserId("");
+    setAccountId("");
+    setBaseUri(data?.environment === "production" ? "" : DEFAULT_BASE_URI);
+    setJwtPrivateKey("");
+    setEnvironment(data?.environment || "sandbox");
+    setErr(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.setDocuSign({
+        integrationKey,
+        userId,
+        accountId,
+        baseUri,
+        jwtPrivateKey,
+        environment,
+      });
+      setEditing(false);
+      setTestResult(null);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  const test = async () => {
+    setTestResult(null);
+    try {
+      const ok = await backend.hasDocuSign();
+      setTestResult(ok ? "✅ Connected" : "❌ Not configured");
+    } catch (e) {
+      setTestResult(`❌ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const del = async () => {
+    await backend.vaultDelete("docusign");
+    setTestResult(null);
+    refresh();
+  };
+
+  return (
+    <CardShell title="DocuSign" subtitle="eSignature envelopes — JWT Grant, server-to-server">
+      {!editing ? (
+        <div>
+          {configured ? (
+            <dl className="space-y-1.5 text-sm">
+              <Row k="Credentials" v="•••••••• stored" />
+              <Row
+                k="Environment"
+                v={data?.environment === "production" ? "Production" : "Sandbox"}
+              />
+              <Row k="Account ID" v={`…${data?.accountIdHint ?? ""}`} mono />
+            </dl>
+          ) : (
+            <p className="text-sm text-slate-400">
+              No DocuSign credentials — Send for Signature runs against the demo provider.
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn btn-secondary" onClick={openEdit}>
+              {configured ? "Edit" : "Add"}
+            </button>
+            <button className="btn btn-secondary" onClick={test}>
+              Test Connection
+            </button>
+            {configured && (
+              <button className="btn btn-secondary text-red-600" onClick={del}>
+                Delete
+              </button>
+            )}
+          </div>
+          {testResult && (
+            <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
+              {testResult}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="label">Integration key</label>
+            <SecretInput
+              value={integrationKey}
+              onChange={setIntegrationKey}
+              placeholder={configured ? "leave blank to keep existing" : "00000000-0000-0000-0000-000000000000"}
+            />
+          </div>
+          <div>
+            <label className="label">User ID</label>
+            <input
+              className="input"
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              placeholder="impersonation subject GUID"
+            />
+          </div>
+          <div>
+            <label className="label">Account ID</label>
+            <input
+              className="input"
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              placeholder="DocuSign account GUID"
+            />
+          </div>
+          <div>
+            <label className="label">Base URI</label>
+            <input
+              className="input"
+              value={baseUri}
+              onChange={(e) => setBaseUri(e.target.value)}
+              placeholder={DEFAULT_BASE_URI}
+            />
+          </div>
+          <div>
+            <label className="label">JWT private key (RSA PEM)</label>
+            <SecretTextarea
+              value={jwtPrivateKey}
+              onChange={setJwtPrivateKey}
+              placeholder={
+                configured
+                  ? "leave blank to keep existing"
+                  : "-----BEGIN RSA PRIVATE KEY-----"
+              }
+            />
+          </div>
+          <div>
+            <label className="label">Environment</label>
+            <select
+              className="input"
+              value={environment}
+              onChange={(e) => setEnvironment(e.target.value)}
+            >
+              <option value="sandbox">Sandbox</option>
+              <option value="production">Production</option>
+            </select>
+          </div>
+          <Err msg={err} />
+          <div className="flex gap-2">
+            <button
+              className="btn btn-primary"
+              disabled={busy || !userId || !accountId || !baseUri}
+              onClick={save}
+            >
+              Save
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -448,6 +673,7 @@ export function Configuration() {
   const [exists, setExists] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [pub, setPub] = useState<VaultPublic | null>(null);
+  const [docusign, setDocusign] = useState<DocuSignPublic | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -456,7 +682,16 @@ export function Configuration() {
     const status = await backend.vaultStatus();
     setExists(status.exists);
     setUnlocked(status.unlocked);
-    if (status.unlocked) setPub(await backend.vaultGetPublic());
+    if (status.unlocked) {
+      // DocuSign lives outside VaultPublic — its public shape is deliberately
+      // narrower (no key, no user ID, account ID reduced to a hint).
+      const [vaultPub, dsPub] = await Promise.all([
+        backend.vaultGetPublic(),
+        backend.getDocuSignPublic(),
+      ]);
+      setPub(vaultPub);
+      setDocusign(dsPub);
+    }
   };
 
   useEffect(() => {
@@ -476,7 +711,7 @@ export function Configuration() {
       setPassword("");
       setExists(true);
       setUnlocked(true);
-      setPub(await backend.vaultGetPublic());
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -487,6 +722,7 @@ export function Configuration() {
     await backend.vaultLock();
     setUnlocked(false);
     setPub(null);
+    setDocusign(null);
   };
 
   return (
@@ -535,6 +771,7 @@ export function Configuration() {
           <AiCard data={pub?.ai ?? null} refresh={refresh} />
           <SmtpCard data={pub?.smtp ?? null} refresh={refresh} />
           <TwilioCard data={pub?.twilio ?? null} refresh={refresh} />
+          <DocuSignCard data={docusign} refresh={refresh} />
           <ChangePassword />
         </div>
       )}

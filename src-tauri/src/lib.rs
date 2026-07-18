@@ -8,6 +8,7 @@
 mod ai;
 mod artifact_guard;
 mod db;
+mod docusign;
 mod notify;
 mod vault;
 
@@ -64,11 +65,18 @@ pub fn run() {
             vault::vault_set_ai,
             vault::vault_set_smtp,
             vault::vault_set_twilio,
+            vault::vault_set_docusign,
+            vault::vault_get_docusign_public,
+            vault::vault_has_docusign,
             vault::vault_delete,
             vault::vault_change_password,
             // AI provider transport
             ai::ai_request_http,
             ai::ai_request_ws,
+            // DocuSign eSign
+            docusign::docusign_send_envelope,
+            docusign::docusign_poll_status,
+            docusign::docusign_get_certificate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

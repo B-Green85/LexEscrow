@@ -13,6 +13,8 @@ import { invoke } from "@tauri-apps/api/core";
 import * as browserVault from "./browserVault";
 import type {
   AiInput,
+  DocuSignInput,
+  DocuSignPublic,
   SmtpInput,
   TwilioInput,
   UnlockResult,
@@ -219,6 +221,25 @@ export async function loadArtifact(filename: string, bytes: Uint8Array): Promise
   };
 }
 
+/**
+ * Hash arbitrary bytes through ArtifactGuard, returning `sha256:<hex>`.
+ *
+ * A second call path into the same registry as `loadArtifact`, for artifacts
+ * that arrive mid-workflow rather than being loaded by the user — currently the
+ * DocuSign certificate of completion (spec §23). Registering rather than merely
+ * hashing means the certificate gets an integrity baseline too, so later
+ * tampering is detectable by the same `verifyArtifact` machinery as the source
+ * document.
+ */
+export async function hashBytes(bytes: Uint8Array, label = "certificate.pdf"): Promise<string> {
+  if (isTauri()) {
+    return invoke<string>("register_artifact", { filename: label, bytes: Array.from(bytes) });
+  }
+  const hash = await sha256Prefixed(bytes);
+  memBaselines.set(label, hash);
+  return hash;
+}
+
 /** Blocking final re-verify. Resolves if unchanged, rejects with a reason. */
 export async function finalVerifyBeforeExecution(filename: string, bytes: Uint8Array): Promise<void> {
   if (isTauri()) {
@@ -388,12 +409,33 @@ export async function vaultSetTwilio(input: TwilioInput): Promise<void> {
   await browserVault.setTwilio(input);
 }
 
-export async function vaultDelete(group: "ai" | "smtp" | "twilio"): Promise<void> {
+export async function vaultDelete(group: "ai" | "smtp" | "twilio" | "docusign"): Promise<void> {
   if (isTauri()) {
     await invoke("vault_delete", { group });
     return;
   }
   await browserVault.deleteGroup(group);
+}
+
+// ── DocuSign credentials (spec §24) ──────────────────────────────────────────
+
+/** Does the vault hold usable DocuSign credentials? Gates the real provider. */
+export async function hasDocuSign(): Promise<boolean> {
+  if (isTauri()) return invoke<boolean>("vault_has_docusign");
+  return browserVault.hasDocusign();
+}
+
+export async function getDocuSignPublic(): Promise<DocuSignPublic> {
+  if (isTauri()) return invoke<DocuSignPublic>("vault_get_docusign_public");
+  return browserVault.getDocusignPublic();
+}
+
+export async function setDocuSign(input: DocuSignInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_docusign", { input });
+    return;
+  }
+  await browserVault.setDocusign(input);
 }
 
 export async function vaultChangePassword(current: string, next: string): Promise<void> {

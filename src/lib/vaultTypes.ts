@@ -39,6 +39,18 @@ export interface TwilioPublic {
   hasAuthToken: boolean;
 }
 
+/**
+ * DocuSign's public view is narrower than the others: no integration key, no
+ * user ID, and the account ID reduced to its last four characters. Everything
+ * an operator needs to confirm the right account is wired up, nothing that
+ * helps an attacker (spec §24).
+ */
+export interface DocuSignPublic {
+  hasCredentials: boolean;
+  environment: string;
+  accountIdHint: string;
+}
+
 export interface VaultPublic {
   ai: AiPublic | null;
   smtp: SmtpPublic | null;
@@ -63,6 +75,20 @@ export interface TwilioInput {
   accountSid: string;
   fromNumber: string;
   authToken?: string;
+}
+
+/**
+ * DocuSign setter payload — every field is a string because the whole entry is
+ * secret-bearing. Submitting `integrationKey` or `jwtPrivateKey` blank keeps
+ * whatever is already stored, matching the other groups' edit semantics.
+ */
+export interface DocuSignInput {
+  integrationKey: string;
+  userId: string;
+  accountId: string;
+  baseUri: string;
+  jwtPrivateKey: string;
+  environment: string;
 }
 
 /** Secret-bearing AI credential — only ever lives in the backend / browser vault. */

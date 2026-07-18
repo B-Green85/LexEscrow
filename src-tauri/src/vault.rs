@@ -25,7 +25,7 @@ use rand::RngCore;
 use scrypt::{scrypt, Params};
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const VAULT_FILENAME: &str = "credentials.vault";
 const KEY_BYTES: usize = 32;
@@ -91,6 +91,25 @@ pub struct TwilioEntry {
     pub from_number: String,
 }
 
+/// DocuSign JWT-Grant credentials (spec §18 / §24).
+///
+/// `jwt_private_key` is the most sensitive value the vault holds — an RSA PEM
+/// that can mint access tokens impersonating the account user. `Zeroize` +
+/// `ZeroizeOnDrop` wipe every field from memory when the struct is dropped, so a
+/// resolved copy handed to `docusign.rs` leaves nothing behind after the request
+/// completes. Like every other entry, it never crosses IPC — only
+/// `DocuSignPublic` does.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct DocuSignSecret {
+    pub integration_key: String,
+    pub user_id: String,
+    pub account_id: String,
+    pub base_uri: String, // https://demo.docusign.net for sandbox
+    pub jwt_private_key: String, // RSA PEM — most sensitive field
+    pub environment: String, // "sandbox" | "production"
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct VaultData {
     #[serde(default)]
@@ -99,6 +118,8 @@ struct VaultData {
     smtp: Option<SmtpEntry>,
     #[serde(default)]
     twilio: Option<TwilioEntry>,
+    #[serde(default)]
+    docusign: Option<DocuSignSecret>,
 }
 
 // ============================================================================
@@ -129,6 +150,18 @@ pub struct TwilioPublic {
     account_sid: String,
     from_number: String,
     has_auth_token: bool,
+}
+
+/// Secret-free DocuSign view. Deliberately narrower than the other `*Public`
+/// shapes: neither the integration key nor the user ID is echoed back, and the
+/// account ID is reduced to its last four characters — just enough for an
+/// operator to confirm *which* DocuSign account is wired up.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocuSignPublic {
+    pub has_credentials: bool,
+    pub environment: String,
+    pub account_id_hint: String, // last 4 chars of account_id only
 }
 
 #[derive(Debug, Serialize)]
@@ -170,6 +203,22 @@ pub struct TwilioInput {
     from_number: String,
     #[serde(default)]
     auth_token: Option<String>,
+}
+
+/// DocuSign setter payload. Every field is a plain `String` (the whole entry is
+/// secret-bearing), but the two secrets follow the same edit semantics as the
+/// other groups: submitting them blank keeps whatever is already stored, so an
+/// operator can flip Sandbox → Production without re-pasting a 1,700-character
+/// RSA PEM.
+#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct DocuSignInput {
+    integration_key: String,
+    user_id: String,
+    account_id: String,
+    base_uri: String,
+    jwt_private_key: String,
+    environment: String,
 }
 
 // ============================================================================
@@ -393,11 +442,76 @@ impl VaultState {
         })
     }
 
+    fn set_docusign(&self, input: DocuSignInput) -> Result<(), VaultError> {
+        self.mutate(|data| {
+            let existing = data.docusign.as_ref();
+            // Blank secret on edit → keep the stored one (same rule as AI/SMTP).
+            let keep = |submitted: &str, current: Option<&String>| -> String {
+                if submitted.is_empty() {
+                    current.cloned().unwrap_or_default()
+                } else {
+                    submitted.to_string()
+                }
+            };
+            data.docusign = Some(DocuSignSecret {
+                integration_key: keep(
+                    input.integration_key.trim(),
+                    existing.map(|e| &e.integration_key),
+                ),
+                user_id: input.user_id.trim().to_string(),
+                account_id: input.account_id.trim().to_string(),
+                base_uri: input.base_uri.trim().trim_end_matches('/').to_string(),
+                // The PEM is *not* trimmed per-line — only outer whitespace —
+                // because its internal newlines are load-bearing for parsing.
+                jwt_private_key: keep(
+                    input.jwt_private_key.trim(),
+                    existing.map(|e| &e.jwt_private_key),
+                ),
+                environment: input.environment.trim().to_string(),
+            });
+        })
+    }
+
+    fn get_docusign_public(&self) -> Result<DocuSignPublic, VaultError> {
+        let guard = self.inner.lock().unwrap();
+        let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
+        Ok(match data.docusign.as_ref() {
+            Some(e) => DocuSignPublic {
+                // "Configured" means it could actually authenticate — metadata
+                // alone with no signing key is not a usable credential.
+                has_credentials: !e.integration_key.is_empty()
+                    && !e.jwt_private_key.is_empty()
+                    && !e.account_id.is_empty(),
+                environment: e.environment.clone(),
+                account_id_hint: last4(&e.account_id),
+            },
+            None => DocuSignPublic {
+                has_credentials: false,
+                environment: String::new(),
+                account_id_hint: String::new(),
+            },
+        })
+    }
+
+    fn has_docusign(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.data.docusign.as_ref())
+            .is_some_and(|e| {
+                !e.integration_key.is_empty()
+                    && !e.jwt_private_key.is_empty()
+                    && !e.account_id.is_empty()
+            })
+    }
+
     fn delete_group(&self, group: &str) -> Result<(), VaultError> {
         self.mutate(|data| match group {
             "ai" => data.ai = None,
             "smtp" => data.smtp = None,
             "twilio" => data.twilio = None,
+            "docusign" => data.docusign = None,
             _ => {}
         })
     }
@@ -434,6 +548,22 @@ impl VaultState {
     pub fn resolve_twilio(&self) -> Option<TwilioEntry> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.twilio.clone())
     }
+
+    /// DocuSign credentials for `docusign.rs`. The returned clone zeroizes
+    /// itself on drop, so the caller must not stash it beyond the request.
+    pub fn resolve_docusign(&self) -> Option<DocuSignSecret> {
+        self.inner.lock().unwrap().as_ref().and_then(|s| s.data.docusign.clone())
+    }
+}
+
+/// Last four characters of an identifier, for display hints. Short values are
+/// returned whole rather than padded — there is nothing to hide in "42".
+fn last4(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= 4 {
+        return s.to_string();
+    }
+    chars[chars.len() - 4..].iter().collect()
 }
 
 // ============================================================================
@@ -542,6 +672,24 @@ pub fn vault_set_smtp(state: State<'_, VaultState>, input: SmtpInput) -> Result<
 #[tauri::command]
 pub fn vault_set_twilio(state: State<'_, VaultState>, input: TwilioInput) -> Result<(), String> {
     state.set_twilio(input).map_err(err)
+}
+
+#[tauri::command]
+pub fn vault_set_docusign(state: State<'_, VaultState>, input: DocuSignInput) -> Result<(), String> {
+    state.set_docusign(input).map_err(err)
+}
+
+#[tauri::command]
+pub fn vault_get_docusign_public(state: State<'_, VaultState>) -> Result<DocuSignPublic, String> {
+    state.get_docusign_public().map_err(err)
+}
+
+/// Presence flag for the frontend provider resolver. A locked vault reports
+/// `false` rather than erroring — "not available right now" is the honest
+/// answer, and the caller falls back to the mock provider.
+#[tauri::command]
+pub fn vault_has_docusign(state: State<'_, VaultState>) -> bool {
+    state.has_docusign()
 }
 
 #[tauri::command]
@@ -661,6 +809,77 @@ mod tests {
         .unwrap();
         assert_eq!(v.resolve_smtp().unwrap().password, "p");
         assert_eq!(v.resolve_smtp().unwrap().host, "smtp2.example.com");
+    }
+
+    fn ds_input(env: &str, key: &str) -> DocuSignInput {
+        DocuSignInput {
+            integration_key: "ik-abc".into(),
+            user_id: "user-123".into(),
+            account_id: "acct-987654".into(),
+            base_uri: "https://demo.docusign.net/".into(),
+            jwt_private_key: key.into(),
+            environment: env.into(),
+        }
+    }
+
+    #[test]
+    fn docusign_roundtrip_hides_secrets() {
+        let v = temp_state();
+        v.unlock("pw");
+        assert!(!v.has_docusign());
+
+        v.set_docusign(ds_input("sandbox", "-----BEGIN RSA PRIVATE KEY-----\nMII\n-----END RSA PRIVATE KEY-----"))
+            .unwrap();
+        assert!(v.has_docusign());
+
+        // Public shape carries no key material and only hints the account.
+        let p = v.get_docusign_public().unwrap();
+        assert!(p.has_credentials);
+        assert_eq!(p.environment, "sandbox");
+        assert_eq!(p.account_id_hint, "7654");
+
+        // Trailing slash stripped so base_uri joins cleanly with /restapi/...
+        let s = v.resolve_docusign().unwrap();
+        assert_eq!(s.base_uri, "https://demo.docusign.net");
+        assert!(s.jwt_private_key.contains("BEGIN RSA PRIVATE KEY"));
+
+        // Survives a lock/unlock cycle.
+        v.lock();
+        assert!(!v.has_docusign());
+        assert!(v.unlock("pw").ok);
+        assert!(v.resolve_docusign().unwrap().jwt_private_key.contains("MII"));
+    }
+
+    #[test]
+    fn docusign_blank_key_on_edit_keeps_existing() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_docusign(ds_input("sandbox", "PEM-ORIGINAL")).unwrap();
+        // Flip environment without re-pasting the PEM.
+        v.set_docusign(ds_input("production", "")).unwrap();
+        let s = v.resolve_docusign().unwrap();
+        assert_eq!(s.jwt_private_key, "PEM-ORIGINAL");
+        assert_eq!(s.environment, "production");
+    }
+
+    #[test]
+    fn docusign_metadata_without_key_is_not_configured() {
+        let v = temp_state();
+        v.unlock("pw");
+        // A fresh entry whose PEM was never supplied cannot authenticate.
+        v.set_docusign(ds_input("sandbox", "")).unwrap();
+        assert!(!v.has_docusign());
+        assert!(!v.get_docusign_public().unwrap().has_credentials);
+    }
+
+    #[test]
+    fn docusign_delete_clears_entry() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_docusign(ds_input("sandbox", "PEM")).unwrap();
+        v.delete_group("docusign").unwrap();
+        assert!(!v.has_docusign());
+        assert!(v.resolve_docusign().is_none());
     }
 
     #[test]

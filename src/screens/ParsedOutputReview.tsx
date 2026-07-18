@@ -30,7 +30,7 @@ export function ParsedOutputReview() {
     acknowledged,
     markScrollCompleted,
     setAcknowledged,
-    proceedToExecution,
+    navigateToConditions,
     error,
     busy,
     assetClass,
@@ -189,9 +189,9 @@ export function ParsedOutputReview() {
             <button
               className="btn btn-primary btn-lg"
               disabled={!scrollCompleted || !acknowledged || busy || cannaBlocked}
-              onClick={() => proceedToExecution()}
+              onClick={() => navigateToConditions()}
             >
-              {busy ? "Verifying…" : "Proceed to Execution"}
+              {busy ? "Verifying…" : "Proceed to Conditions"}
             </button>
           </div>
         </div>

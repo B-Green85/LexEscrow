@@ -6,6 +6,7 @@ import { WorkflowRail } from "./components/WorkflowRail";
 import { DocumentLoad } from "./screens/DocumentLoad";
 import { Processing } from "./screens/Processing";
 import { ParsedOutputReview } from "./screens/ParsedOutputReview";
+import { ConditionDefinition } from "./screens/ConditionDefinition";
 import { ExecutionConfirmation } from "./screens/ExecutionConfirmation";
 import { LexGuardEscalation } from "./screens/LexGuardEscalation";
 import { Configuration } from "./screens/Configuration";
@@ -16,7 +17,8 @@ const STAGE_INDEX: Record<string, number> = {
   processing: 1,
   review: 2,
   escalation: 2,
-  execution: 3,
+  conditions: 3,
+  execution: 4,
 };
 
 function BatchIcon() {
@@ -86,6 +88,7 @@ function App() {
         {screen === "processing" && <Processing />}
         {screen === "review" && <ParsedOutputReview />}
         {screen === "escalation" && <LexGuardEscalation />}
+        {screen === "conditions" && <ConditionDefinition />}
         {screen === "execution" && <ExecutionConfirmation />}
         {screen === "config" && <Configuration />}
         {screen === "batch" && <BatchProcessing />}

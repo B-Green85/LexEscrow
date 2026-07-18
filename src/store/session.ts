@@ -19,6 +19,9 @@ import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
 import { runCannaVerify as runCannaVerifyAdapters } from "../lib/cannaverify";
 import type { CannaVerifyConditions } from "../lib/cannaverify/types";
+import { resolveESignProvider, isTerminal } from "../lib/esign";
+import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
+import { normalizeName } from "../lexguard/anchor-matcher";
 
 export type { LexGuardCorrection, Escalation } from "../lexguard/pipeline";
 
@@ -26,6 +29,7 @@ export type Screen =
   | "load"
   | "processing"
   | "review"
+  | "conditions"
   | "execution"
   | "escalation"
   | "config"
@@ -125,6 +129,55 @@ function initialSteps(): ProcessingStep[] {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Spec §16 — human-timescale events make a 30s poll indistinguishable from real-time. */
+export const ESIGN_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * Whole-word containment: does `needle` appear in `haystack` as a contiguous
+ * run of complete words?
+ *
+ * Deliberately *not* a plain substring test. This gates condition fulfillment,
+ * so a false positive is the dangerous direction — raw `includes` would let a
+ * signer named "Cal" match the anchor "California", or "Jo" match "Jones".
+ * Word-boundary matching still accepts the case that matters: "Jane Anderson"
+ * against the anchor "Jane Anderson LLC".
+ */
+function containsAsWords(haystack: string, needle: string): boolean {
+  if (haystack === needle) return true;
+  const h = haystack.split(" ");
+  const n = needle.split(" ");
+  if (n.length === 0 || n.length > h.length) return false;
+  for (let i = 0; i + n.length <= h.length; i++) {
+    if (n.every((word, j) => h[i + j] === word)) return true;
+  }
+  return false;
+}
+
+/**
+ * AnchorMatcher for signer identities (spec §23).
+ *
+ * Every signer on the envelope must be traceable to a trust anchor collected at
+ * Stage 1 — an unrecognized signer means the completed document was signed by
+ * someone the escrow officer never named, which must not auto-fulfill a
+ * condition. Matching is case- and whitespace-insensitive and word-bounded.
+ */
+export function signersMatchAnchors(
+  signers: ESignSigner[],
+  anchors: TrustAnchors,
+  rawAnchors: Record<string, string>,
+): boolean {
+  const candidates = [...Object.values(anchors), ...Object.values(rawAnchors)]
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map(normalizeName);
+  if (candidates.length === 0 || signers.length === 0) return false;
+
+  return signers.every((s) => {
+    const name = normalizeName(s.name);
+    if (!name) return false;
+    return candidates.some((c) => containsAsWords(c, name) || containsAsWords(name, c));
+  });
+}
+
 // A deterministic UUID-ish id without Math.random dependence at module load.
 function newId(prefix: string): string {
   const rand = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${performance.now()}`;
@@ -166,6 +219,10 @@ interface SessionState {
   busy: boolean;
   cannaVerifyConditions: CannaVerifyConditions | null;
   cannaVerifyRunning: boolean;
+  eSignEnvelopes: ESignEnvelope[];
+  eSignPolling: boolean;
+  /** Interval handle, held so `reset()` and terminal states can clear it. */
+  eSignPollTimer: ReturnType<typeof setInterval> | null;
 
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
@@ -185,6 +242,17 @@ interface SessionState {
   submitManualEntry: (fields: ManualEntryFields) => Promise<void>;
   markScrollCompleted: () => void;
   setAcknowledged: (v: boolean) => Promise<void>;
+  navigateToConditions: () => void;
+  sendForSignature: (
+    documentLabel: string,
+    signers: ESignSigner[],
+    subject: string,
+    message: string,
+  ) => Promise<void>;
+  startESignPolling: () => void;
+  stopESignPolling: () => void;
+  pollAllEnvelopes: () => Promise<void>;
+  handleESignCompletion: (envelopeId: string) => Promise<void>;
   proceedToExecution: () => Promise<void>;
   resolveEscalation: (choice: "review" | "ai" | "lexguard") => Promise<void>;
   buildAuditReport: () => Promise<string>;
@@ -306,6 +374,9 @@ export const useSession = create<SessionState>((set, get) => {
     busy: false,
     cannaVerifyConditions: null,
     cannaVerifyRunning: false,
+    eSignEnvelopes: [],
+    eSignPolling: false,
+    eSignPollTimer: null,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -342,7 +413,10 @@ export const useSession = create<SessionState>((set, get) => {
         screen: h.escalation ? "escalation" : "review",
       }),
 
-    reset: () =>
+    reset: () => {
+      // A dangling interval would keep polling a session that no longer exists.
+      const timer = get().eSignPollTimer;
+      if (timer) clearInterval(timer);
       set({
         screen: "load",
         providerLabel: null,
@@ -371,7 +445,11 @@ export const useSession = create<SessionState>((set, get) => {
         busy: false,
         cannaVerifyConditions: null,
         cannaVerifyRunning: false,
-      }),
+        eSignEnvelopes: [],
+        eSignPolling: false,
+        eSignPollTimer: null,
+      });
+    },
 
     // DocumentLoad → Processing screen, showing the entry-mode toggle before
     // anything runs.
@@ -608,6 +686,208 @@ export const useSession = create<SessionState>((set, get) => {
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         set({ cannaVerifyRunning: false, error: `CannaVerify failed: ${message}` });
+      }
+    },
+
+    navigateToConditions: () => set({ screen: "conditions" }),
+
+    // ── eSign lifecycle (spec §22 Stage 4, §23) ─────────────────────────────
+
+    /**
+     * Send the loaded document for signature. Persists the envelope, records
+     * `esign_sent` on the audit chain, and starts the poll loop.
+     */
+    sendForSignature: async (documentLabel, signers, subject, message) => {
+      const { file, sessionId } = get();
+      if (!sessionId) {
+        set({ error: "No active session — load a document first." });
+        return;
+      }
+      if (!file) {
+        set({ error: "No document loaded to send for signature." });
+        return;
+      }
+      if (signers.length === 0) {
+        set({ error: "Add at least one signer before sending for signature." });
+        return;
+      }
+
+      set({ busy: true, error: null });
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const provider = await resolveESignProvider();
+        const envelopeId = await provider.sendEnvelope(
+          sessionId,
+          bytes,
+          documentLabel,
+          signers,
+          subject,
+          message,
+        );
+
+        await backend.saveDocusignEnvelope({
+          envelopeId,
+          sessionId,
+          documentLabel,
+          signersJson: JSON.stringify(signers),
+        });
+
+        const envelope: ESignEnvelope = {
+          envelopeId,
+          sessionId,
+          documentLabel,
+          signers,
+          status: "sent",
+          sentAt: new Date().toISOString(),
+        };
+        set((s) => ({ eSignEnvelopes: [...s.eSignEnvelopes, envelope], busy: false }));
+
+        await log("esign_sent", {
+          envelope_id: envelopeId,
+          provider: provider.providerName(),
+          document_label: documentLabel,
+          signers: signers.map((sg) => ({ name: sg.name, email: sg.email, role: sg.role })),
+        });
+
+        get().startESignPolling();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Send for signature failed: ${message}`, busy: false });
+      }
+    },
+
+    /** Begin (or continue) the 30-second poll. Idempotent. */
+    startESignPolling: () => {
+      if (get().eSignPollTimer) return;
+      const timer = setInterval(() => {
+        void get().pollAllEnvelopes();
+      }, ESIGN_POLL_INTERVAL_MS);
+      set({ eSignPolling: true, eSignPollTimer: timer });
+    },
+
+    stopESignPolling: () => {
+      const timer = get().eSignPollTimer;
+      if (timer) clearInterval(timer);
+      set({ eSignPolling: false, eSignPollTimer: null });
+    },
+
+    /**
+     * One poll round across every non-terminal envelope. Status changes are
+     * audited; a transition to `completed` runs the completion pipeline. When
+     * nothing is left in flight the interval stops — there is nothing to watch.
+     */
+    pollAllEnvelopes: async () => {
+      const pending = get().eSignEnvelopes.filter((e) => !isTerminal(e.status));
+      if (pending.length === 0) {
+        get().stopESignPolling();
+        return;
+      }
+
+      const provider = await resolveESignProvider();
+      for (const envelope of pending) {
+        let status: ESignStatus;
+        try {
+          status = await provider.pollStatus(envelope.envelopeId);
+        } catch (e) {
+          // A transient poll failure is not a status change — keep watching.
+          console.error("esign poll failed", envelope.envelopeId, e);
+          continue;
+        }
+        if (status === envelope.status) continue;
+
+        set((s) => ({
+          eSignEnvelopes: s.eSignEnvelopes.map((e) =>
+            e.envelopeId === envelope.envelopeId ? { ...e, status } : e,
+          ),
+        }));
+        await log("esign_status_update", {
+          envelope_id: envelope.envelopeId,
+          from: envelope.status,
+          to: status,
+        });
+
+        if (status === "completed") {
+          // Persists COMPLETED itself, along with the certificate hash and tx.
+          await get().handleESignCompletion(envelope.envelopeId);
+        } else {
+          await backend.updateDocusignEnvelope({
+            envelopeId: envelope.envelopeId,
+            status: status.toUpperCase(),
+          });
+        }
+      }
+
+      if (get().eSignEnvelopes.every((e) => isTerminal(e.status))) {
+        get().stopESignPolling();
+      }
+    },
+
+    /**
+     * Completion pipeline (spec §23). The certificate of completion is hashed
+     * by ArtifactGuard, that hash is registered on-chain by AnchorReceipt, and
+     * AnchorMatcher checks the signer identities against the Stage 1 trust
+     * anchors. A failed anchor match does **not** block the record — it is
+     * persisted as `anchorMatch: false` and surfaced for human review, which is
+     * the spec's escalation posture.
+     */
+    handleESignCompletion: async (envelopeId) => {
+      const { eSignEnvelopes, anchors, rawAnchors } = get();
+      const envelope = eSignEnvelopes.find((e) => e.envelopeId === envelopeId);
+      if (!envelope) return;
+
+      try {
+        const provider = await resolveESignProvider();
+        const certificate = await provider.getCertificate(envelopeId);
+        const certificateHash = await backend.hashBytes(
+          certificate,
+          `esign-certificate-${envelopeId}.pdf`,
+        );
+
+        // AnchorReceipt on-chain registration — mocked in this build, real CRE
+        // Functions call in V2 (same stand-in as CannaVerify's tx hashes).
+        const onChainTx = `0xanchor-esign-${envelopeId.slice(-8)}`;
+        const anchorMatch = signersMatchAnchors(envelope.signers, anchors, rawAnchors);
+        const completedAt = new Date().toISOString();
+
+        set((s) => ({
+          eSignEnvelopes: s.eSignEnvelopes.map((e) =>
+            e.envelopeId === envelopeId
+              ? { ...e, status: "completed", certificateHash, onChainTx, anchorMatch, completedAt }
+              : e,
+          ),
+        }));
+
+        await backend.updateDocusignEnvelope({
+          envelopeId,
+          status: "COMPLETED",
+          completedAt,
+          certificateHash,
+          onChainTx,
+          anchorMatch: anchorMatch ? 1 : 0,
+        });
+
+        await log("esign_completed", {
+          envelope_id: envelopeId,
+          certificate_hash: certificateHash,
+          on_chain_tx: onChainTx,
+          anchor_match: anchorMatch,
+          signers: envelope.signers.map((s) => s.name),
+        });
+
+        // Condition engine: the signature condition is fulfilled only when every
+        // envelope has completed *and* every anchor match passed.
+        const all = get().eSignEnvelopes;
+        const fulfilled =
+          all.length > 0 && all.every((e) => e.status === "completed" && e.anchorMatch === true);
+        await log("esign_conditions_evaluated", {
+          envelopes: all.length,
+          completed: all.filter((e) => e.status === "completed").length,
+          signature_condition_fulfilled: fulfilled,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Signature completion pipeline failed: ${message}` });
+        await log("esign_completion_failed", { envelope_id: envelopeId, error: message });
       }
     },
 
