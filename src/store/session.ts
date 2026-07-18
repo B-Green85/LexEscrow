@@ -683,9 +683,21 @@ export const useSession = create<SessionState>((set, get) => {
           });
           setStep("anchor", "done");
         } catch (e) {
+          // The commonest cause is a locked vault — the seal key is per-install
+          // and lives there, so a locked vault means this install cannot
+          // currently attest anything. Surface the backend's reason on the step
+          // itself rather than the fatal-error banner: processing genuinely
+          // continues, and the officer needs to know *what to do*, not just
+          // that a light went red.
           const message = e instanceof Error ? e.message : String(e);
-          set({ anchorReceiptIssuing: false });
-          setStep("anchor", "error");
+          set((s) => ({
+            anchorReceiptIssuing: false,
+            steps: s.steps.map((step) =>
+              step.key === "anchor"
+                ? { ...step, status: "error", label: `Registration unavailable — ${message}` }
+                : step,
+            ),
+          }));
           await log("anchor_receipt_failed", { error: message });
         }
 

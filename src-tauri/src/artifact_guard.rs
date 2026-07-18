@@ -273,40 +273,16 @@ pub fn normalize_text(raw: String) -> String {
 
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
-use std::sync::OnceLock;
+
+use crate::vault::VaultState;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// V1 application seal secret.
-///
-/// Deliberately *stable across restarts*, not per-process-random: spec §8's
-/// registry claim is "was this exact document version ever registered, and
-/// when" — a provenance claim across time. A key regenerated each launch would
-/// make every seal issued before the last restart unreproducible, which is
-/// exactly the cross-session lookup the layer exists to provide.
-///
-/// V2 sources this from the AES-256-GCM credential vault (`vault.rs`) so the
-/// seal key is per-install and password-gated rather than compiled in. Until
-/// then the seal is an integrity primitive, not a secrecy one — it binds a
-/// fingerprint to *a LexEscrow build*, and the on-chain registration (which is
-/// public and decentralized) carries the stronger trust claim.
-const APP_SEAL_SECRET: &[u8] = b"lexescrow.anchor-receipt.seal.v1";
-
-/// Domain separator — keeps this key distinct from any other HMAC LexEscrow
-/// might later derive from the same secret.
-const SEAL_KEY_DOMAIN: &[u8] = b"lexescrow/anchor-receipt/seal/v1\x1f";
-
-/// Derived once per process; the derivation itself is deterministic.
-static SEAL_KEY: OnceLock<[u8; 32]> = OnceLock::new();
-
-fn seal_key() -> &'static [u8; 32] {
-    SEAL_KEY.get_or_init(|| {
-        let mut hasher = Sha256::new();
-        hasher.update(SEAL_KEY_DOMAIN);
-        hasher.update(APP_SEAL_SECRET);
-        hasher.finalize().into()
-    })
-}
+/// Message shown when sealing is attempted against a locked vault. Phrased as
+/// an action the officer can take, because that is the only thing standing
+/// between them and a registered document.
+pub const SEAL_KEY_UNAVAILABLE: &str =
+    "Vault is locked — unlock it in Configuration to seal and register documents.";
 
 /// The exact bytes the seal covers: `"{hash}|{size}"`.
 ///
@@ -319,10 +295,16 @@ pub fn seal_material(hash: &str, size: u64) -> String {
 
 /// HMAC-SHA256 over the canonical material, base64url-encoded without padding
 /// (matching the receipt format in spec §8, which shows an unpadded seal).
-pub fn compute_seal(hash: &str, size: u64) -> String {
+///
+/// The key is the per-install secret minted into the credential vault on first
+/// unlock (`vault::resolve_seal_key`). Per-install rather than compiled in, so
+/// a seal identifies *this* LexEscrow installation as the attesting party;
+/// stable across restarts, because spec §8's registry claim is provenance
+/// across time and a rotating key would make last month's seal unreproducible.
+pub fn compute_seal(key: &[u8; 32], hash: &str, size: u64) -> String {
     // `new_from_slice` only errors for key lengths HMAC cannot accept; a
     // 32-byte key is always valid, so this cannot fail in practice.
-    let mut mac = HmacSha256::new_from_slice(seal_key()).expect("HMAC accepts a 32-byte key");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a 32-byte key");
     mac.update(seal_material(hash, size).as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
@@ -333,9 +315,15 @@ pub fn compute_seal(hash: &str, size: u64) -> String {
 /// letting a seal be issued by a backend whose integrity baseline has already
 /// failed — sealing a fingerprint is an attestation, and attesting from a
 /// broken guard is precisely what must not happen.
+///
+/// A locked vault is an error, not a fallback. Sealing under some substitute
+/// key would emit seals that fail to match the ones this install produces when
+/// unlocked, which is worse than no seal at all: it turns a visible "not
+/// registered" into an invisible "registered wrong".
 #[tauri::command]
 pub async fn compute_hmac_seal(
     state: tauri::State<'_, ArtifactGuardState>,
+    vault: tauri::State<'_, VaultState>,
     hash: String,
     size: u64,
 ) -> Result<String, String> {
@@ -346,7 +334,10 @@ pub async fn compute_hmac_seal(
             .lock()
             .map_err(|e| format!("integrity registry unavailable: {e}"))?;
     }
-    Ok(compute_seal(&hash, size))
+    let key = vault
+        .resolve_seal_key()
+        .ok_or_else(|| SEAL_KEY_UNAVAILABLE.to_string())?;
+    Ok(compute_seal(&key, &hash, size))
 }
 
 // ============================================================================
@@ -431,6 +422,9 @@ mod tests {
 
     // ── AnchorReceipt seal (spec §8) ────────────────────────────────────────
 
+    const KEY_A: [u8; 32] = [11u8; 32];
+    const KEY_B: [u8; 32] = [22u8; 32];
+
     #[test]
     fn seal_material_is_the_canonical_hash_pipe_size() {
         assert_eq!(seal_material("sha256:abc", 1024), "sha256:abc|1024");
@@ -439,13 +433,13 @@ mod tests {
     #[test]
     fn seal_is_deterministic_across_calls() {
         let h = hash_artifact(b"retainer agreement");
-        assert_eq!(compute_seal(&h, 42), compute_seal(&h, 42));
+        assert_eq!(compute_seal(&KEY_A, &h, 42), compute_seal(&KEY_A, &h, 42));
     }
 
     #[test]
     fn seal_changes_when_the_hash_changes() {
-        let a = compute_seal(&hash_artifact(b"$3,200.00"), 9);
-        let b = compute_seal(&hash_artifact(b"$4,200.00"), 9);
+        let a = compute_seal(&KEY_A, &hash_artifact(b"$3,200.00"), 9);
+        let b = compute_seal(&KEY_A, &hash_artifact(b"$4,200.00"), 9);
         assert_ne!(a, b);
     }
 
@@ -453,12 +447,20 @@ mod tests {
     fn seal_binds_size_not_just_hash() {
         // The whole point of sealing size alongside the digest.
         let h = hash_artifact(b"same bytes");
-        assert_ne!(compute_seal(&h, 100), compute_seal(&h, 101));
+        assert_ne!(compute_seal(&KEY_A, &h, 100), compute_seal(&KEY_A, &h, 101));
+    }
+
+    #[test]
+    fn seal_is_per_install_two_keys_never_agree() {
+        // The property that makes the seal identify *this* installation: the
+        // same document sealed under a different vault key must not match.
+        let h = hash_artifact(b"identical document bytes");
+        assert_ne!(compute_seal(&KEY_A, &h, 64), compute_seal(&KEY_B, &h, 64));
     }
 
     #[test]
     fn seal_is_unpadded_base64url() {
-        let seal = compute_seal(&hash_artifact(b"doc"), 7);
+        let seal = compute_seal(&KEY_A, &hash_artifact(b"doc"), 7);
         // 32 HMAC bytes → 43 base64 chars, no '=' padding.
         assert_eq!(seal.len(), 43);
         assert!(!seal.contains('='));
@@ -477,6 +479,10 @@ mod tests {
         plain.update(seal_material(&h, 5).as_bytes());
         let unkeyed =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(plain.finalize());
-        assert_ne!(compute_seal(&h, 5), unkeyed);
+        assert_ne!(compute_seal(&KEY_A, &h, 5), unkeyed);
     }
+
+    // The vault seam — seal key resolution against a locked vs unlocked vault
+    // — is tested in `vault.rs`, where the private lock/unlock methods are
+    // reachable without widening the vault's public API for a test.
 }

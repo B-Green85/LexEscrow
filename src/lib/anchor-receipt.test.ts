@@ -193,6 +193,18 @@ describe("issueReceipt", () => {
     const [a, b] = [await issue(), await issue()];
     expect(a.receiptId).not.toBe(b.receiptId);
   });
+
+  it("propagates a locked-vault seal failure instead of issuing an unsealed receipt", async () => {
+    // The seal key is per-install and lives in the credential vault, so a
+    // locked vault means this install cannot attest. Issuing a receipt anyway
+    // — sealed with anything else, or not sealed at all — would turn a visible
+    // "not registered" into an invisible "registered wrong".
+    vi.mocked(backend.computeHmacSeal).mockRejectedValueOnce(
+      new Error("Vault is locked — unlock it in Configuration to seal and register documents."),
+    );
+    await expect(issue()).rejects.toThrow(/vault is locked/i);
+    expect(backend.saveRegisteredFingerprint).not.toHaveBeenCalled();
+  });
 });
 
 describe("computeHmacSeal / registerOnChain", () => {

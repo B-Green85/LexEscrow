@@ -386,6 +386,11 @@ export async function saveRegisteredFingerprint(args: RegisteredFingerprintArgs)
  * explicitly-labelled `DEMO-HMAC-` stand-in rather than a JS HMAC: a demo build
  * has no seal key to keep, and a real-looking seal computed in the browser
  * would misrepresent what was actually attested.
+ *
+ * Under Tauri this **rejects when the credential vault is locked**: the seal
+ * key is per-install and stored in the vault, so a locked vault means this
+ * install cannot attest anything right now. Callers treat that as a failed
+ * registration step, never as a reason to fall back to a weaker key.
  */
 export async function computeHmacSeal(hash: string, size: number): Promise<string> {
   if (isTauri()) return invoke<string>("compute_hmac_seal", { hash, size });
