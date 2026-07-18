@@ -49,6 +49,8 @@ export interface NewSession {
   clientId: string;
   attorneyBarNumber: string;
   documentHash: string;
+  assetClass?: string; // default 'legal'
+  batchId?: string; // default null
 }
 
 export interface PayloadCentsRow {
@@ -59,6 +61,43 @@ export interface PayloadCentsRow {
   unearnedBalanceCents: number;
   disputedHours: number;
   disputedAmountCents: number;
+  assetClass?: string; // default 'legal'
+  entryMode?: string; // default 'ai'
+  payloadJson?: string; // default null
+}
+
+export interface CannaverifyResultArgs {
+  verifyId: string;
+  sessionId: string;
+  checkType: string;
+  metrcFacilityId?: string | null;
+  stateLicenseNum?: string | null;
+  result: string; // 'PASS' | 'FAIL' | 'ERROR'
+  onChainTx?: string | null;
+}
+
+export interface DocusignEnvelopeArgs {
+  envelopeId: string;
+  sessionId: string;
+  documentLabel: string;
+  signersJson: string;
+  provider?: string; // default 'docusign'
+}
+
+export interface DocusignEnvelopeUpdateArgs {
+  envelopeId: string;
+  status: string; // SENT | DELIVERED | COMPLETED | DECLINED | VOIDED
+  completedAt?: string | null;
+  certificateHash?: string | null;
+  onChainTx?: string | null;
+  anchorMatch?: number | null; // 1 = pass, 0 = fail, null = pending
+}
+
+export interface RegisteredFingerprintArgs {
+  hmac: string;
+  sessionId: string;
+  assetClass: string;
+  onChainTx?: string | null;
 }
 
 // ── Environment detection ────────────────────────────────────────────────────
@@ -207,6 +246,32 @@ export async function setExecutionPath(sessionId: string, path: string): Promise
 
 export async function savePayload(payload: PayloadCentsRow): Promise<void> {
   if (isTauri()) return invoke<void>("save_payload", { payload });
+}
+
+/** Record a CannaVerify regulatory check result (cannabis asset class). */
+export async function saveCannaverifyResult(args: CannaverifyResultArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("save_cannaverify_result", { ...args });
+  // browser: nothing to persist
+}
+
+/** Persist a freshly-sent DocuSign envelope (status defaults to SENT). */
+export async function saveDocusignEnvelope(args: DocusignEnvelopeArgs): Promise<void> {
+  if (isTauri()) {
+    return invoke<void>("save_docusign_envelope", { provider: "docusign", ...args });
+  }
+  // browser: nothing to persist
+}
+
+/** Update an existing DocuSign envelope on a status change / completion. */
+export async function updateDocusignEnvelope(args: DocusignEnvelopeUpdateArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("update_docusign_envelope", { ...args });
+  // browser: nothing to persist
+}
+
+/** Register an AnchorReceipt HMAC fingerprint on-chain anchor for a session. */
+export async function saveRegisteredFingerprint(args: RegisteredFingerprintArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("save_registered_fingerprint", { ...args });
+  // browser: nothing to persist
 }
 
 export async function logEvent(

@@ -14,7 +14,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteQueryResult};
-use sqlx::SqlitePool;
+use sqlx::{ConnectOptions, Connection, SqlitePool};
 use tauri::State;
 use tokio::sync::Mutex;
 
@@ -33,6 +33,15 @@ pub enum DbError {
 // ============================================================================
 // Row / DTO types
 // ============================================================================
+
+// Serde defaults for the asset-class fields, so existing callers that omit them
+// over IPC keep the legacy Legal / AI behavior.
+fn default_legal() -> String {
+    "legal".to_string()
+}
+fn default_ai() -> String {
+    "ai".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +63,12 @@ pub struct NewSession {
     pub client_id: String,
     pub attorney_bar_number: String,
     pub document_hash: String,
+    /// Asset class (spec §4). Defaults to `legal` when omitted by the caller.
+    #[serde(default = "default_legal")]
+    pub asset_class: String,
+    /// Batch grouping id (null for single-document sessions).
+    #[serde(default)]
+    pub batch_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -61,6 +76,12 @@ pub struct NewSession {
 pub struct ParsedPayload {
     pub payload_id: String,
     pub session_id: String,
+    /// Asset class (spec §4). Defaults to `legal` when omitted by the caller.
+    #[serde(default = "default_legal")]
+    pub asset_class: String,
+    /// Entry mode — `ai` or `manual`. Defaults to `ai` when omitted.
+    #[serde(default = "default_ai")]
+    pub entry_mode: String,
     pub total_held_cents: i64,
     pub earned_fees_cents: i64,
     pub unearned_balance_cents: i64,
@@ -68,6 +89,9 @@ pub struct ParsedPayload {
     pub disputed_hours: f64,
     #[serde(default)]
     pub disputed_amount_cents: i64,
+    /// Full asset-class payload JSON (any class); null for legacy Legal rows.
+    #[serde(default)]
+    pub payload_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -103,9 +127,36 @@ pub struct Db {
 }
 
 impl Db {
-    /// Open (creating if needed) the SQLite database at `path`, enable WAL and
-    /// foreign keys, and run migrations.
+    /// Open (creating if needed) the SQLite database at `path`, run migrations,
+    /// and return a runtime pool with WAL and foreign keys enabled.
+    ///
+    /// Migration 0002 rebuilds the CHECK-constrained `release_sessions` and
+    /// `parsed_payloads` tables, which requires dropping `release_sessions`.
+    /// `cryptographic_audit_trail` holds a foreign key back to it that the
+    /// migration cannot alter, so the drop trips FK enforcement. Because sqlx
+    /// wraps every migration in a transaction, SQLite's `defer_foreign_keys`
+    /// cannot decrement the violation counter a DDL rebuild creates, and the
+    /// commit always fails. SQLite's documented remedy is to run schema changes
+    /// with foreign keys OFF. So: migrate on a dedicated single connection with
+    /// `foreign_keys = OFF`, close it, then open the runtime pool with
+    /// `foreign_keys = ON` (the existing behavior).
     pub async fn connect_and_migrate(path: &Path) -> Result<Self, DbError> {
+        // 1) Dedicated migration connection — foreign keys OFF.
+        let mut migration_conn = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(false)
+            .connect()
+            .await?;
+
+        // 2) Run migrations on that single connection.
+        sqlx::migrate!("./migrations").run(&mut migration_conn).await?;
+
+        // 3) Close the migration connection.
+        migration_conn.close().await?;
+
+        // 4) Runtime pool — foreign keys ON.
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
@@ -117,8 +168,7 @@ impl Db {
             .connect_with(options)
             .await?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
-
+        // 5) Return the pool as normal.
         Ok(Self {
             pool,
             append_lock: Mutex::new(()),
@@ -130,13 +180,16 @@ impl Db {
     pub async fn create_session(&self, s: &NewSession) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO release_sessions
-                (session_id, client_id, attorney_bar_number, document_hash, current_state)
-             VALUES (?, ?, ?, ?, 'LOADED')",
+                (session_id, client_id, attorney_bar_number, document_hash,
+                 asset_class, batch_id, current_state)
+             VALUES (?, ?, ?, ?, ?, ?, 'LOADED')",
         )
         .bind(&s.session_id)
         .bind(&s.client_id)
         .bind(&s.attorney_bar_number)
         .bind(&s.document_hash)
+        .bind(&s.asset_class)
+        .bind(&s.batch_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -178,23 +231,30 @@ impl Db {
     pub async fn save_payload(&self, p: &ParsedPayload) -> Result<(), DbError> {
         sqlx::query(
             "INSERT INTO parsed_payloads
-                (payload_id, session_id, total_held_cents, earned_fees_cents,
-                 unearned_balance_cents, disputed_hours, disputed_amount_cents)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+                (payload_id, session_id, asset_class, entry_mode, total_held_cents,
+                 earned_fees_cents, unearned_balance_cents, disputed_hours,
+                 disputed_amount_cents, payload_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(payload_id) DO UPDATE SET
+                asset_class            = excluded.asset_class,
+                entry_mode             = excluded.entry_mode,
                 total_held_cents       = excluded.total_held_cents,
                 earned_fees_cents      = excluded.earned_fees_cents,
                 unearned_balance_cents = excluded.unearned_balance_cents,
                 disputed_hours         = excluded.disputed_hours,
-                disputed_amount_cents  = excluded.disputed_amount_cents",
+                disputed_amount_cents  = excluded.disputed_amount_cents,
+                payload_json           = excluded.payload_json",
         )
         .bind(&p.payload_id)
         .bind(&p.session_id)
+        .bind(&p.asset_class)
+        .bind(&p.entry_mode)
         .bind(p.total_held_cents)
         .bind(p.earned_fees_cents)
         .bind(p.unearned_balance_cents)
         .bind(p.disputed_hours)
         .bind(p.disputed_amount_cents)
+        .bind(&p.payload_json)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -203,14 +263,125 @@ impl Db {
     #[allow(dead_code)] // read back by later phases; part of the persistence API
     pub async fn get_payload(&self, session_id: &str) -> Result<Option<ParsedPayload>, DbError> {
         let row = sqlx::query_as::<_, ParsedPayload>(
-            "SELECT payload_id, session_id, total_held_cents, earned_fees_cents,
-                    unearned_balance_cents, disputed_hours, disputed_amount_cents
+            "SELECT payload_id, session_id, asset_class,
+                    COALESCE(entry_mode, 'ai') AS entry_mode,
+                    total_held_cents, earned_fees_cents, unearned_balance_cents,
+                    disputed_hours, disputed_amount_cents, payload_json
              FROM parsed_payloads WHERE session_id = ? LIMIT 1",
         )
         .bind(session_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    // ---- CannaVerify results (spec §5/§13) -------------------------------
+
+    /// Record a CannaVerify regulatory check result for a session.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_cannaverify_result(
+        &self,
+        verify_id: &str,
+        session_id: &str,
+        check_type: &str,
+        metrc_facility_id: Option<&str>,
+        state_license_num: Option<&str>,
+        result: &str,
+        on_chain_tx: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO cannaverify_results
+                (verify_id, session_id, check_type, metrc_facility_id,
+                 state_license_num, result, on_chain_tx)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(verify_id)
+        .bind(session_id)
+        .bind(check_type)
+        .bind(metrc_facility_id)
+        .bind(state_license_num)
+        .bind(result)
+        .bind(on_chain_tx)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // ---- DocuSign envelopes (spec §21) -----------------------------------
+
+    /// Insert a freshly-sent DocuSign envelope (status defaults to `SENT`).
+    pub async fn save_docusign_envelope(
+        &self,
+        envelope_id: &str,
+        session_id: &str,
+        document_label: &str,
+        signers_json: &str,
+        provider: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO docusign_envelopes
+                (envelope_id, session_id, document_label, signers_json, status, provider)
+             VALUES (?, ?, ?, ?, 'SENT', ?)",
+        )
+        .bind(envelope_id)
+        .bind(session_id)
+        .bind(document_label)
+        .bind(signers_json)
+        .bind(provider)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update an existing envelope on a status change / completion.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_docusign_envelope(
+        &self,
+        envelope_id: &str,
+        status: &str,
+        completed_at: Option<&str>,
+        certificate_hash: Option<&str>,
+        on_chain_tx: Option<&str>,
+        anchor_match: Option<i64>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE docusign_envelopes
+                SET status = ?, completed_at = ?, certificate_hash = ?,
+                    on_chain_tx = ?, anchor_match = ?
+             WHERE envelope_id = ?",
+        )
+        .bind(status)
+        .bind(completed_at)
+        .bind(certificate_hash)
+        .bind(on_chain_tx)
+        .bind(anchor_match)
+        .bind(envelope_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // ---- AnchorReceipt registered fingerprints (spec §8/§13) -------------
+
+    /// Register an HMAC fingerprint on-chain anchor for a session.
+    pub async fn save_registered_fingerprint(
+        &self,
+        hmac: &str,
+        session_id: &str,
+        asset_class: &str,
+        on_chain_tx: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO registered_fingerprints (hmac, session_id, asset_class, on_chain_tx)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(hmac)
+        .bind(session_id)
+        .bind(asset_class)
+        .bind(on_chain_tx)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     // ---- audit trail -----------------------------------------------------
@@ -416,6 +587,85 @@ pub async fn save_payload(state: State<'_, Db>, payload: ParsedPayload) -> Resul
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn save_cannaverify_result(
+    state: State<'_, Db>,
+    verify_id: String,
+    session_id: String,
+    check_type: String,
+    metrc_facility_id: Option<String>,
+    state_license_num: Option<String>,
+    result: String,
+    on_chain_tx: Option<String>,
+) -> Result<(), String> {
+    state
+        .save_cannaverify_result(
+            &verify_id,
+            &session_id,
+            &check_type,
+            metrc_facility_id.as_deref(),
+            state_license_num.as_deref(),
+            &result,
+            on_chain_tx.as_deref(),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn save_docusign_envelope(
+    state: State<'_, Db>,
+    envelope_id: String,
+    session_id: String,
+    document_label: String,
+    signers_json: String,
+    provider: String,
+) -> Result<(), String> {
+    state
+        .save_docusign_envelope(&envelope_id, &session_id, &document_label, &signers_json, &provider)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_docusign_envelope(
+    state: State<'_, Db>,
+    envelope_id: String,
+    status: String,
+    completed_at: Option<String>,
+    certificate_hash: Option<String>,
+    on_chain_tx: Option<String>,
+    anchor_match: Option<i64>,
+) -> Result<(), String> {
+    state
+        .update_docusign_envelope(
+            &envelope_id,
+            &status,
+            completed_at.as_deref(),
+            certificate_hash.as_deref(),
+            on_chain_tx.as_deref(),
+            anchor_match,
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn save_registered_fingerprint(
+    state: State<'_, Db>,
+    hmac: String,
+    session_id: String,
+    asset_class: String,
+    on_chain_tx: Option<String>,
+) -> Result<(), String> {
+    state
+        .save_registered_fingerprint(&hmac, &session_id, &asset_class, on_chain_tx.as_deref())
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
 pub async fn log_event(
     state: State<'_, Db>,
     session_id: String,
@@ -465,6 +715,8 @@ mod tests {
             client_id: "client-001".into(),
             attorney_bar_number: "123456".into(),
             document_hash: "sha256:deadbeef".into(),
+            asset_class: "legal".into(),
+            batch_id: None,
         }
     }
 
@@ -490,11 +742,14 @@ mod tests {
         db.save_payload(&ParsedPayload {
             payload_id: "p2".into(),
             session_id: "s2".into(),
+            asset_class: "legal".into(),
+            entry_mode: "ai".into(),
             total_held_cents: 500_000,
             earned_fees_cents: 80_000,
             unearned_balance_cents: 420_000,
             disputed_hours: 0.0,
             disputed_amount_cents: 0,
+            payload_json: None,
         })
         .await
         .unwrap();

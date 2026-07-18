@@ -11,6 +11,17 @@ export interface RetainerSchema {
   fields: SchemaField[];
 }
 
+/**
+ * An asset-class extraction schema: the retainer field set (or an asset-class
+ * projection of it) tagged with the asset class `id`. Structurally a superset of
+ * `RetainerSchema`, so an `ExtractionSchema` is accepted anywhere a
+ * `RetainerSchema` is expected — e.g. `provider.parse()`. `schemaFor('legal')`
+ * returns the reference `RETAINER_SCHEMA`, keeping the Legal path unchanged.
+ */
+export interface ExtractionSchema extends RetainerSchema {
+  id?: string;
+}
+
 export const RETAINER_SCHEMA: RetainerSchema = {
   fields: [
     { name: "clientId", type: "string", description: "Client identifier / matter number" },

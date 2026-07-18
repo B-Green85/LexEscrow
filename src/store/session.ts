@@ -11,7 +11,8 @@
 import { create } from "zustand";
 import * as backend from "../lib/backend";
 import { resolveProvider, ProviderUnavailableError, type AIParserProvider } from "../lib/ai/providers";
-import { RETAINER_SCHEMA } from "../lib/ai/schema";
+import { schemaFor } from "../lib/ai/assetSchemas";
+import { type AssetClass } from "../lib/assetClasses";
 import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from "../lexguard/pipeline";
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import { primeVDB, type VDBStore } from "../lexguard/vdb";
@@ -136,6 +137,7 @@ interface SessionState {
   configHint: "locked" | "unconfigured" | null;
   entryMode: EntryMode;
   procPhase: ProcPhase;
+  assetClass: AssetClass;
   activeBatchItemId: string | null;
   fromBatch: boolean;
   anchors: TrustAnchors;
@@ -159,6 +161,7 @@ interface SessionState {
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setFile: (file: File | null) => void;
   setEntryMode: (mode: EntryMode) => void;
+  setAssetClass: (cls: AssetClass) => void;
   openConfig: () => void;
   closeConfig: () => void;
   openBatch: () => void;
@@ -234,6 +237,8 @@ export const useSession = create<SessionState>((set, get) => {
       unearnedBalanceCents: Number(cents.unearnedBalanceCents),
       disputedHours: cents.disputedHours,
       disputedAmountCents: Number(cents.disputedAmountCents),
+      assetClass: get().assetClass,
+      entryMode,
     });
     setStep("lexguard", "done");
 
@@ -260,6 +265,7 @@ export const useSession = create<SessionState>((set, get) => {
     configHint: null,
     entryMode: "ai",
     procPhase: "choose",
+    assetClass: "legal",
     activeBatchItemId: null,
     fromBatch: false,
     anchors: emptyAnchors,
@@ -289,6 +295,7 @@ export const useSession = create<SessionState>((set, get) => {
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setFile: (file) => set({ file }),
     setEntryMode: (mode) => set({ entryMode: mode }),
+    setAssetClass: (cls) => set({ assetClass: cls }),
     openConfig: () =>
       set((s) => ({ prevScreen: s.screen === "config" ? s.prevScreen : s.screen, screen: "config" })),
     closeConfig: () => set((s) => ({ screen: s.prevScreen })),
@@ -326,6 +333,7 @@ export const useSession = create<SessionState>((set, get) => {
         configHint: null,
         entryMode: "ai",
         procPhase: "choose",
+        assetClass: "legal",
         activeBatchItemId: null,
         fromBatch: false,
         anchors: emptyAnchors,
@@ -373,7 +381,7 @@ export const useSession = create<SessionState>((set, get) => {
     // Start button on the Processing screen. Hashes + verifies the attorney,
     // then either runs AI parsing or shows the manual-entry form.
     beginProcessing: async () => {
-      const { file, anchors, entryMode } = get();
+      const { file, anchors, entryMode, assetClass } = get();
       if (!file) {
         set({ error: "Please add a retainer document before continuing." });
         return;
@@ -399,6 +407,7 @@ export const useSession = create<SessionState>((set, get) => {
           clientId: "pending",
           attorneyBarNumber: anchors.attorneyBarNumber,
           documentHash: artifact.hash,
+          assetClass,
         });
         await log("document_loaded", { filename: artifact.filename, hash: artifact.hash, size: artifact.size });
         await log("trust_anchors_provided", {
@@ -461,7 +470,7 @@ export const useSession = create<SessionState>((set, get) => {
 
         let parsed: ParsedRetainerPayload;
         try {
-          parsed = await provider.parse(artifact.normalizedText, RETAINER_SCHEMA);
+          parsed = await provider.parse(artifact.normalizedText, schemaFor(assetClass));
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           setStep("ai", "error");

@@ -1,6 +1,26 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useSession } from "../store/session";
-import { SAMPLES, sampleToFile } from "../lib/samples";
+import { samplesForClass, sampleToFile } from "../lib/samples";
+import {
+  ASSET_CLASSES,
+  US_STATES,
+  anchorsComplete,
+  anchorsToTrustAnchors,
+  descriptorFor,
+  emptyAnchorsFor,
+  type AssetClass,
+} from "../lib/assetClasses";
+
+// Card order for the selector (spec §4 / §12 Document Load).
+const CARD_ORDER: AssetClass[] = [
+  "real_estate",
+  "legal",
+  "business",
+  "ip",
+  "art",
+  "natural_resources",
+  "cannabis_ind",
+];
 
 function bytesLabel(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -8,29 +28,147 @@ function bytesLabel(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Dark-theme <select>: the native control paints its value unreliably on dark
+ *  backgrounds, so its own text is transparent and an overlay span renders it. */
+function DarkSelect({
+  value,
+  options,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  options: string[];
+  placeholder?: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="relative">
+      <select
+        className="input appearance-none pr-9 text-transparent"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {placeholder !== undefined && (
+          <option value="" className="bg-[#1A2435] text-[#F8FAFC]">
+            {placeholder}
+          </option>
+        )}
+        {options.map((o) => (
+          <option key={o} value={o} className="bg-[#1A2435] text-[#F8FAFC]">
+            {o}
+          </option>
+        ))}
+      </select>
+      <span
+        className={`pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm ${
+          value ? "text-[#F8FAFC]" : "text-slate-500"
+        }`}
+      >
+        {value || placeholder || ""}
+      </span>
+      <svg
+        viewBox="0 0 20 20"
+        fill="currentColor"
+        aria-hidden
+        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+      >
+        <path
+          fillRule="evenodd"
+          d="M5.3 7.3a1 1 0 011.4 0L10 10.6l3.3-3.3a1 1 0 111.4 1.4l-4 4a1 1 0 01-1.4 0l-4-4a1 1 0 010-1.4z"
+          clipRule="evenodd"
+        />
+      </svg>
+    </div>
+  );
+}
+
 export function DocumentLoad() {
-  const { anchors, setAnchor, file, setFile, goToProcessing, error, busy } = useSession();
+  const { anchors, setAnchor, file, setFile, goToProcessing, error, busy, assetClass, setAssetClass } =
+    useSession();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const emailValid = /^\S+@\S+\.\S+$/.test(anchors.clientEmail.trim());
-  const canContinue =
-    !!file &&
-    anchors.attorneyBarNumber.trim().length > 0 &&
-    anchors.clientFullLegalName.trim().length > 0 &&
-    emailValid &&
-    !busy;
+  // Raw per-class anchor record. Legal seeds from the store so its values
+  // survive a remount exactly as before; other classes start empty. On every
+  // change the record is projected onto the pipeline's TrustAnchors in the
+  // store — for Legal that projection is the identity, so nothing changes.
+  const [raw, setRaw] = useState<Record<string, string>>(() => {
+    const empty = emptyAnchorsFor(assetClass);
+    if (assetClass === "legal") {
+      return {
+        ...empty,
+        attorneyBarNumber: anchors.attorneyBarNumber ?? "",
+        state: anchors.state || empty.state,
+        clientFullLegalName: anchors.clientFullLegalName ?? "",
+        clientEmail: anchors.clientEmail ?? "",
+        clientPhone: anchors.clientPhone ?? "",
+      };
+    }
+    return empty;
+  });
+
+  const descriptor = descriptorFor(assetClass);
+
+  const selectClass = (cls: AssetClass) => {
+    if (cls === assetClass) return;
+    const empty = emptyAnchorsFor(cls);
+    setAssetClass(cls);
+    setRaw(empty);
+    setAnchor(anchorsToTrustAnchors(cls, empty));
+  };
+
+  const setValue = (key: string, v: string) => {
+    const next = { ...raw, [key]: v };
+    setRaw(next);
+    setAnchor(anchorsToTrustAnchors(assetClass, next));
+  };
+
+  const canContinue = !!file && anchorsComplete(assetClass, raw) && !busy;
+  const samples = samplesForClass(assetClass);
 
   return (
     <div className="mx-auto w-full max-w-2xl">
-      <h1 className="text-xl font-bold tracking-tight text-slate-900">Load retainer documents</h1>
+      <h1 className="text-xl font-bold tracking-tight text-slate-900">Load documents</h1>
       <p className="mt-1 text-sm text-slate-500">
-        Provide the termination document and the trust anchors. Nothing is processed until these are
-        in place.
+        Choose the asset class, provide the document and its trust anchors. Nothing is processed until
+        these are in place.
       </p>
 
       <div className="card mt-6 p-6">
+        {/* Asset class selector */}
+        <label className="label">Asset class</label>
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
+          {CARD_ORDER.map((cls) => {
+            const d = ASSET_CLASSES[cls];
+            const active = cls === assetClass;
+            return (
+              <button
+                key={cls}
+                type="button"
+                onClick={() => selectClass(cls)}
+                aria-pressed={active}
+                className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-3 text-center transition-colors ${
+                  active
+                    ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500/40"
+                    : "border-[#2D3A4A] bg-[#1A2435] hover:bg-[#22304A]"
+                }`}
+              >
+                <span className="text-2xl" aria-hidden>
+                  {d.icon}
+                </span>
+                <span
+                  className={`text-[11px] font-medium leading-tight ${
+                    active ? "text-white" : "text-slate-300"
+                  }`}
+                >
+                  {d.displayName}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* Upload */}
-        <label className="label">Retainer termination document</label>
+        <label className="label mt-6">{descriptor.uploadLabel}</label>
         <div
           onClick={() => inputRef.current?.click()}
           className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:border-brand-400 hover:bg-brand-50/40"
@@ -54,9 +192,9 @@ export function DocumentLoad() {
             </div>
           )}
         </div>
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <span className="text-xs text-slate-400">Or load a sample:</span>
-          {SAMPLES.map((s) => (
+          {samples.map((s) => (
             <button
               key={s.key}
               type="button"
@@ -68,80 +206,39 @@ export function DocumentLoad() {
           ))}
         </div>
 
-        {/* Trust anchors */}
+        {/* Trust anchors — rendered dynamically for the selected class */}
         <div className="mt-6 grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">Attorney bar number</label>
-            <input
-              className="input"
-              inputMode="numeric"
-              placeholder="123456"
-              value={anchors.attorneyBarNumber}
-              onChange={(e) => setAnchor({ attorneyBarNumber: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">State</label>
-            {/* The native <select> paints its selected value unreliably on dark
-                backgrounds, so its own text is transparent and the value is
-                shown by the overlay span below (always renders). */}
-            <div className="relative">
-              <select
-                className="input appearance-none pr-9 text-transparent"
-                value={anchors.state}
-                onChange={(e) => setAnchor({ state: e.target.value })}
-              >
-                <option value="California" className="bg-[#1A2435] text-[#F8FAFC]">
-                  California
-                </option>
-              </select>
-              <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-[#F8FAFC]">
-                {anchors.state}
-              </span>
-              <svg
-                viewBox="0 0 20 20"
-                fill="currentColor"
-                aria-hidden
-                className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M5.3 7.3a1 1 0 011.4 0L10 10.6l3.3-3.3a1 1 0 111.4 1.4l-4 4a1 1 0 01-1.4 0l-4-4a1 1 0 010-1.4z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </div>
-          </div>
-          <div className="col-span-2">
-            <label className="label">Client full legal name</label>
-            <input
-              className="input"
-              placeholder="Jane Anderson"
-              value={anchors.clientFullLegalName}
-              onChange={(e) => setAnchor({ clientFullLegalName: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Client email</label>
-            <input
-              className="input"
-              type="email"
-              placeholder="client@example.com"
-              value={anchors.clientEmail}
-              onChange={(e) => setAnchor({ clientEmail: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">
-              Client phone <span className="font-normal text-slate-400">(optional)</span>
-            </label>
-            <input
-              className="input"
-              placeholder="+1 555 010 0000"
-              value={anchors.clientPhone ?? ""}
-              onChange={(e) => setAnchor({ clientPhone: e.target.value })}
-            />
-          </div>
+          {descriptor.anchorFields.map((f) => {
+            const value = raw[f.key] ?? "";
+            const span = f.full ? "col-span-2" : "";
+            return (
+              <div key={f.key} className={span}>
+                <label className="label">
+                  {f.label}
+                  {!f.required && <span className="font-normal text-slate-400"> (optional)</span>}
+                </label>
+                {f.type === "select" ? (
+                  <DarkSelect value={value} options={f.options ?? []} onChange={(v) => setValue(f.key, v)} />
+                ) : f.type === "state" ? (
+                  <DarkSelect
+                    value={value}
+                    options={US_STATES}
+                    placeholder="Select state"
+                    onChange={(v) => setValue(f.key, v)}
+                  />
+                ) : (
+                  <input
+                    className="input"
+                    type={f.type === "email" ? "email" : "text"}
+                    inputMode={f.type === "money" ? "decimal" : f.key === "attorneyBarNumber" ? "numeric" : undefined}
+                    placeholder={f.placeholder ?? ""}
+                    value={value}
+                    onChange={(e) => setValue(f.key, e.target.value)}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {error && (
@@ -152,7 +249,9 @@ export function DocumentLoad() {
 
         <div className="mt-6 flex items-center justify-between">
           <p className="max-w-xs text-xs text-slate-400">
-            The bar number is verified against the California State Bar before any processing begins.
+            {assetClass === "legal"
+              ? "The bar number is verified against the California State Bar before any processing begins."
+              : "Trust anchors are matched against the parsed document by LexGuard before any funds move."}
           </p>
           <button className="btn btn-primary btn-lg" disabled={!canContinue} onClick={() => goToProcessing()}>
             Continue

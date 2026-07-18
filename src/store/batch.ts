@@ -12,20 +12,30 @@
 import { create } from "zustand";
 import * as backend from "../lib/backend";
 import { resolveProviderForBatch } from "../lib/ai/providers";
-import { RETAINER_SCHEMA } from "../lib/ai/schema";
+import { schemaFor } from "../lib/ai/assetSchemas";
+import { type AssetClass } from "../lib/assetClasses";
 import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from "../lexguard/pipeline";
 import { type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { formatUsd, toCents, toPayloadCents } from "../lexguard/payload-diff";
 import { useSession, type EntryMode, type ManualEntryFields } from "./session";
-import { SAMPLES, sampleToFile } from "../lib/samples";
+import { oneSamplePerClass, sampleToFile } from "../lib/samples";
 
-export type BatchStatus = "queued" | "parsing" | "parsed" | "flagged" | "settled" | "failed";
+export type BatchStatus =
+  | "queued"
+  | "parsing"
+  | "ready"
+  | "flagged"
+  | "in_escrow"
+  | "verifying"
+  | "settled"
+  | "failed";
 
 export interface BatchItem {
   id: string;
   fileName: string;
   file: File;
+  assetClass: AssetClass;
   entryMode: EntryMode;
   status: BatchStatus;
   sessionId: string | null;
@@ -50,6 +60,30 @@ function newId(prefix: string): string {
   return `${prefix}-${rand}`;
 }
 
+// Folder-name → asset class detection for Load Folder (spec §7). Matches the
+// sub-folder a file was loaded from (case-insensitive); defaults to 'legal'.
+const FOLDER_CLASS: Array<[RegExp, AssetClass]> = [
+  [/^cannabis$/, "cannabis_ind"],
+  [/^real[_ ]?estate$/, "real_estate"],
+  [/^(business|biz)$/, "business"],
+  [/^(ip|intellectual[_ ]?property)$/, "ip"],
+  [/^(art|collectibles)$/, "art"],
+  [/^(natural[_ ]?resources|resources|water|mineral)$/, "natural_resources"],
+  [/^(legal|retainer)$/, "legal"],
+];
+
+/** Detect an item's asset class from the sub-folder it was loaded from
+ *  (any directory segment of its webkitRelativePath). Defaults to 'legal'. */
+function folderClassOf(file: File): AssetClass {
+  const rel = (file as { webkitRelativePath?: string }).webkitRelativePath;
+  const segs = (rel && rel.length ? rel : file.name).split("/");
+  for (const seg of segs.slice(0, -1)) {
+    const dir = seg.trim().toLowerCase();
+    for (const [re, cls] of FOLDER_CLASS) if (re.test(dir)) return cls;
+  }
+  return "legal";
+}
+
 /** Run `worker` over `items` with at most `limit` running concurrently. */
 async function runPool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
   let cursor = 0;
@@ -62,11 +96,12 @@ async function runPool<T>(items: T[], limit: number, worker: (item: T) => Promis
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => runner()));
 }
 
-function newItem(file: File): BatchItem {
+function newItem(file: File, assetClass: AssetClass = "legal"): BatchItem {
   return {
     id: newId("bi"),
     fileName: file.name,
     file,
+    assetClass,
     entryMode: "ai",
     status: "queued",
     sessionId: null,
@@ -104,6 +139,7 @@ interface BatchState {
   loadFiles: (files: File[]) => void;
   loadSamples: () => void;
   setItemEntryMode: (id: string, mode: EntryMode) => void;
+  setItemAssetClass: (id: string, cls: AssetClass) => void;
   startProcessing: () => Promise<void>;
   submitManualItem: (id: string, fields: ManualEntryFields) => Promise<void>;
   reviewItem: (id: string) => void;
@@ -119,8 +155,15 @@ export const useBatch = create<BatchState>((set, get) => {
     set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, ...patch } : i)) }));
 
   const log = async (sessionId: string, event: string, payload: Record<string, unknown>) => {
+    const item = get().items.find((i) => i.sessionId === sessionId);
+    const asset_class = item?.assetClass ?? "legal";
     try {
-      await backend.logEvent(sessionId, event, operator(), JSON.stringify({ batch_id: get().batchId, ...payload }));
+      await backend.logEvent(
+        sessionId,
+        event,
+        operator(),
+        JSON.stringify({ batch_id: get().batchId, asset_class, ...payload }),
+      );
     } catch (e) {
       console.error("batch audit log failed", event, e);
     }
@@ -140,10 +183,14 @@ export const useBatch = create<BatchState>((set, get) => {
       clientId: "pending",
       attorneyBarNumber: "",
       documentHash: artifact.hash,
+      assetClass: item.assetClass,
+      batchId: get().batchId ?? undefined,
     });
+    // Attach sessionId before logging so audit entries resolve the asset_class.
+    update(id, { sessionId });
     await log(sessionId, "batch_item_loaded", { file: artifact.filename, hash: artifact.hash, size: artifact.size });
     const vdb = await primeVDB(artifact.normalizedText, artifact.hash, sessionId);
-    update(id, { artifact, vdb, sessionId });
+    update(id, { artifact, vdb });
     return { ...item, artifact, vdb, sessionId };
   };
 
@@ -154,6 +201,9 @@ export const useBatch = create<BatchState>((set, get) => {
     result: { payload: ParsedRetainerPayload; corrections: LexGuardCorrection[]; escalation: Escalation | null },
     providerLabel: string,
   ) => {
+    const current = get().items.find((i) => i.id === id);
+    const assetClass = current?.assetClass ?? "legal";
+    const entryMode = current?.entryMode ?? "ai";
     const cents = toPayloadCents(result.payload);
     await backend.savePayload({
       payloadId: newId("pl"),
@@ -163,6 +213,8 @@ export const useBatch = create<BatchState>((set, get) => {
       unearnedBalanceCents: Number(cents.unearnedBalanceCents),
       disputedHours: cents.disputedHours,
       disputedAmountCents: Number(cents.disputedAmountCents),
+      assetClass,
+      entryMode,
     });
     for (const c of result.corrections) {
       await log(sessionId, "lexguard_correction", {
@@ -183,7 +235,7 @@ export const useBatch = create<BatchState>((set, get) => {
       barNumber: result.payload.extractedBarNumber || "—",
       totalCents: toCents(result.payload.totalHeld),
       providerLabel,
-      status: result.escalation ? "flagged" : "parsed",
+      status: result.escalation ? "flagged" : "ready",
     });
   };
 
@@ -195,7 +247,7 @@ export const useBatch = create<BatchState>((set, get) => {
       if (!item || !item.artifact || !item.vdb || !item.sessionId) throw new Error("hashing failed");
 
       const provider = await resolveProviderForBatch();
-      const parsed = await provider.parse(item.artifact.normalizedText, RETAINER_SCHEMA);
+      const parsed = await provider.parse(item.artifact.normalizedText, schemaFor(item.assetClass));
       const payload: ParsedRetainerPayload = {
         ...parsed,
         barNumber: parsed.extractedBarNumber ?? "",
@@ -229,14 +281,15 @@ export const useBatch = create<BatchState>((set, get) => {
     running: false,
 
     loadFiles: (files) => {
-      const additions = files.map(newItem);
+      // Auto-assign each item's asset class from the sub-folder it came from.
+      const additions = files.map((f) => newItem(f, folderClassOf(f)));
       set((s) => ({ batchId: s.batchId ?? newId("batch"), items: [...s.items, ...additions] }));
       void get().startProcessing();
     },
 
     loadSamples: () => {
-      const files = SAMPLES.map(sampleToFile);
-      const additions = files.map(newItem);
+      // One representative sample per asset class (7 total), each tagged.
+      const additions = oneSamplePerClass().map((s) => newItem(sampleToFile(s), s.assetClass));
       set((s) => ({ batchId: s.batchId ?? newId("batch"), items: [...s.items, ...additions] }));
       void get().startProcessing();
     },
@@ -247,6 +300,13 @@ export const useBatch = create<BatchState>((set, get) => {
       if (!item || item.status === "settled") return;
       update(id, { entryMode: mode, status: "queued", error: null });
       if (mode === "ai") void get().startProcessing();
+    },
+
+    setItemAssetClass: (id, cls) => {
+      const item = get().items.find((i) => i.id === id);
+      // Asset class is only editable while the item is still queued.
+      if (!item || item.status !== "queued") return;
+      update(id, { assetClass: cls });
     },
 
     startProcessing: async () => {
