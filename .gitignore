@@ -27,6 +27,10 @@ src-tauri/lexescrow.db*
 .env
 .env.*
 !.env.example
+# Demo build config — no secrets, only mock-adapter endpoints and the demo
+# flag that routes eSign to the mock provider. Tracked deliberately: demo mode
+# depends on it, and a missing copy would silently fall back to real DocuSign.
+!.env.demo
 secrets.yaml
 cre/secrets.yaml
 **/config.json

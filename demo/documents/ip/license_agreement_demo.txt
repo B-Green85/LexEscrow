@@ -1,0 +1,259 @@
+PATENT LICENSE AGREEMENT
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+Agreement No.: PLA-2026-10999999-BMC
+Effective Date: June 15, 2026
+
+THIS PATENT LICENSE AGREEMENT (this "Agreement") is entered into as of June 15,
+2026 (the "Effective Date"), by and between MERIDIAN TECH HOLDINGS, a Delaware
+corporation with offices at 1725 Palisade Center Drive, Demo City, Delaware 19805
+("Licensor"), and BRIGHTPATH MANUFACTURING CO., a corporation organized under the
+laws of the State of Delaware, with offices at 6100 Ridgemont Industrial Parkway,
+Demo City, Delaware 19807 ("Licensee").
+
+RECITALS
+
+A. Licensor is the owner of record of the Licensed Patent, having acquired the
+same by assignment recorded with the United States Patent and Trademark Office.
+
+B. Licensee desires to obtain, and Licensor is willing to grant, a license under
+the Licensed Patent within the Field of Use and Territory defined herein.
+
+NOW, THEREFORE, the parties agree as follows:
+
+1. DEFINITIONS
+
+1.1 "Licensed Patent" means:
+
+    Patent Number: US 10,999,999 B2
+    Title: Adaptive Thermal Regulation System for Modular Enclosures
+    Issue Date: January 14, 2025
+    Application Serial No.: 17/884,206
+    Named Inventors: Sylvane O. Kettridge and Amara J. Blackwood-Reyes
+
+together with all reissues, reexaminations, extensions, continuations,
+continuations-in-part, and divisionals thereof.
+
+1.2 "Licensed Product" means any product, system, subassembly, or component
+manufactured, used, sold, offered for sale, or imported by Licensee that is
+covered by one or more Valid Claims of the Licensed Patent.
+
+1.3 "Valid Claim" means a claim of the Licensed Patent that has not been held
+invalid or unenforceable by a decision of a tribunal of competent jurisdiction
+from which no appeal has been or can be taken, and that has not been disclaimed,
+cancelled, or abandoned.
+
+1.4 "Net Sales" means gross amounts invoiced by Licensee for Licensed Products
+sold to unaffiliated third parties, less: (a) documented trade and quantity
+discounts actually allowed; (b) credits for returns and rejected goods; (c)
+sales, use, and value-added taxes separately stated on the invoice; and (d)
+outbound freight and insurance separately stated on the invoice.
+
+1.5 "Contract Year" means each successive twelve (12) month period commencing on
+the Effective Date or on any anniversary thereof.
+
+2. GRANT OF LICENSE
+
+2.1 Subject to the terms of this Agreement and to Licensee's timely payment of
+all amounts due, Licensor hereby grants to Licensee a non-exclusive,
+non-transferable license under the Licensed Patent to make, have made, use,
+offer for sale, sell, and import Licensed Products solely within the Field of Use
+and the Territory.
+
+2.2 SUBLICENSING. Licensee shall have no right to grant sublicenses without the
+prior written consent of Licensor, which consent may be withheld in Licensor's
+sole discretion. Any purported sublicense granted without such consent is void.
+
+2.3 HAVE-MADE RIGHTS. Licensee may engage contract manufacturers to produce
+Licensed Products exclusively for Licensee's account, provided that Licensee
+remains fully responsible for such manufacturers' compliance with this Agreement
+and provides Licensor with written notice identifying each such manufacturer.
+
+2.4 RESERVATION. All rights not expressly granted herein are reserved to
+Licensor. No license is granted by implication, estoppel, or otherwise under any
+patent, know-how, trademark, or other intellectual property of Licensor other
+than the Licensed Patent.
+
+3. FIELD OF USE
+
+3.1 The license granted in Section 2.1 is limited to the design, manufacture, and
+sale of thermal regulation subsystems incorporated into industrial modular
+enclosures rated for continuous operation between minus twenty (-20) degrees
+Celsius and sixty-five (65) degrees Celsius, for deployment in stationary
+telecommunications, data infrastructure, and industrial automation cabinets (the
+"Field of Use").
+
+3.2 The Field of Use expressly EXCLUDES: (a) automotive, aerospace, marine, and
+other mobile platform applications; (b) medical devices of any classification;
+(c) consumer electronics; and (d) any application involving human life support.
+
+4. TERRITORY
+
+4.1 The license granted herein extends to the following territory (the
+"Territory"): the Republic of Astoria, the Federated States of Marisol, the
+Kingdom of Verdanne, and the Northern Kestrel Territories.
+
+4.2 Licensee shall not manufacture, sell, offer for sale, or knowingly permit the
+resale of Licensed Products outside the Territory, and shall include contractual
+territorial restrictions in its distributor agreements.
+
+5. TERM
+
+5.1 This Agreement commences on the Effective Date and, unless earlier terminated
+under Section 9, continues until the expiration of the last-to-expire Valid Claim
+of the Licensed Patent (the "Term").
+
+5.2 The initial committed period is five (5) Contract Years. Thereafter the
+Agreement renews automatically for successive one (1) year periods unless either
+party gives written notice of non-renewal not less than ninety (90) days before
+the end of the then-current period.
+
+6. ROYALTIES AND PAYMENT
+
+6.1 RUNNING ROYALTY. Licensee shall pay Licensor a running royalty of five and
+one-half percent (5.5%) of Net Sales of Licensed Products during the Term.
+
+6.2 LICENSE ISSUE FEE. Licensee shall pay Licensor a one-time, non-refundable
+license issue fee of $75,000.00 within thirty (30) days of the Effective Date.
+The license issue fee is creditable against running royalties payable in the
+first Contract Year only.
+
+6.3 MINIMUM ANNUAL ROYALTY. Licensee shall pay a minimum annual royalty of
+$40,000.00 for each Contract Year, commencing with the second Contract Year. The
+minimum annual royalty is creditable against running royalties otherwise accruing
+in the same Contract Year. Any shortfall shall be paid within forty-five (45)
+days following the close of the Contract Year.
+
+    License Issue Fee: $75,000.00
+    Running Royalty Rate: 5.5% of Net Sales
+    Minimum Annual Royalty: $40,000.00 per Contract Year
+
+6.4 PAYMENT TERMS. Running royalties accrue upon invoicing of Licensed Products
+and are payable quarterly, within forty-five (45) days following the close of
+each calendar quarter, in United States Dollars by wire transfer to an account
+designated by Licensor.
+
+6.5 LATE PAYMENT. Amounts not paid when due bear interest at one and one-half
+percent (1.5%) per month or the maximum rate permitted by law, whichever is less,
+from the due date until paid.
+
+6.6 TAXES. All amounts are exclusive of taxes. Licensee is responsible for any
+withholding tax imposed on payments hereunder and shall gross up payments so that
+Licensor receives the amount it would have received absent such withholding.
+
+7. REPORTING AND AUDIT RIGHTS
+
+7.1 QUARTERLY REPORTS. Within forty-five (45) days following the close of each
+calendar quarter, Licensee shall deliver a written royalty report stating, for
+the quarter: (a) units of each Licensed Product sold, by product designation and
+by country within the Territory; (b) gross invoiced amounts; (c) each deduction
+claimed under Section 1.4, itemized by category; (d) resulting Net Sales; (e) the
+royalty calculation; and (f) cumulative amounts for the Contract Year to date.
+
+7.2 A report is due for each quarter whether or not any royalty is payable.
+
+7.3 RECORDS. Licensee shall maintain complete and accurate books and records
+sufficient to verify royalty calculations for a period of five (5) years
+following the end of the Contract Year to which they relate.
+
+7.4 AUDIT. Licensor may, not more than once per Contract Year and upon thirty
+(30) days' prior written notice, cause an independent certified public accountant
+reasonably acceptable to Licensee to inspect Licensee's records during normal
+business hours for the purpose of verifying royalty reports for the preceding
+three (3) Contract Years. The auditor shall report to Licensor only the amount of
+any discrepancy.
+
+7.5 AUDIT COSTS. Licensor bears the cost of the audit unless the audit discloses
+an underpayment exceeding five percent (5%) of amounts due for the period
+examined, in which case Licensee shall reimburse the reasonable cost of the audit
+and pay the underpaid amount with interest under Section 6.5 within thirty (30)
+days.
+
+8. MARKING, QUALITY, AND ENFORCEMENT
+
+8.1 Licensee shall mark all Licensed Products with the notice "U.S. Pat.
+10,999,999" or with a virtual marking reference in accordance with applicable
+law.
+
+8.2 Licensed Products shall conform to commercially reasonable quality standards
+and to all applicable safety and regulatory requirements in the Territory.
+
+8.3 Each party shall promptly notify the other in writing of any known or
+suspected infringement of the Licensed Patent within the Field of Use. Licensor
+retains the sole right, but not the obligation, to institute and control any
+enforcement action. Licensee shall cooperate at Licensor's expense.
+
+9. TERMINATION
+
+9.1 TERMINATION FOR BREACH. Either party may terminate this Agreement upon
+written notice if the other party materially breaches and fails to cure the
+breach within sixty (60) days after written notice describing it, provided that
+the cure period for non-payment is thirty (30) days.
+
+9.2 TERMINATION FOR INSOLVENCY. Either party may terminate immediately upon
+written notice if the other party becomes insolvent, makes a general assignment
+for the benefit of creditors, or has a receiver appointed over a substantial part
+of its assets.
+
+9.3 TERMINATION FOR CHALLENGE. Licensor may terminate immediately upon written
+notice if Licensee, directly or through an affiliate, institutes or supports any
+proceeding challenging the validity or enforceability of the Licensed Patent.
+
+9.4 TERMINATION FOR CONVENIENCE. Licensee may terminate at the close of any
+Contract Year upon not less than one hundred eighty (180) days' prior written
+notice, provided that all minimum annual royalties accrued through the effective
+date of termination are paid in full.
+
+9.5 EFFECT OF TERMINATION. Upon termination: (a) all licenses granted terminate
+immediately; (b) all accrued but unpaid amounts become due within thirty (30)
+days; (c) Licensee shall deliver a final royalty report within forty-five (45)
+days; and (d) Licensee may, during a sell-off period of one hundred twenty (120)
+days, dispose of finished Licensed Products in inventory as of the termination
+date, subject to payment of royalties thereon.
+
+9.6 SURVIVAL. Sections 1, 6.4 through 6.6, 7.3 through 7.5, 9.5, 9.6, and 10
+survive termination.
+
+10. GENERAL PROVISIONS
+
+10.1 Governing Law. This Agreement is governed by the laws of the State of
+Delaware without regard to conflict-of-laws principles.
+
+10.2 Assignment. Licensee may not assign this Agreement, by operation of law or
+otherwise, without Licensor's prior written consent. Licensor may assign freely
+to a successor to the Licensed Patent.
+
+10.3 Notices. Notices must be in writing and delivered to the addresses stated
+above, effective upon confirmed receipt.
+
+10.4 Entire Agreement. This Agreement constitutes the entire agreement of the
+parties concerning its subject matter and supersedes all prior understandings.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
+Date.
+
+LICENSOR:
+
+MERIDIAN TECH HOLDINGS
+
+
+_______________________________       Date: June 15, 2026
+By: Rosalind T. Okonkwo-Baird
+Title: Chief Executive Officer
+Email: r.okonkwobaird@example.com
+Telephone: (555) 0166-2100
+
+
+LICENSEE:
+
+BRIGHTPATH MANUFACTURING CO.
+
+
+_______________________________       Date: June 15, 2026
+By: Desmond A. Hallowell-Pryce
+Title: President
+Email: d.hallowellpryce@example.com
+Telephone: (555) 0171-4400
+
+END OF AGREEMENT

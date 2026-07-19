@@ -6,6 +6,22 @@ import tailwindcss from "@tailwindcss/vite";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
+/**
+ * Demo mode — `vite --mode demo` (spec Task 11).
+ *
+ * The flag itself comes from `.env.demo`, which Vite loads for this mode. That
+ * file is deliberately **tracked in git** despite the `.env.*` ignore rule: it
+ * holds no secrets, and it is the thing that routes the eSign layer to
+ * `MockDocuSignProvider`. A demo build that silently talked to production
+ * DocuSign because an untracked env file was missing would be a bad failure,
+ * so the config is committed rather than reconstructed per machine.
+ *
+ * Note this cannot be done with `define`: the call sites read
+ * `import.meta.env?.VITE_DEMO_MODE`, and the optional chaining means the
+ * expression never matches a `define` key. `demo/scripts/run_demo.sh` also
+ * exports `VITE_DEMO_MODE=true` directly, giving the demo a second, independent
+ * path to the same flag.
+ */
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 

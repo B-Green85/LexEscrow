@@ -10,6 +10,7 @@ mod artifact_guard;
 mod db;
 mod docusign;
 mod esign_callback;
+mod integrations;
 mod notify;
 mod vault;
 
@@ -88,6 +89,12 @@ pub fn run() {
             vault::vault_has_docusign,
             vault::vault_delete,
             vault::vault_change_password,
+            // Practice-management integrations (Clio / PracticePanther)
+            vault::vault_set_clio,
+            vault::vault_get_clio_public,
+            vault::vault_set_practice_panther,
+            vault::vault_get_practice_panther_public,
+            integrations::integration_send_webhook,
             // AI provider transport
             ai::ai_request_http,
             ai::ai_request_ws,

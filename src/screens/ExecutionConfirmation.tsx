@@ -74,8 +74,20 @@ function TxLink({ hash }: { hash: string | null }) {
 
 // ── Shared footer ────────────────────────────────────────────────────────────
 
-/** Audit-chain verification + report download. Identical across all paths. */
-function AuditCard({ onDownload }: { onDownload: () => void }) {
+/**
+ * Audit-chain verification + report export. Identical across all paths.
+ *
+ * Two exports, because they serve different readers: the PDF is the human- and
+ * counterparty-facing record (spec §14 V1), the JSON is the machine-readable
+ * extract a verifier re-hashes. Neither is a substitute for the other.
+ */
+function AuditCard({
+  onDownload,
+  onPrintReport,
+}: {
+  onDownload: () => void;
+  onPrintReport: () => void;
+}) {
   const [chain, setChain] = useState<backend.ChainVerification | null>(null);
 
   useEffect(() => {
@@ -83,7 +95,7 @@ function AuditCard({ onDownload }: { onDownload: () => void }) {
   }, []);
 
   return (
-    <div className="card mt-4 flex items-center justify-between p-5">
+    <div className="card mt-4 flex items-center justify-between gap-4 p-5">
       <div>
         <div className="text-sm font-semibold text-slate-700">Tamper-evident audit trail</div>
         <div className="mt-0.5 text-xs text-slate-500">
@@ -95,9 +107,14 @@ function AuditCard({ onDownload }: { onDownload: () => void }) {
           {chain?.valid && <span className="ml-1 text-emerald-600">✓</span>}
         </div>
       </div>
-      <button className="btn btn-secondary" onClick={onDownload}>
-        Download audit report
-      </button>
+      <div className="flex shrink-0 gap-2">
+        <button className="btn btn-primary" onClick={onPrintReport}>
+          Audit report (PDF)
+        </button>
+        <button className="btn btn-secondary" onClick={onDownload}>
+          JSON
+        </button>
+      </div>
     </div>
   );
 }
@@ -163,12 +180,14 @@ function DirectSettlementView({
   anchorReceipt,
   footer,
   onDownload,
+  onPrintReport,
 }: {
   execution: ExecutionState;
   cannaVerify: React.ReactNode;
   anchorReceipt: React.ReactNode;
   footer: React.ReactNode;
   onDownload: () => void;
+  onPrintReport: () => void;
 }) {
   const done = execution.phase === "done";
   const currentIndex = done ? PHASES.length : PHASES.findIndex((p) => p.key === execution.phase);
@@ -239,7 +258,7 @@ function DirectSettlementView({
 
           {anchorReceipt}
           <NotificationCard execution={execution} />
-          <AuditCard onDownload={onDownload} />
+          <AuditCard onDownload={onDownload} onPrintReport={onPrintReport} />
           {footer}
         </>
       )}
@@ -289,6 +308,7 @@ function ArbitrationView({
   anchorReceipt,
   footer,
   onDownload,
+  onPrintReport,
 }: {
   arbitrationState: ArbitrationState | null;
   execution: ExecutionState;
@@ -299,6 +319,7 @@ function ArbitrationView({
   anchorReceipt: React.ReactNode;
   footer: React.ReactNode;
   onDownload: () => void;
+  onPrintReport: () => void;
 }) {
   if (!arbitrationState) {
     return <div className="card p-6 text-sm text-slate-500">Locking escrow into arbitration…</div>;
@@ -390,7 +411,7 @@ function ArbitrationView({
         <>
           {anchorReceipt}
           <NotificationCard execution={execution} />
-          <AuditCard onDownload={onDownload} />
+          <AuditCard onDownload={onDownload} onPrintReport={onPrintReport} />
           {footer}
         </>
       )}
@@ -756,6 +777,7 @@ function StagedReleaseView({
   anchorReceipt,
   footer,
   onDownload,
+  onPrintReport,
 }: {
   stagedReleaseState: StagedReleaseState | null;
   execution: ExecutionState;
@@ -771,6 +793,7 @@ function StagedReleaseView({
   anchorReceipt: React.ReactNode;
   footer: React.ReactNode;
   onDownload: () => void;
+  onPrintReport: () => void;
 }) {
   if (!stagedReleaseState) {
     return (
@@ -850,7 +873,7 @@ function StagedReleaseView({
         <>
           {anchorReceipt}
           <NotificationCard execution={execution} />
-          <AuditCard onDownload={onDownload} />
+          <AuditCard onDownload={onDownload} onPrintReport={onPrintReport} />
           {footer}
         </>
       )}
@@ -882,6 +905,8 @@ export interface ExecutionConfirmationViewProps {
   onApproveMilestone: (milestoneId: string) => void;
   onReleaseMilestone: (milestoneId: string, recipient: string) => void;
   onDownload: () => void;
+  /** Printable audit report (spec §14 V1) — raises the browser print dialog. */
+  onPrintReport: () => void;
   onReset: () => void;
   onReturnToBatch: () => void;
 }
@@ -931,6 +956,7 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
           anchorReceipt={anchorReceipt}
           footer={footer}
           onDownload={props.onDownload}
+          onPrintReport={props.onPrintReport}
         />
       ) : execution.path === ExecutionPath.StagedRelease ? (
         <StagedReleaseView
@@ -948,6 +974,7 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
           anchorReceipt={anchorReceipt}
           footer={footer}
           onDownload={props.onDownload}
+          onPrintReport={props.onPrintReport}
         />
       ) : (
         <DirectSettlementView
@@ -956,6 +983,7 @@ export function ExecutionConfirmationView(props: ExecutionConfirmationViewProps)
           anchorReceipt={anchorReceipt}
           footer={footer}
           onDownload={props.onDownload}
+          onPrintReport={props.onPrintReport}
         />
       )}
     </div>
@@ -986,6 +1014,7 @@ export function ExecutionConfirmation() {
     approveMilestone,
     releaseMilestone,
     buildAuditReport,
+    downloadAuditReport,
     sessionId,
     reset,
     returnToBatch,
@@ -1032,6 +1061,7 @@ export function ExecutionConfirmation() {
       onApproveMilestone={(id) => void approveMilestone(id)}
       onReleaseMilestone={(id, recipient) => void releaseMilestone(id, recipient)}
       onDownload={onDownload}
+      onPrintReport={() => void downloadAuditReport()}
       onReset={() => reset()}
       onReturnToBatch={() => returnToBatch()}
     />

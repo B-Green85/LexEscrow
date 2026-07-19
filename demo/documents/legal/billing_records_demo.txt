@@ -1,0 +1,107 @@
+LANGLEY LAW OFFICES
+1180 HARBORVIEW PLAZA, SUITE 720
+DEMO CITY, CALIFORNIA 90001
+TELEPHONE (555) 0147-2200
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+ITEMIZED STATEMENT OF PROFESSIONAL SERVICES
+
+Client: Meridian Consulting Group LLC
+Matter: Commercial Contract Dispute - Pinnacle Logistics Systems LLC
+Matter No.: LKM-2026-0417
+Statement No.: 2026-0417-003
+Statement Date: June 30, 2026
+Billing Period: March 12, 2026 through June 30, 2026
+Responsible Attorney: Robert K. Langley, Esq., Bar No. 447823
+
+TRUST ACCOUNT SUMMARY
+
+    Total Retainer: $18,050.00
+    Applied to Earned Fees This Statement: $6,200.00
+    Costs Advanced: $0.00
+    Balance Remaining in Trust: $12,300.00
+
+TIMEKEEPER RATE SCHEDULE
+
+    RKL   Robert K. Langley, Partner              $425.00/hr
+    AMV   Anita M. Vasquez, Associate             $265.00/hr
+    JTB   Jonah T. Breckenridge, Paralegal        $145.00/hr
+
+ITEMIZED SERVICES
+
+DATE        TKPR  DESCRIPTION                                        HOURS   RATE      AMOUNT
+----------  ----  -------------------------------------------------  -----  --------  ----------
+03/13/2026  RKL   Initial matter intake conference with client;        2.0   $425.00     $850.00
+                  review of Master Services Agreement and
+                  correspondence file.
+03/17/2026  AMV   Legal research re: enforceability of limitation      3.0   $265.00     $795.00
+                  of liability provision under California law.
+03/24/2026  JTB   Assemble and Bates-number client production of      2.0   $145.00     $290.00
+                  contract and invoice records.
+04/02/2026  RKL   Draft demand letter to opposing party; confer        1.6   $425.00     $680.00
+                  with client re: settlement posture.
+04/09/2026  AMV   Revise demand letter; prepare damages summary        2.0   $265.00     $530.00
+                  schedule from client invoice records.
+04/16/2026  RKL   Telephone conference with opposing counsel re:       0.8   $425.00     $340.00
+                  response to demand and scheduling.
+04/23/2026  JTB   Prepare exhibit index and chronology of              2.0   $145.00     $290.00
+                  performance milestones.
+05/05/2026  AMV   Draft complaint for breach of contract and           3.0   $265.00     $795.00
+                  breach of implied covenant.
+05/12/2026  RKL   Revise and finalize complaint; review venue and      1.2   $425.00     $510.00
+                  jurisdictional allegations.
+05/19/2026  JTB   Coordinate filing logistics and service of           1.0   $145.00     $145.00
+                  process on registered agent.
+06/03/2026  AMV   Draft first set of requests for production of        1.5   $265.00     $397.50
+                  documents and special interrogatories.
+06/11/2026  RKL   Attend early case management conference;             0.9   $425.00     $382.50
+                  prepare case management statement.
+06/24/2026  AMV   Analyze opposing party's answer and                  0.7   $265.00     $185.50
+                  affirmative defenses; memorandum to file.
+06/30/2026  JTB   Update case chronology and discovery tracking        0.7   $145.00     $101.50
+                  log; calendar response deadlines.
+----------  ----  -------------------------------------------------  -----  --------  ----------
+
+TIMEKEEPER TOTALS
+
+    Robert K. Langley (RKL)        6.5 hours @ $425.00 ............... $2,762.50
+    Anita M. Vasquez (AMV)        10.2 hours @ $265.00 ............... $2,703.00
+    Jonah T. Breckenridge (JTB)    5.7 hours @ $145.00 ................. $826.50
+
+    Total Hours Billed: 22.4
+    Total Professional Fees: $6,292.00
+    Professional Courtesy Adjustment: ($92.00)
+
+    TOTAL EARNED FEES THIS STATEMENT: $6,200.00
+
+COST SUMMARY
+
+    Court Filing Fees ................................ $0.00
+    Service of Process ............................... $0.00
+    Electronic Research .............................. $0.00
+    Reproduction and Delivery ........................ $0.00
+
+    Total Costs Advanced: $0.00
+
+RECONCILIATION
+
+    Beginning Trust Balance: $18,050.00
+    Less Earned Fees Applied: ($6,200.00)
+    Less Costs Advanced: ($0.00)
+    Ending Trust Balance: $12,300.00
+
+Amounts shown as earned fees have been transferred from the client trust account
+to the operating account of the firm following transmittal of this statement in
+accordance with Section 4.2 of the retainer agreement between the parties.
+
+No amount is currently due and owing from the Client. This statement is rendered
+for informational and accounting purposes.
+
+Questions regarding this statement should be directed to the billing coordinator
+at billing@example.com or (555) 0147-2204.
+
+Prepared by: Marguerite E. Ondaatje, Billing Coordinator
+Reviewed by: Robert K. Langley, Esq.
+
+END OF STATEMENT

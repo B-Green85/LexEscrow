@@ -1,0 +1,174 @@
+NEXBRIDGE CAPITAL PARTNERS
+1400 STERLING GATEWAY, 22ND FLOOR
+DEMO CITY, DELAWARE 19801
+TELEPHONE (555) 0177-3300
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+NON-BINDING LETTER OF INTENT
+
+Reference No.: LOI-2026-VSI-014
+Date: May 4, 2026
+
+Board of Directors
+Vantage Software Inc.
+780 Kestrel Way, Building C
+Demo City, Delaware 19802
+
+RE:  PROPOSED ACQUISITION OF VANTAGE SOFTWARE INC.
+
+Ladies and Gentlemen:
+
+This letter of intent (this "Letter") sets forth the principal terms upon which
+NEXBRIDGE CAPITAL PARTNERS, a Delaware limited partnership ("Buyer"), proposes to
+acquire VANTAGE SOFTWARE INC., a Delaware corporation ("Seller" or the
+"Company"). Except as expressly provided in Sections 6 through 10, this Letter is
+NON-BINDING and is intended solely as an expression of mutual interest.
+
+1. STRUCTURE OF TRANSACTION
+
+1.1 Buyer proposes to acquire one hundred percent (100%) of the issued and
+outstanding capital stock of the Company from its shareholders in a taxable stock
+purchase (the "Transaction").
+
+1.2 The Transaction shall be effected on a cash-free, debt-free basis, with a
+normalized net working capital target to be agreed during due diligence and
+adjusted dollar-for-dollar at closing.
+
+1.3 The Transaction is intended to be documented in a definitive Stock Purchase
+Agreement (the "Definitive Agreement") containing representations, warranties,
+covenants, and indemnities customary for a transaction of this size and type.
+
+2. PURCHASE PRICE AND CONSIDERATION
+
+2.1 The aggregate purchase consideration for one hundred percent (100%) of the
+equity of the Company shall be:
+
+    Purchase Price: $2,100,000.00
+
+denominated in United States Dollars, payable in immediately available funds at
+closing, subject to the adjustments described in Section 2.3.
+
+2.2 EARNEST DEPOSIT. Within five (5) business days of countersignature of this
+Letter, Buyer shall deposit with the escrow agent designated under Section 5 the
+sum of SIXTY-THREE THOUSAND AND 00/100 DOLLARS ($63,000.00) as an earnest
+deposit.
+
+    Earnest Deposit: $63,000.00
+
+The earnest deposit represents three percent (3.0%) of the Purchase Price and
+shall be credited against the Purchase Price at closing. The earnest deposit
+shall be refundable to Buyer if the Transaction is abandoned for any reason other
+than Buyer's unexcused failure to proceed following satisfactory completion of
+due diligence.
+
+2.3 ADJUSTMENTS AND HOLDBACK. The Purchase Price is subject to (a) a
+dollar-for-dollar working capital adjustment measured against the agreed target;
+(b) reduction for indebtedness and transaction expenses outstanding at closing;
+and (c) an indemnity holdback of $210,000.00, being ten percent (10%) of the
+Purchase Price, to be retained in escrow for a period of twelve (12) months
+following closing.
+
+3. DUE DILIGENCE
+
+3.1 Seller shall afford Buyer and its representatives full access to the books,
+records, contracts, personnel, systems, source code repositories, and facilities
+of the Company for a period of THIRTY (30) CALENDAR DAYS commencing on the date
+of countersignature of this Letter (the "Due Diligence Period").
+
+3.2 Due diligence shall encompass financial, tax, legal, commercial, technical,
+intellectual property, employment, and regulatory review.
+
+3.3 Buyer may terminate the proposed Transaction at any time during the Due
+Diligence Period, in Buyer's sole discretion, upon written notice to Seller,
+whereupon the earnest deposit shall be returned to Buyer in full.
+
+4. CONDITIONS TO CLOSING
+
+4.1 Consummation of the Transaction shall be subject to, among other conditions
+to be specified in the Definitive Agreement: (a) satisfactory completion of due
+diligence; (b) execution of the Definitive Agreement; (c) receipt of all
+requisite third-party and governmental consents; (d) delivery of audited
+financial statements for the two most recent fiscal years; (e) execution of
+employment and non-competition agreements by the four key employees to be
+identified; and (f) absence of any material adverse change.
+
+5. ESCROW
+
+5.1 The earnest deposit and the indemnity holdback shall be held by Sterling
+Gateway Fiduciary Services, 1600 Rampart Street, Demo City, Delaware 19803,
+Escrow No. SGF-26-2044, pursuant to an escrow agreement to be executed by the
+parties.
+
+6. EXCLUSIVITY (BINDING)
+
+6.1 From the date of countersignature of this Letter through the earlier of (a)
+the expiration of the Due Diligence Period, or (b) written termination by Buyer,
+Seller shall not, and shall cause its officers, directors, shareholders, and
+advisors not to, directly or indirectly solicit, initiate, encourage, entertain,
+or engage in discussions with any person other than Buyer concerning any sale of
+equity or assets, merger, recapitalization, or similar transaction involving the
+Company.
+
+6.2 Seller shall notify Buyer within two (2) business days of receipt of any
+unsolicited inquiry concerning any such transaction.
+
+7. CONFIDENTIALITY (BINDING)
+
+7.1 Each party shall keep confidential the existence and terms of this Letter and
+all non-public information disclosed by the other party, and shall use such
+information solely for the purpose of evaluating the Transaction.
+
+7.2 The obligations of this Section survive termination of this Letter for a
+period of three (3) years.
+
+8. EXPENSES (BINDING)
+
+8.1 Each party shall bear its own costs and expenses, including fees of counsel,
+accountants, and advisors, incurred in connection with the Transaction,
+regardless of whether the Transaction is consummated.
+
+9. NO BINDING OBLIGATION TO PROCEED
+
+9.1 Except for Sections 6, 7, 8, 9, and 10, which are intended to be legally
+binding, this Letter does not create any legally binding obligation of either
+party. No obligation to consummate the Transaction arises unless and until a
+Definitive Agreement is executed and delivered by both parties.
+
+10. EXPIRATION AND GOVERNING LAW (BINDING)
+
+10.1 EXPIRATION. This Letter shall expire and be of no force or effect unless a
+counterpart signed by Seller is received by Buyer on or before May 18, 2026. If
+countersigned, the non-binding provisions of this Letter shall lapse upon the
+earlier of execution of the Definitive Agreement or August 15, 2026.
+
+10.2 GOVERNING LAW. This Letter is governed by the laws of the State of Delaware
+without regard to conflict-of-laws principles.
+
+If the foregoing accurately reflects your understanding, please indicate your
+agreement by signing and returning the enclosed counterpart.
+
+Very truly yours,
+
+NEXBRIDGE CAPITAL PARTNERS
+
+
+_______________________________       Date: May 4, 2026
+By: Evelyn R. Sandoval-Pike
+Title: Managing Partner
+Email: e.sandovalpike@example.com
+Telephone: (555) 0177-3301
+
+
+AGREED AND ACCEPTED:
+
+VANTAGE SOFTWARE INC.
+
+
+_______________________________       Date: May 6, 2026
+By: Nikolai B. Ferreira-Storm
+Title: Chief Executive Officer
+Email: n.ferreirastorm@example.com
+Telephone: (555) 0184-9100
+
+END OF LETTER OF INTENT

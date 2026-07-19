@@ -1,0 +1,215 @@
+CONFIDENTIAL DUE DILIGENCE SUMMARY REPORT
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+Target: Vantage Software Inc.
+Acquirer: Nexbridge Capital Partners
+Reference: LOI-2026-VSI-014
+Report Date: June 2, 2026
+Prepared By: Ingrid A. Thorvaldsen, Director of Transaction Advisory
+Reviewed By: Evelyn R. Sandoval-Pike, Managing Partner
+Diligence Period Covered: May 6, 2026 through June 1, 2026
+Classification: CONFIDENTIAL - FOR INTERNAL INVESTMENT COMMITTEE USE
+
+1. TRANSACTION OVERVIEW
+
+1.1 This report summarizes the findings of financial, technical, commercial, and
+legal due diligence conducted on Vantage Software Inc. (the "Company") in
+connection with the proposed acquisition of one hundred percent (100%) of its
+outstanding equity.
+
+1.2 Headline consideration under the letter of intent:
+
+    Purchase Consideration (USD): $2,100,000.00
+    Earnest Deposit Held in Escrow: $63,000.00
+    Indemnity Holdback (12 months): $210,000.00
+
+1.3 CURRENCY NOTE. The Company's majority shareholder, Vantage Holdings
+International B.V., maintains its consolidated statutory reporting in Euros. For
+consistency with the parent entity's board reporting package and the shareholder
+approval memorandum circulated on May 22, 2026, the purchase consideration is
+also stated in Euros as follows:
+
+    Purchase Consideration (EUR): €1,947,600.00
+
+reflecting the reference rate applied by the parent's treasury function as of the
+letter of intent date. Closing settlement mechanics, escrow funding, and the
+holdback are denominated in United States Dollars under the letter of intent.
+
+2. FINANCIAL SUMMARY
+
+2.1 Revenue. Trailing twelve months ("TTM") ended March 31, 2026:
+
+    Total Revenue (TTM) ............................... $3,412,000.00
+    Recurring Subscription Revenue .................... $2,915,000.00
+    Professional Services Revenue ....................... $412,000.00
+    Other / Perpetual License Revenue .................... $85,000.00
+
+2.2 Revenue growth. Fiscal 2024 revenue was $2,244,000.00 and fiscal 2025 revenue
+was $2,978,000.00, representing year-over-year growth of 32.7% and 14.6% into the
+TTM period respectively. Growth deceleration in the most recent two quarters is
+attributable primarily to the loss of one enterprise account discussed in
+Section 5.
+
+2.3 Profitability.
+
+    Gross Profit (TTM) ................................ $2,626,000.00
+    Gross Margin ............................................. 77.0%
+    Adjusted EBITDA (TTM) ............................... $284,000.00
+    Adjusted EBITDA Margin .................................... 8.3%
+    Reported Net Income (TTM) ............................. $61,000.00
+
+2.4 EBITDA adjustments comprise $148,000.00 of non-recurring items: $96,000.00 in
+one-time legal and restructuring costs, $34,000.00 in owner compensation above
+market, and $18,000.00 in a discontinued marketing program. Diligence confirmed
+supporting documentation for $131,000.00 of the $148,000.00 adjusted amount;
+$17,000.00 remains unsupported and has been flagged in Section 6.
+
+2.5 Cash and burn.
+
+    Unrestricted Cash at March 31, 2026 ................. $418,000.00
+    Average Monthly Operating Burn (last 6 months) ....... $22,000.00
+    Implied Runway at Current Burn ................. approx. 19 months
+    Outstanding Indebtedness (equipment note) ............ $74,000.00
+
+2.6 Working capital. Trailing twelve-month average net working capital of
+$196,000.00 is proposed as the peg for the closing adjustment. Deferred revenue
+of $611,000.00 at March 31, 2026 is treated as a debt-like item in the proposed
+bridge.
+
+3. INTELLECTUAL PROPERTY ASSETS
+
+3.1 Registered marks. The Company holds two registered word marks, VANTAGE FLOW
+(Reg. No. 7,441,882) and QUILLBRIDGE (Reg. No. 7,502,116), both in International
+Class 9, with renewals due in 2032 and 2033 respectively.
+
+3.2 Patents. The Company holds no issued patents. One provisional application
+covering an event-stream deduplication method was filed February 11, 2026 and
+lapses if not converted by February 11, 2027.
+
+3.3 Copyright and source code. The Company's core platform comprises
+approximately 412,000 lines of source code across 14 repositories. A software
+composition analysis identified 287 third-party open source dependencies. Of
+these, 281 carry permissive licenses (MIT, Apache 2.0, BSD). Six carry copyleft
+licenses; four are used only in build tooling and are not distributed, and two
+are linked into a distributed component and require remediation prior to closing.
+
+3.4 Assignment of inventions. Signed invention assignment agreements were located
+for 26 of 31 current employees and for 7 of 11 contractors engaged since 2023.
+Missing assignments are itemized in Section 6.
+
+3.5 Domain names and data. The Company holds 9 registered domain names, all
+current through at least 2028. Customer data is hosted with a single
+infrastructure provider under a contract expiring November 30, 2027.
+
+4. EMPLOYEES AND HEADCOUNT
+
+4.1 Total headcount at May 31, 2026: 31 full-time employees and 11 active
+contractors.
+
+    FUNCTION                        FTE     CONTRACTOR    TOTAL
+    ---------------------------   ------   -----------   ------
+    Engineering                       14             6       20
+    Product and Design                 4             2        6
+    Sales and Business Dev             5             1        6
+    Customer Success and Support       4             1        5
+    Finance and Administration         3             1        4
+    Executive                          1             0        1
+    ---------------------------   ------   -----------   ------
+    TOTAL                             31            11       42
+
+4.2 Annualized personnel cost is $3,088,000.00 inclusive of employer burden.
+Average tenure is 2.7 years. Voluntary attrition over the trailing twelve months
+was 12.9%, or 4 departures.
+
+4.3 Four employees have been identified as key to the transaction: the Chief
+Executive Officer, the VP of Engineering, the Principal Architect, and the
+Director of Customer Success. Retention agreements will be required as a closing
+condition.
+
+4.4 No collective bargaining agreements are in effect. No employment litigation
+is pending or, to management's knowledge, threatened.
+
+5. CUSTOMER CONCENTRATION
+
+5.1 The Company served 148 paying accounts as of May 31, 2026. Revenue
+concentration among the five largest accounts:
+
+    ACCOUNT                          TTM REVENUE     % OF TOTAL   CONTRACT END
+    ----------------------------   -------------   ------------   ------------
+    Calderon Freight Systems         $614,000.00         18.0%    12/31/2027
+    Ashvale Insurance Group          $443,000.00         13.0%    06/30/2027
+    Brightpath Manufacturing Co.     $307,000.00          9.0%    03/31/2028
+    Tessellate Retail Holdings       $205,000.00          6.0%    09/30/2026
+    Northwind Analytics LLC          $171,000.00          5.0%    01/31/2028
+    ----------------------------   -------------   ------------
+    TOP FIVE SUBTOTAL              $1,740,000.00         51.0%
+
+5.2 The top five accounts represent 51.0% of TTM revenue and the largest single
+account represents 18.0%. This concentration exceeds the acquirer's internal
+guideline of 40.0% for the top five.
+
+5.3 Gross revenue retention over the trailing twelve months was 91.2%; net
+revenue retention including expansion was 104.6%. One enterprise account
+representing $188,000.00 of annualized revenue gave notice of non-renewal in
+February 2026 following a change of its own ownership.
+
+5.4 Contractual assignment. Eleven customer agreements, representing $722,000.00
+of TTM revenue, contain change-of-control provisions requiring counterparty
+consent prior to assignment.
+
+6. IDENTIFIED RISKS
+
+6.1 HIGH - Customer concentration. Top five accounts at 51.0% of revenue, with
+the Tessellate Retail Holdings contract expiring September 30, 2026, prior to the
+expiration of the indemnity holdback period. Mitigation: seek early renewal as a
+closing condition or negotiate a revenue-based earnout.
+
+6.2 HIGH - Change-of-control consents. Eleven agreements totaling $722,000.00 of
+TTM revenue require consent. Mitigation: make receipt of consents covering not
+less than $600,000.00 of TTM revenue a condition precedent to closing.
+
+6.3 MEDIUM - Open source license remediation. Two copyleft-licensed components
+are linked into distributed software. Estimated remediation cost $28,000.00 and
+approximately six engineering weeks. Mitigation: pre-closing remediation covenant
+with specific indemnity.
+
+6.4 MEDIUM - Missing invention assignments. Five employees and four contractors
+lack executed assignments. Mitigation: obtain executed confirmatory assignments
+prior to closing; specific indemnity for any not obtained.
+
+6.5 MEDIUM - Unsupported EBITDA adjustment of $17,000.00. Mitigation: reduce the
+agreed adjusted EBITDA figure accordingly for purposes of any multiple-based
+price validation.
+
+6.6 MEDIUM - Single-provider infrastructure dependency with contract expiry
+November 30, 2027 and no negotiated renewal terms. Mitigation: diligence the
+migration cost estimate of $140,000.00 provided by management.
+
+6.7 LOW - Provisional patent application lapses February 11, 2027 if not
+converted. Mitigation: budget conversion cost of approximately $16,000.00.
+
+6.8 LOW - Sales tax nexus review identified potential unremitted sales tax
+exposure of approximately $34,000.00 across three states. Mitigation: voluntary
+disclosure program; specific escrow reserve.
+
+7. VALUATION CONTEXT
+
+7.1 At the letter of intent consideration of $2,100,000.00, implied multiples
+are 0.62x TTM revenue and 7.4x adjusted EBITDA. Comparable transactions in the
+vertical workflow software segment during the trailing eighteen months cleared
+between 0.8x and 1.9x revenue, positioning the proposed consideration below the
+observed range, consistent with the concentration and remediation items above.
+
+8. RECOMMENDATION
+
+8.1 Transaction advisory recommends PROCEEDING TO DEFINITIVE AGREEMENT subject to
+the mitigations set forth in Section 6, retention of the $210,000.00 indemnity
+holdback for the full twelve-month period, and the addition of a specific
+indemnity escrow of $50,000.00 for the open source and invention assignment
+items.
+
+Prepared by:  Ingrid A. Thorvaldsen, Director of Transaction Advisory
+              i.thorvaldsen@example.com  /  (555) 0177-3318
+
+END OF REPORT

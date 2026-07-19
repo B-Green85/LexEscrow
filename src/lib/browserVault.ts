@@ -12,8 +12,12 @@
 import type {
   AiInput,
   AiSecret,
+  ClioConfigInput,
+  ClioPublic,
   DocuSignInput,
   DocuSignPublic,
+  PracticePantherConfigInput,
+  PracticePantherPublic,
   SmtpInput,
   TwilioInput,
   UnlockResult,
@@ -46,11 +50,19 @@ interface DocuSignStored {
   jwtPrivateKey: string;
   environment: string;
 }
+/** Clio / PracticePanther share a shape; the vendors differ only downstream. */
+interface WebhookStored {
+  webhookUrl: string;
+  matterId: string;
+  apiKey: string;
+}
 interface VData {
   ai: AiStored | null;
   smtp: SmtpStored | null;
   twilio: TwilioStored | null;
   docusign: DocuSignStored | null;
+  clio: WebhookStored | null;
+  practicePanther: WebhookStored | null;
 }
 
 const STORAGE_KEY = "lexescrow.vault";
@@ -100,7 +112,7 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
 let state: { data: VData; key: CryptoKey; salt: Uint8Array } | null = null;
 
 function emptyData(): VData {
-  return { ai: null, smtp: null, twilio: null, docusign: null };
+  return { ai: null, smtp: null, twilio: null, docusign: null, clio: null, practicePanther: null };
 }
 
 /** A vault written before a group existed decrypts without that key — fill in
@@ -210,10 +222,89 @@ export async function setTwilio(input: TwilioInput): Promise<void> {
   await persist();
 }
 
-export async function deleteGroup(group: "ai" | "smtp" | "twilio" | "docusign"): Promise<void> {
+export async function deleteGroup(
+  group: "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practicePanther",
+): Promise<void> {
   const s = requireUnlocked();
   s.data[group] = null;
   await persist();
+}
+
+// ── Practice-management webhooks (spec §14 V1) ───────────────────────────────
+
+/**
+ * Store one vendor's webhook config.
+ *
+ * Mirrors the Rust `set_clio` / `set_practice_panther` exactly, including both
+ * edit rules: a blank API key keeps the stored one, and a blank webhook URL
+ * clears the entry rather than storing a half-configured one — so disabling an
+ * integration does not leave its token behind.
+ */
+async function setWebhookGroup(
+  group: "clio" | "practicePanther",
+  input: { webhookUrl: string; matterId?: string; apiKey?: string },
+): Promise<void> {
+  const s = requireUnlocked();
+  const url = input.webhookUrl.trim();
+  if (!url) {
+    s.data[group] = null;
+    await persist();
+    return;
+  }
+  const apiKey = input.apiKey?.trim() ? input.apiKey.trim() : (s.data[group]?.apiKey ?? "");
+  s.data[group] = { webhookUrl: url, matterId: input.matterId?.trim() ?? "", apiKey };
+  await persist();
+}
+
+function webhookPublic(stored: WebhookStored | null): ClioPublic {
+  if (!stored) return { webhookUrl: "", matterId: "", hasApiKey: false };
+  return {
+    webhookUrl: stored.webhookUrl,
+    matterId: stored.matterId,
+    hasApiKey: stored.apiKey.length > 0,
+  };
+}
+
+export async function setClio(input: ClioConfigInput): Promise<void> {
+  await setWebhookGroup("clio", input);
+}
+
+export function getClioPublic(): ClioPublic {
+  return webhookPublic(requireUnlocked().data.clio);
+}
+
+export async function setPracticePanther(input: PracticePantherConfigInput): Promise<void> {
+  await setWebhookGroup("practicePanther", input);
+}
+
+export function getPracticePantherPublic(): PracticePantherPublic {
+  return webhookPublic(requireUnlocked().data.practicePanther);
+}
+
+/**
+ * Full configs — API key included — for the browser-mode webhook transport.
+ *
+ * Only reachable outside Tauri. Under Tauri the key stays in the Rust vault and
+ * the POST is made there (`integrations.rs`), which is why there is no
+ * equivalent of this function on the IPC surface.
+ */
+export function resolveWebhookConfigs(): {
+  clio?: { webhookUrl: string; matterId?: string; apiKey?: string };
+  practicePanther?: { webhookUrl: string; matterId?: string; apiKey?: string };
+} {
+  const data = state?.data;
+  const project = (w: WebhookStored | null | undefined) =>
+    w && w.webhookUrl
+      ? {
+          webhookUrl: w.webhookUrl,
+          ...(w.matterId && { matterId: w.matterId }),
+          ...(w.apiKey && { apiKey: w.apiKey }),
+        }
+      : undefined;
+  return {
+    ...(project(data?.clio) && { clio: project(data?.clio)! }),
+    ...(project(data?.practicePanther) && { practicePanther: project(data?.practicePanther)! }),
+  };
 }
 
 // ── DocuSign (spec §24) ──────────────────────────────────────────────────────

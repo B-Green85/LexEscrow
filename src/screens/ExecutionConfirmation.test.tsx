@@ -54,6 +54,7 @@ function props(over: Partial<ExecutionConfirmationViewProps> = {}): ExecutionCon
     onApproveMilestone: () => {},
     onReleaseMilestone: () => {},
     onDownload: () => {},
+    onPrintReport: () => {},
     onReset: () => {},
     onReturnToBatch: () => {},
     ...over,
@@ -121,7 +122,7 @@ describe("Path A — direct settlement", () => {
     expect(html).toContain("Released to client");
     expect(html).toContain("$5,000.00");
     expect(html).toContain("$1,000.00");
-    expect(html).toContain("Download audit report");
+    expect(html).toContain("Audit report (PDF)");
     expect(html).toContain("c@example.com");
   });
 });
@@ -212,7 +213,7 @@ describe("Path B — arbitration escrow", () => {
     expect(html).toContain("Arbitration Resolved");
     expect(html).toContain("split agreed");
     expect(html).toContain("2/2 required signatures");
-    expect(html).toContain("Download audit report");
+    expect(html).toContain("Audit report (PDF)");
   });
 
   it("shows a placeholder while the lock is still in flight", () => {
@@ -343,6 +344,6 @@ describe("Path C — staged release", () => {
     expect(html).toContain("Staged release complete");
     expect(html).toContain("$6,000.00 of $6,000.00");
     expect(html).toContain("$0.00 remaining");
-    expect(html).toContain("Download audit report");
+    expect(html).toContain("Audit report (PDF)");
   });
 });

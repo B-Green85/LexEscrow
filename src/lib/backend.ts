@@ -13,8 +13,12 @@ import { invoke } from "@tauri-apps/api/core";
 import * as browserVault from "./browserVault";
 import type {
   AiInput,
+  ClioConfigInput,
+  ClioPublic,
   DocuSignInput,
   DocuSignPublic,
+  PracticePantherConfigInput,
+  PracticePantherPublic,
   SmtpInput,
   TwilioInput,
   UnlockResult,
@@ -733,6 +737,112 @@ export async function setDocuSign(input: DocuSignInput): Promise<void> {
     return;
   }
   await browserVault.setDocusign(input);
+}
+
+// ── Practice-management integrations (spec §14 V1) ───────────────────────────
+
+export async function setClio(input: ClioConfigInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_clio", { input });
+    return;
+  }
+  await browserVault.setClio(input);
+}
+
+export async function getClioPublic(): Promise<ClioPublic> {
+  if (isTauri()) return invoke<ClioPublic>("vault_get_clio_public");
+  return browserVault.getClioPublic();
+}
+
+export async function setPracticePanther(input: PracticePantherConfigInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_practice_panther", { input });
+    return;
+  }
+  await browserVault.setPracticePanther(input);
+}
+
+export async function getPracticePantherPublic(): Promise<PracticePantherPublic> {
+  if (isTauri()) return invoke<PracticePantherPublic>("vault_get_practice_panther_public");
+  return browserVault.getPracticePantherPublic();
+}
+
+export type IntegrationVendor = "clio" | "practicePanther";
+
+/** Mirrors the Rust `WebhookOutcome` and the frontend `WebhookResult`. */
+export interface WebhookOutcome {
+  success: boolean;
+  statusCode?: number;
+  error?: string;
+}
+
+/**
+ * Deliver a webhook body through the **backend**, using the vault-held API key.
+ *
+ * This is why the frontend never reads the integration API keys: they are
+ * bearer tokens for a firm's matter data, and `vault.rs` guarantees secrets do
+ * not cross IPC. The payload is composed in the WebView (it is a projection of
+ * session state, which lives there) and posted in Rust (where the credential
+ * lives), so neither side needs what the other holds.
+ *
+ * Outside Tauri there is no backend to delegate to; the caller falls back to
+ * posting directly with the browser-vault config.
+ */
+export async function sendIntegrationWebhook(
+  vendor: IntegrationVendor,
+  body: unknown,
+): Promise<WebhookOutcome> {
+  if (!isTauri()) return { success: false, error: "No backend transport outside Tauri" };
+  try {
+    return await invoke<WebhookOutcome>("integration_send_webhook", {
+      vendor,
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Webhook configs for the session store's firing points.
+ *
+ * Under Tauri the returned configs deliberately carry **no** `apiKey` — they
+ * exist only to say "this vendor is configured, and here is where it points".
+ * Delivery goes through `sendIntegrationWebhook`, which supplies the credential
+ * backend-side. In browser mode the full config (key included) comes back,
+ * because there is no backend and the browser vault is the only holder.
+ *
+ * A locked vault yields nothing configured rather than throwing: webhooks are
+ * non-fatal by contract, and an unlocked-vault requirement would make them a
+ * hard dependency of settlement.
+ */
+export async function getIntegrationConfigs(): Promise<{
+  clio?: { webhookUrl: string; matterId?: string; apiKey?: string };
+  practicePanther?: { webhookUrl: string; matterId?: string; apiKey?: string };
+}> {
+  if (!isTauri()) {
+    try {
+      return browserVault.resolveWebhookConfigs();
+    } catch {
+      return {};
+    }
+  }
+  try {
+    const [clio, pp] = await Promise.all([getClioPublic(), getPracticePantherPublic()]);
+    return {
+      ...(clio.webhookUrl && {
+        clio: { webhookUrl: clio.webhookUrl, ...(clio.matterId && { matterId: clio.matterId }) },
+      }),
+      ...(pp.webhookUrl && {
+        practicePanther: {
+          webhookUrl: pp.webhookUrl,
+          ...(pp.matterId && { matterId: pp.matterId }),
+        },
+      }),
+    };
+  } catch {
+    return {};
+  }
 }
 
 export async function vaultChangePassword(current: string, next: string): Promise<void> {

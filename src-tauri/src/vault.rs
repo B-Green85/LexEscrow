@@ -124,6 +124,29 @@ pub struct SealEntry {
     pub key_b64: String,
 }
 
+/// Clio practice-management webhook config (spec §14 V1).
+///
+/// The URL is not a secret, but the API key is a bearer token for a firm's
+/// matter data — so the whole entry gets the same `Zeroize` treatment as the
+/// DocuSign credential rather than being split across a secret and a plain
+/// half. One struct, one lifetime, nothing left in memory after drop.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct ClioConfig {
+    pub webhook_url: String,
+    pub matter_id: Option<String>,
+    pub api_key: Option<String>,
+}
+
+/// PracticePanther webhook config — same shape, different vendor (spec §14 V1).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePantherConfig {
+    pub webhook_url: String,
+    pub matter_id: Option<String>,
+    pub api_key: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct VaultData {
     #[serde(default)]
@@ -136,6 +159,10 @@ struct VaultData {
     docusign: Option<DocuSignSecret>,
     #[serde(default)]
     seal: Option<SealEntry>,
+    #[serde(default)]
+    clio: Option<ClioConfig>,
+    #[serde(default)]
+    practice_panther: Option<PracticePantherConfig>,
 }
 
 // ============================================================================
@@ -188,6 +215,26 @@ pub struct VaultPublic {
     twilio: Option<TwilioPublic>,
 }
 
+/// Secret-free Clio view. The webhook URL and matter ID are shown in full —
+/// they are addressing information the operator typed and needs to confirm —
+/// while the API key is reduced to a presence flag, as everywhere else.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClioPublic {
+    pub webhook_url: String,
+    pub matter_id: String,
+    pub has_api_key: bool,
+}
+
+/// Secret-free PracticePanther view. Same rules as `ClioPublic`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePantherPublic {
+    pub webhook_url: String,
+    pub matter_id: String,
+    pub has_api_key: bool,
+}
+
 // ============================================================================
 // Renderer inputs (secret optional — omitted keeps the existing secret)
 // ============================================================================
@@ -235,6 +282,30 @@ pub struct DocuSignInput {
     base_uri: String,
     jwt_private_key: String,
     environment: String,
+}
+
+/// Clio setter payload. `api_key` follows the same edit semantics as every
+/// other secret in this file: omitted or blank keeps whatever is stored, so an
+/// operator can retarget the webhook URL without re-pasting the token.
+#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct ClioConfigInput {
+    webhook_url: String,
+    #[serde(default)]
+    matter_id: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+/// PracticePanther setter payload — same shape and same edit semantics.
+#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct PracticePantherConfigInput {
+    webhook_url: String,
+    #[serde(default)]
+    matter_id: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
 }
 
 // ============================================================================
@@ -532,6 +603,97 @@ impl VaultState {
             })
     }
 
+    // ---- Practice-management webhooks (spec §14 V1) ----------------------
+
+    /// Store the Clio config.
+    ///
+    /// A blank webhook URL clears the entry outright rather than storing a
+    /// half-configured one. That is what gives the Configuration screen a
+    /// delete affordance without a second command, and it means a disabled
+    /// integration does not leave an API key sitting in the vault.
+    fn set_clio(&self, input: ClioConfigInput) -> Result<(), VaultError> {
+        self.mutate(|data| {
+            let url = input.webhook_url.trim();
+            if url.is_empty() {
+                data.clio = None;
+                return;
+            }
+            let api_key = input
+                .api_key
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| data.clio.as_ref().and_then(|e| e.api_key.clone()));
+            data.clio = Some(ClioConfig {
+                webhook_url: url.to_string(),
+                matter_id: input
+                    .matter_id
+                    .clone()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                api_key,
+            });
+        })
+    }
+
+    fn get_clio_public(&self) -> Result<ClioPublic, VaultError> {
+        let guard = self.inner.lock().unwrap();
+        let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
+        Ok(match data.clio.as_ref() {
+            Some(e) => ClioPublic {
+                webhook_url: e.webhook_url.clone(),
+                matter_id: e.matter_id.clone().unwrap_or_default(),
+                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
+            },
+            None => ClioPublic {
+                webhook_url: String::new(),
+                matter_id: String::new(),
+                has_api_key: false,
+            },
+        })
+    }
+
+    /// Store the PracticePanther config. Same clear-on-blank-URL rule as Clio.
+    fn set_practice_panther(&self, input: PracticePantherConfigInput) -> Result<(), VaultError> {
+        self.mutate(|data| {
+            let url = input.webhook_url.trim();
+            if url.is_empty() {
+                data.practice_panther = None;
+                return;
+            }
+            let api_key = input
+                .api_key
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| data.practice_panther.as_ref().and_then(|e| e.api_key.clone()));
+            data.practice_panther = Some(PracticePantherConfig {
+                webhook_url: url.to_string(),
+                matter_id: input
+                    .matter_id
+                    .clone()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+                api_key,
+            });
+        })
+    }
+
+    fn get_practice_panther_public(&self) -> Result<PracticePantherPublic, VaultError> {
+        let guard = self.inner.lock().unwrap();
+        let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
+        Ok(match data.practice_panther.as_ref() {
+            Some(e) => PracticePantherPublic {
+                webhook_url: e.webhook_url.clone(),
+                matter_id: e.matter_id.clone().unwrap_or_default(),
+                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
+            },
+            None => PracticePantherPublic {
+                webhook_url: String::new(),
+                matter_id: String::new(),
+                has_api_key: false,
+            },
+        })
+    }
+
     fn delete_group(&self, group: &str) -> Result<(), VaultError> {
         self.mutate(|data| match group {
             "ai" => data.ai = None,
@@ -583,6 +745,22 @@ impl VaultState {
     /// itself on drop, so the caller must not stash it beyond the request.
     pub fn resolve_docusign(&self) -> Option<DocuSignSecret> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.docusign.clone())
+    }
+
+    /// Clio config for `integrations.rs`. Internal only — the API key is a
+    /// bearer token for a firm's matter data, so the webhook POST is made in
+    /// the backend and the key never reaches the WebView.
+    pub fn resolve_clio(&self) -> Option<ClioConfig> {
+        self.inner.lock().unwrap().as_ref().and_then(|s| s.data.clio.clone())
+    }
+
+    /// PracticePanther config for `integrations.rs`. Same posture as Clio.
+    pub fn resolve_practice_panther(&self) -> Option<PracticePantherConfig> {
+        self.inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.data.practice_panther.clone())
     }
 
     /// AnchorReceipt seal key for `artifact_guard.rs` (spec §8).
@@ -751,6 +929,33 @@ pub fn vault_has_docusign(state: State<'_, VaultState>) -> bool {
 #[tauri::command]
 pub fn vault_delete(state: State<'_, VaultState>, group: String) -> Result<(), String> {
     state.delete_group(&group).map_err(err)
+}
+
+// ---- Practice-management webhooks (spec §14 V1) ---------------------------
+
+#[tauri::command]
+pub fn vault_set_clio(state: State<'_, VaultState>, input: ClioConfigInput) -> Result<(), String> {
+    state.set_clio(input).map_err(err)
+}
+
+#[tauri::command]
+pub fn vault_get_clio_public(state: State<'_, VaultState>) -> Result<ClioPublic, String> {
+    state.get_clio_public().map_err(err)
+}
+
+#[tauri::command]
+pub fn vault_set_practice_panther(
+    state: State<'_, VaultState>,
+    input: PracticePantherConfigInput,
+) -> Result<(), String> {
+    state.set_practice_panther(input).map_err(err)
+}
+
+#[tauri::command]
+pub fn vault_get_practice_panther_public(
+    state: State<'_, VaultState>,
+) -> Result<PracticePantherPublic, String> {
+    state.get_practice_panther_public().map_err(err)
 }
 
 #[tauri::command]
@@ -1038,6 +1243,121 @@ mod tests {
         let json = serde_json::to_string(&v.get_public().unwrap()).unwrap();
         assert!(!json.contains("seal"));
         assert!(!json.contains(&v.resolve_seal_key().unwrap().iter().map(|b| b.to_string()).collect::<String>()));
+    }
+
+    // ---- Practice-management webhooks (spec §14 V1) ----------------------
+
+    fn clio_input(url: &str, key: Option<&str>) -> ClioConfigInput {
+        ClioConfigInput {
+            webhook_url: url.into(),
+            matter_id: Some("MATTER-0042".into()),
+            api_key: key.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn clio_roundtrip_hides_the_api_key() {
+        let v = temp_state();
+        v.unlock("pw");
+
+        v.set_clio(clio_input("https://example.test/hooks/lexescrow", Some("clio-token")))
+            .unwrap();
+
+        // The public shape carries addressing information but not the token.
+        let p = v.get_clio_public().unwrap();
+        assert_eq!(p.webhook_url, "https://example.test/hooks/lexescrow");
+        assert_eq!(p.matter_id, "MATTER-0042");
+        assert!(p.has_api_key);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("clio-token"));
+
+        // The internal resolver still has it, for the backend-side POST.
+        assert_eq!(v.resolve_clio().unwrap().api_key.as_deref(), Some("clio-token"));
+    }
+
+    #[test]
+    fn clio_blank_key_on_edit_keeps_existing() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_clio(clio_input("https://example.test/a", Some("original"))).unwrap();
+        // Retarget the URL without re-pasting the token.
+        v.set_clio(clio_input("https://example.test/b", None)).unwrap();
+        let c = v.resolve_clio().unwrap();
+        assert_eq!(c.api_key.as_deref(), Some("original"));
+        assert_eq!(c.webhook_url, "https://example.test/b");
+    }
+
+    #[test]
+    fn clio_blank_url_clears_the_entry() {
+        // Disabling the integration must not leave the API key behind.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_clio(clio_input("https://example.test/a", Some("secret"))).unwrap();
+        v.set_clio(clio_input("   ", None)).unwrap();
+        assert!(v.resolve_clio().is_none());
+        assert!(!v.get_clio_public().unwrap().has_api_key);
+    }
+
+    #[test]
+    fn practice_panther_roundtrip_and_persistence() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_practice_panther(PracticePantherConfigInput {
+            webhook_url: "https://example.test/pp".into(),
+            matter_id: None,
+            api_key: Some("pp-token".into()),
+        })
+        .unwrap();
+
+        let p = v.get_practice_panther_public().unwrap();
+        assert_eq!(p.webhook_url, "https://example.test/pp");
+        assert_eq!(p.matter_id, "");
+        assert!(p.has_api_key);
+
+        // Survives a lock/unlock cycle like every other entry.
+        v.lock();
+        assert!(v.resolve_practice_panther().is_none());
+        assert!(v.unlock("pw").ok);
+        assert_eq!(v.resolve_practice_panther().unwrap().api_key.as_deref(), Some("pp-token"));
+    }
+
+    #[test]
+    fn webhook_configs_never_appear_in_the_general_public_shape() {
+        // VaultPublic crosses IPC; neither token may ride along with it.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_clio(clio_input("https://example.test/a", Some("clio-token"))).unwrap();
+        v.set_practice_panther(PracticePantherConfigInput {
+            webhook_url: "https://example.test/pp".into(),
+            matter_id: None,
+            api_key: Some("pp-token".into()),
+        })
+        .unwrap();
+
+        let json = serde_json::to_string(&v.get_public().unwrap()).unwrap();
+        assert!(!json.contains("clio-token"));
+        assert!(!json.contains("pp-token"));
+    }
+
+    #[test]
+    fn a_vault_predating_the_webhook_entries_still_decrypts() {
+        // `#[serde(default)]` upgrade path — the same guarantee the seal entry
+        // needed. An older vault must open without the new fields present.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_ai(AiInput {
+            provider_name: "Claude".into(),
+            endpoint: "https://api.example.test".into(),
+            connection_type: "http".into(),
+            api_key: Some("sk-1".into()),
+        })
+        .unwrap();
+        v.lock();
+
+        assert!(v.unlock("pw").ok);
+        assert_eq!(v.resolve_ai().unwrap().api_key, "sk-1");
+        assert!(v.resolve_clio().is_none());
+        assert!(v.resolve_practice_panther().is_none());
     }
 
     #[test]

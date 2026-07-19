@@ -18,7 +18,7 @@ import { runLexGuardPipeline, type LexGuardCorrection, type Escalation } from ".
 import { type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { formatUsd, toCents, toPayloadCents } from "../lexguard/payload-diff";
-import { useSession, type EntryMode, type ManualEntryFields } from "./session";
+import { useSession, DEMO_MODE, type EntryMode, type ManualEntryFields } from "./session";
 import { oneSamplePerClass, sampleToFile } from "../lib/samples";
 import { issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 
@@ -55,7 +55,11 @@ export interface BatchItem {
   error: string | null;
 }
 
-const MAX_CONCURRENCY = 3;
+// A demo batch is a live audience watching seven documents parse at once, so
+// the concurrency cap is raised: the point of the batch screen is that the rows
+// move together. Outside demo mode it stays at 3, which is what the AI
+// providers tolerate without rate-limiting.
+const MAX_CONCURRENCY = DEMO_MODE ? 7 : 3;
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 
 function newId(prefix: string): string {

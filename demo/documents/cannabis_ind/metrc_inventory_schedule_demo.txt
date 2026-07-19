@@ -1,0 +1,138 @@
+CALIFORNIA CANNABIS TRACK-AND-TRACE (METRC)
+INVENTORY SCHEDULE AND RECONCILIATION REPORT
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+Report No.: INV-2026-0912-GLD
+Report Date: September 12, 2026
+Reporting Period: September 1, 2026 through September 12, 2026
+Inventory Snapshot As Of: September 12, 2026, 11:59 p.m. Pacific Time
+
+1. FACILITY INFORMATION
+
+    Licensee: GreenLeaf Dispensary LLC
+    License Number: C10-0001234-LIC
+    License Type: Cannabis Retailer (Storefront)
+    Metrc Facility ID: MTRC-CA-00042
+    Premises: 4500 Commerce Blvd, Demo City, CA 90001
+    Track-and-Trace Account Manager: Priya S. Okoronkwo-Vale
+    Report Prepared By: Osric N. Tambourin, Inventory Manager
+    Email: o.tambourin@example.com
+    Telephone: (555) 0121-8804
+
+2. INVENTORY SCHEDULE
+
+All packages listed below are held in the designated limited-access storage area
+of the licensed premises and are recorded in the California Cannabis
+Track-and-Trace system under Facility ID MTRC-CA-00042.
+
+BATCH / PACKAGE TAG   STRAIN / PRODUCT NAME    CATEGORY        QUANTITY    UNIT    TEST STATUS   UNIT COST    WHOLESALE VALUE
+-------------------   ----------------------   -------------   ---------   -----   -----------   ----------   ---------------
+DEMO-BATCH-001        Midnight Cascade         Flower             12,000   gram    PASSED           $4.50         $54,000.00
+DEMO-BATCH-002        Harbor Fog               Flower              9,600   gram    PASSED           $4.25         $40,800.00
+DEMO-BATCH-003        Lantern Grove            Pre-Roll            6,400   unit    PASSED           $5.75         $36,800.00
+DEMO-BATCH-004        Cobalt Meridian          Vape Cartridge      3,200   unit    PASSED          $14.50         $46,400.00
+DEMO-BATCH-005        Sablewood Citrus         Edible              4,800   unit    PASSED           $6.25         $30,000.00
+DEMO-BATCH-006        Thistledown Amber        Concentrate         2,100   gram    PASSED          $20.00         $42,000.00
+-------------------   ----------------------   -------------   ---------   -----   -----------   ----------   ---------------
+
+3. SUBTOTALS BY CATEGORY
+
+    CATEGORY            PACKAGES   TOTAL QUANTITY        WHOLESALE VALUE
+    -----------------   --------   -------------------   ---------------
+    Flower                     2   21,600 grams               $94,800.00
+    Pre-Roll                   1   6,400 units                $36,800.00
+    Vape Cartridge             1   3,200 units                $46,400.00
+    Edible                     1   4,800 units                $30,000.00
+    Concentrate                1   2,100 grams                $42,000.00
+    -----------------   --------   -------------------   ---------------
+    TOTAL                      6                             $250,000.00
+
+4. AGGREGATE VALUATION
+
+    Total Packages on Hand: 6
+    Total Flower and Concentrate Weight: 23,700 grams
+    Total Discrete Units: 14,400 units
+
+    TOTAL INVENTORY PURCHASE PRICE: $250,000.00
+
+The aggregate wholesale value stated above is the agreed inventory valuation for
+purposes of the pending change-of-ownership transaction and is stated at
+licensee's documented acquisition cost, exclusive of cannabis excise tax and
+sales tax.
+
+5. TESTING AND CERTIFICATES OF ANALYSIS
+
+Every package listed in Section 2 has completed all required laboratory testing
+and has PASSED. Certificates of analysis are on file at the licensed premises and
+are linked to the corresponding package tag in the track-and-trace system.
+
+    BATCH             TESTING LABORATORY              COA NUMBER        TEST DATE
+    ---------------   -----------------------------   ---------------   ----------
+    DEMO-BATCH-001    Verdant Peak Analytics          COA-VP-44821      07/28/2026
+    DEMO-BATCH-002    Verdant Peak Analytics          COA-VP-44903      08/04/2026
+    DEMO-BATCH-003    Stillwater Cannabis Labs        COA-SW-19077      08/11/2026
+    DEMO-BATCH-004    Stillwater Cannabis Labs        COA-SW-19146      08/19/2026
+    DEMO-BATCH-005    Verdant Peak Analytics          COA-VP-45188      08/26/2026
+    DEMO-BATCH-006    Stillwater Cannabis Labs        COA-SW-19302      09/02/2026
+
+No package listed is subject to a testing failure, a remediation order, or a
+recall notice.
+
+6. SOURCE AND CHAIN OF CUSTODY
+
+    BATCH             ORIGINATING DISTRIBUTOR         DISTRIBUTOR LICENSE   RECEIVED
+    ---------------   -----------------------------   -------------------   ----------
+    DEMO-BATCH-001    Ironwood Cannabis Distribution  C11-0004417-LIC       08/02/2026
+    DEMO-BATCH-002    Ironwood Cannabis Distribution  C11-0004417-LIC       08/09/2026
+    DEMO-BATCH-003    Cascadia Supply Partners LLC    C11-0006620-LIC       08/15/2026
+    DEMO-BATCH-004    Cascadia Supply Partners LLC    C11-0006620-LIC       08/23/2026
+    DEMO-BATCH-005    Ironwood Cannabis Distribution  C11-0004417-LIC       08/30/2026
+    DEMO-BATCH-006    Cascadia Supply Partners LLC    C11-0006620-LIC       09/06/2026
+
+All inbound transfers were received against a valid Metrc transfer manifest and
+were reconciled to the manifest at the time of receipt with no variance.
+
+7. RECONCILIATION
+
+7.1 Physical count conducted September 12, 2026 by Osric N. Tambourin, Inventory
+Manager, and witnessed by Priya S. Okoronkwo-Vale, Designated Responsible Party.
+
+7.2 Reconciliation result:
+
+    Packages per Track-and-Trace System .......................... 6
+    Packages Verified by Physical Count .......................... 6
+    Package Variance ............................................. 0
+    Quantity Variance (all packages) ......................... 0.00%
+    Value Variance ........................................... $0.00
+
+7.3 No adjustments, disposals, or waste entries were recorded during the
+reporting period. No package is flagged, quarantined, or subject to
+administrative hold.
+
+7.4 Prior full reconciliation: August 12, 2026. Result: no variance.
+
+8. CERTIFICATION
+
+The undersigned certify that the inventory schedule set forth above is a true,
+complete, and accurate statement of all cannabis goods held at the licensed
+premises as of the snapshot date, that all quantities agree to the physical count
+and to the records maintained in the California Cannabis Track-and-Trace system
+under Facility ID MTRC-CA-00042, and that the aggregate wholesale value stated in
+Section 4 is accurate.
+
+
+_______________________________       Date: September 12, 2026
+Osric N. Tambourin
+Inventory Manager
+GreenLeaf Dispensary LLC
+
+
+_______________________________       Date: September 12, 2026
+Priya S. Okoronkwo-Vale
+Designated Responsible Party and Owner of Record
+GreenLeaf Dispensary LLC
+License No. C10-0001234-LIC
+Email: p.okoronkwovale@example.com
+
+END OF INVENTORY SCHEDULE

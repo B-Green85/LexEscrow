@@ -1,0 +1,254 @@
+DISPENSARY ASSET PURCHASE AGREEMENT
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+Agreement No.: APA-2026-GLD-001
+Effective Date: September 18, 2026
+
+THIS ASSET PURCHASE AGREEMENT (this "Agreement") is entered into as of September
+18, 2026 (the "Effective Date"), by and between HORIZON HOLDINGS LLC, a California
+limited liability company with offices at 3120 Kestrel Point Way, Suite 400, Demo
+City, California 90006 ("Buyer"), and GREENLEAF DISPENSARY LLC, a California
+limited liability company holding Cannabis Retailer License No. C10-0001234-LIC,
+with its licensed premises at 4500 Commerce Blvd, Demo City, California 90001
+("Seller").
+
+RECITALS
+
+A. Seller operates a licensed storefront cannabis retail dispensary at the
+licensed premises under License No. C10-0001234-LIC issued by the California
+Department of Cannabis Control (the "Department" or "DCC"), and is registered in
+the California Cannabis Track-and-Trace system under Metrc Facility ID
+MTRC-CA-00042.
+
+B. Buyer desires to acquire the business and assets of Seller, and Seller desires
+to sell the same, upon the terms and conditions set forth herein.
+
+C. The parties acknowledge that consummation of the transactions contemplated
+herein requires the prior review and approval of the Department.
+
+1. PURCHASE AND SALE OF ASSETS
+
+1.1 Subject to the terms and conditions of this Agreement, at Closing Seller
+shall sell, convey, assign, and transfer to Buyer, and Buyer shall purchase and
+acquire from Seller, all of Seller's right, title, and interest in and to the
+following (collectively, the "Purchased Assets"):
+
+    (a) all cannabis goods inventory held at the licensed premises and recorded
+        in the track-and-trace system under Facility ID MTRC-CA-00042, as
+        itemized in the inventory schedule described in Section 3;
+
+    (b) all furniture, fixtures, equipment, display cases, safes, point-of-sale
+        hardware, and security systems located at the licensed premises;
+
+    (c) all leasehold improvements at the licensed premises;
+
+    (d) all books, records, standard operating procedures, compliance manuals,
+        customer lists, and track-and-trace records relating to the business;
+
+    (e) the trade name "GreenLeaf Dispensary" and all associated goodwill; and
+
+    (f) subject to Department approval, the ownership interests in Seller such
+        that License No. C10-0001234-LIC continues in effect under Buyer's
+        ownership and control.
+
+1.2 EXCLUDED ASSETS. The Purchased Assets exclude Seller's cash on hand at
+Closing, accounts receivable arising prior to Closing, and Seller's organizational
+minute books and tax returns, of which copies shall be provided to Buyer.
+
+2. PURCHASE PRICE
+
+2.1 The total purchase price for the Purchased Assets is TWO HUNDRED FIFTY
+THOUSAND AND 00/100 DOLLARS.
+
+    Purchase Price: $250,000.00
+
+2.2 The Purchase Price shall be paid as follows:
+
+    Deposit into Escrow upon Execution ................ $25,000.00
+    Balance Payable at Closing ....................... $225,000.00
+                                                       ------------
+    Total Purchase Price ............................. $250,000.00
+
+2.3 ESCROW. The deposit and the closing funds shall be held by Kestrel Point
+Escrow Services, 1900 Halloran Expressway, Suite 210, Demo City, California
+90006, Escrow No. KPE-26-3388. The deposit shall be refundable to Buyer in full
+if any condition precedent set forth in Section 4 is not satisfied or waived on
+or before the Outside Date.
+
+3. ALLOCATION OF PURCHASE PRICE
+
+3.1 The parties agree to allocate the Purchase Price among the Purchased Assets
+as follows for all tax and reporting purposes:
+
+    ASSET CLASS                                              ALLOCATION
+    ----------------------------------------------------   ------------
+    Class IV - Cannabis goods inventory (Metrc-tagged)      $250,000.00
+    Class V  - Furniture, fixtures, and equipment                 $0.00
+    Class V  - Leasehold improvements                             $0.00
+    Class VI - Trade name and goodwill                            $0.00
+    Class VI - Books, records, and customer lists                 $0.00
+    ----------------------------------------------------   ------------
+    TOTAL ALLOCATED PURCHASE PRICE                          $250,000.00
+
+3.2 The parties acknowledge that the Purchase Price was determined by reference
+to the aggregate documented acquisition cost of Seller's cannabis goods inventory
+as reflected in the Metrc inventory schedule, Report No. INV-2026-0912-GLD, dated
+September 12, 2026, which states a total inventory purchase price of $250,000.00.
+
+3.3 The furniture, fixtures, equipment, and leasehold improvements described in
+Sections 1.1(b) and 1.1(c) are fully depreciated on Seller's books and are
+conveyed at no additional consideration. No value is allocated to the license
+itself, which is not transferable for value and passes only by Department
+approval of the change in ownership.
+
+3.4 Each party shall report the allocation set forth in Section 3.1 consistently
+on all tax filings and shall not take any position inconsistent therewith.
+
+4. CONDITIONS PRECEDENT TO CLOSING
+
+The obligation of each party to consummate the transactions contemplated herein
+is subject to satisfaction or written waiver of each of the following conditions:
+
+4.1 STATE LICENSE TRANSFER APPROVAL. The Department of Cannabis Control shall
+have reviewed and approved the change in ownership of License No.
+C10-0001234-LIC, and the license shall remain in ACTIVE status and in good
+standing as of the Closing Date. Seller shall submit the required change-of-
+ownership notification within five (5) business days of the Effective Date and
+both parties shall cooperate diligently in responding to Department inquiries.
+
+4.2 METRC INVENTORY CONFIRMATION. A joint physical inventory count shall be
+conducted not more than three (3) business days prior to Closing and reconciled
+against the California Cannabis Track-and-Trace system under Facility ID
+MTRC-CA-00042. The count must confirm cannabis goods with an aggregate wholesale
+value of not less than $250,000.00, all packages bearing PASSED test status, and
+a package variance of zero. Any shortfall shall reduce the Purchase Price
+dollar-for-dollar.
+
+4.3 REGULATORY COMPLIANCE VERIFICATION. Seller shall deliver written confirmation
+that, as of the Closing Date: (a) no administrative hold is placed on any package
+or on the license; (b) no enforcement action, citation, accusation, or
+disciplinary proceeding is pending or threatened; (c) no fine or penalty is unpaid
+and outstanding; (d) all track-and-trace reporting obligations are current; and
+(e) all local authorizations, including Local Authorization No. DC-CANN-2024-0088
+issued by the City of Demo City, remain in full force and effect.
+
+4.4 LANDLORD CONSENT. Seller shall obtain and deliver the written consent of the
+landlord of the licensed premises to the assignment of the premises lease to
+Buyer, in form reasonably acceptable to Buyer, together with an estoppel
+certificate confirming that no default exists under the lease and stating the
+current rent and remaining term.
+
+4.5 OTHER CONDITIONS. (a) The representations and warranties of the other party
+shall be true and correct in all material respects as of the Closing Date; (b) no
+material adverse change shall have occurred in the business or the licensed
+premises; and (c) all deliverables described in Section 6 shall have been
+tendered.
+
+5. CLOSING MECHANICS
+
+5.1 CLOSING DATE. The closing of the transactions contemplated herein (the
+"Closing") shall occur within ten (10) business days following satisfaction of
+the last of the conditions set forth in Section 4, at the offices of the escrow
+holder or by electronic exchange of documents.
+
+5.2 OUTSIDE DATE. If Closing has not occurred on or before January 30, 2027 (the
+"Outside Date"), either party may terminate this Agreement by written notice,
+whereupon the escrowed deposit of $25,000.00 shall be returned to Buyer in full
+and neither party shall have further obligation, except that the confidentiality
+obligations of Section 8.3 survive.
+
+5.3 CLOSING SEQUENCE. At Closing, in the following order: (a) the joint inventory
+count under Section 4.2 shall be finalized and signed by both parties; (b) Buyer
+shall deposit the balance of $225,000.00 with the escrow holder; (c) Seller shall
+deliver the instruments described in Section 6; (d) the escrow holder shall
+disburse the Purchase Price to Seller net of prorations and escrow fees; and (e)
+the parties shall jointly record the transfer of all cannabis goods packages to
+Buyer's control within the track-and-trace system.
+
+5.4 PRORATIONS. Rent, utilities, insurance premiums, and personal property taxes
+shall be prorated as of the Closing Date on a 365-day basis.
+
+5.5 ESCROW FEES. Escrow fees shall be divided equally between Buyer and Seller.
+Each party shall bear its own legal and accounting fees.
+
+5.6 POSSESSION. Possession of the licensed premises and the Purchased Assets
+shall be delivered to Buyer at Closing.
+
+6. CLOSING DELIVERABLES
+
+6.1 Seller shall deliver at Closing: (a) a bill of sale for the Purchased Assets;
+(b) an assignment and assumption of the premises lease with landlord consent; (c)
+the final reconciled Metrc inventory schedule signed by Seller's designated
+responsible party; (d) the Department's written approval of the change in
+ownership; (e) the regulatory compliance certificate described in Section 4.3;
+(f) all keys, alarm codes, safe combinations, and track-and-trace system
+credentials; and (g) a certificate of Seller's representations and warranties
+dated as of the Closing Date.
+
+6.2 Buyer shall deliver at Closing: (a) the balance of the Purchase Price; (b) an
+assumption agreement for the premises lease; and (c) a certificate of Buyer's
+representations and warranties dated as of the Closing Date.
+
+7. REPRESENTATIONS AND WARRANTIES OF SELLER
+
+7.1 Seller represents and warrants that: (a) it is duly organized and in good
+standing under California law; (b) License No. C10-0001234-LIC is valid, active,
+and in good standing with an expiration date of January 14, 2027, and Seller has
+timely filed its renewal application; (c) Seller owns the Purchased Assets free
+and clear of all liens and encumbrances; (d) all cannabis goods included in the
+Purchased Assets have passed all required laboratory testing; (e) all
+track-and-trace entries under Facility ID MTRC-CA-00042 are accurate and current;
+(f) Seller has paid all cannabis excise, sales, and use taxes when due; and (g)
+there is no litigation pending or threatened against Seller.
+
+8. GENERAL PROVISIONS
+
+8.1 GOVERNING LAW. This Agreement is governed by the laws of the State of
+California.
+
+8.2 NO INTEREST PRIOR TO APPROVAL. Nothing in this Agreement shall be construed
+to transfer to Buyer any ownership, financial interest, or control over the
+licensed cannabis business prior to Department approval of the change in
+ownership. Seller shall retain sole control of licensed operations until Closing.
+
+8.3 CONFIDENTIALITY. Each party shall keep confidential the terms of this
+Agreement and all non-public information of the other party, except as required
+by the Department or by law. This Section survives termination for three (3)
+years.
+
+8.4 ENTIRE AGREEMENT. This Agreement constitutes the entire agreement of the
+parties concerning its subject matter and may be amended only in a writing signed
+by both parties.
+
+8.5 COUNTERPARTS. This Agreement may be executed in counterparts and delivered
+electronically, each counterpart being deemed an original.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement as of the Effective
+Date.
+
+BUYER:
+
+HORIZON HOLDINGS LLC
+
+
+_______________________________       Date: September 18, 2026
+By: Adelaide R. Winslow-Ngata
+Title: Managing Member
+Email: a.winslowngata@example.com
+Telephone: (555) 0145-3300
+
+
+SELLER:
+
+GREENLEAF DISPENSARY LLC
+
+
+_______________________________       Date: September 18, 2026
+By: Priya S. Okoronkwo-Vale
+Title: Managing Member and Designated Responsible Party
+License No. C10-0001234-LIC
+Email: p.okoronkwovale@example.com
+Telephone: (555) 0121-8801
+
+END OF AGREEMENT

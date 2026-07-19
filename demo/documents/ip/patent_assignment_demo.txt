@@ -1,0 +1,195 @@
+PATENT ASSIGNMENT AGREEMENT
+
+DEMONSTRATION DOCUMENT - FICTIONAL PARTIES - NOT A LEGAL INSTRUMENT
+
+Agreement No.: PA-2026-10999999
+Effective Date: April 2, 2026
+
+THIS PATENT ASSIGNMENT AGREEMENT (this "Assignment") is made and entered into as
+of April 2, 2026 (the "Effective Date"), by and between QUARTZ INNOVATIONS LLC, a
+limited liability company organized under the laws of the State of Delaware, with
+offices at 3300 Ironwood Commons, Suite 140, Demo City, Delaware 19804
+("Assignor"), and MERIDIAN TECH HOLDINGS, a corporation organized under the laws
+of the State of Delaware, with offices at 1725 Palisade Center Drive, Demo City,
+Delaware 19805 ("Assignee").
+
+RECITALS
+
+A. Assignor is the sole owner of record of the Assigned Patent identified in
+Section 1, together with all rights, title, and interest therein.
+
+B. Assignee desires to acquire all right, title, and interest in and to the
+Assigned Patent, and Assignor desires to assign the same, upon the terms and
+conditions set forth herein.
+
+NOW, THEREFORE, in consideration of the mutual covenants contained herein and
+other good and valuable consideration, the receipt and sufficiency of which are
+hereby acknowledged, the parties agree as follows:
+
+1. ASSIGNED PATENT
+
+1.1 The patent assigned hereunder (the "Assigned Patent") is:
+
+    Patent Number: US 10,999,999 B2
+    Title: Adaptive Thermal Regulation System for Modular Enclosures
+    Issue Date: January 14, 2025
+    Application Serial No.: 17/884,206
+    Filing Date: March 3, 2022
+    Named Inventors: Sylvane O. Kettridge and Amara J. Blackwood-Reyes
+    Current Assignee of Record: Quartz Innovations LLC
+
+1.2 The Assigned Patent covers a closed-loop thermal management system employing
+distributed sensing and predictive control for modular electronic enclosures,
+including the apparatus, method, and control system claims set forth in claims 1
+through 24 thereof.
+
+2. ASSIGNMENT
+
+2.1 Assignor hereby irrevocably sells, assigns, transfers, and conveys to
+Assignee, its successors and assigns, the entire right, title, and interest
+throughout the world in and to the Assigned Patent, including:
+
+    (a) the Assigned Patent and all inventions and improvements disclosed
+        therein;
+
+    (b) all reissues, reexaminations, extensions, continuations,
+        continuations-in-part, divisionals, and substitutions thereof;
+
+    (c) all foreign counterparts and all rights of priority under the
+        international conventions;
+
+    (d) all causes of action, whether accrued before or after the Effective Date,
+        for past, present, and future infringement, together with the right to
+        sue for and collect all damages, profits, and other remedies; and
+
+    (e) all rights to license, sublicense, enforce, and otherwise exploit the
+        foregoing.
+
+2.2 Assignor authorizes and requests the Commissioner for Patents to record this
+Assignment and to issue any and all patents arising from the foregoing to
+Assignee as assignee of the entire right, title, and interest.
+
+3. CONSIDERATION
+
+3.1 In consideration of the assignment made in Section 2, Assignee shall pay to
+Assignor the sum of THREE HUNDRED FORTY THOUSAND AND 00/100 DOLLARS.
+
+    Assignment Price: $340,000.00
+
+3.2 The Assignment Price shall be payable as follows:
+
+    Deposit into Escrow upon Execution ................ $34,000.00
+    Balance Payable at Recordation .................... $306,000.00
+                                                       ------------
+    Total Assignment Price ............................ $340,000.00
+
+3.3 The escrowed deposit shall be held by Palisade Fiduciary & Escrow Co., 220
+Cantwell Row, Demo City, Delaware 19806, Escrow No. PFE-26-7714, and released to
+Assignor concurrently with the balance upon confirmation of recordation of this
+Assignment with the United States Patent and Trademark Office.
+
+4. ONGOING ROYALTY
+
+4.1 In addition to the Assignment Price, Assignee shall pay to Assignor a
+continuing royalty equal to four percent (4%) of Net Revenue actually received by
+Assignee from the commercialization, licensing, or sublicensing of the Assigned
+Patent during the Royalty Term.
+
+4.2 "Net Revenue" means gross amounts invoiced and actually collected by Assignee
+attributable to products or licenses covered by one or more valid claims of the
+Assigned Patent, less returns, allowances, sales and use taxes, and freight and
+insurance separately stated on the invoice.
+
+4.3 The "Royalty Term" means the period commencing on the Effective Date and
+ending upon expiration of the last-to-expire valid claim of the Assigned Patent.
+
+4.4 Royalty payments shall be made quarterly, within forty-five (45) days
+following the close of each calendar quarter, accompanied by a written statement
+setting forth Net Revenue for the quarter and the calculation of the amount due.
+
+4.5 MINIMUM ANNUAL ROYALTY. Notwithstanding actual Net Revenue, Assignee shall
+pay Assignor a minimum royalty of $12,000.00 per calendar year commencing with
+calendar year 2027, creditable against royalties otherwise payable for that year.
+
+4.6 Where Assignee sublicenses the Assigned Patent to a third party, the royalty
+payable to Assignor on amounts received from such sublicense shall be calculated
+at a rate of 4.5% of the consideration received by Assignee under the sublicense,
+payable on the same quarterly schedule set forth in Section 4.4.
+
+4.7 AUDIT. Assignor may, not more than once per calendar year and upon thirty
+(30) days' prior written notice, cause an independent certified public accountant
+to examine Assignee's records relating to royalties for the preceding two (2)
+calendar years. The audit shall be at Assignor's expense unless it discloses an
+underpayment exceeding five percent (5%) for the period examined, in which case
+Assignee shall bear the reasonable cost of the audit and shall promptly remit the
+underpaid amount together with interest at nine percent (9%) per annum.
+
+5. REPRESENTATIONS AND WARRANTIES OF ASSIGNOR
+
+5.1 Assignor represents and warrants that: (a) it is the sole and exclusive owner
+of the entire right, title, and interest in the Assigned Patent; (b) the Assigned
+Patent is free and clear of all liens, security interests, licenses, and
+encumbrances; (c) Assignor has full right and authority to enter into this
+Assignment; (d) all maintenance fees due as of the Effective Date have been
+timely paid; (e) no action, proceeding, opposition, interference, reexamination,
+or post-grant review is pending or, to Assignor's knowledge, threatened with
+respect to the Assigned Patent; and (f) Assignor has not received any written
+notice alleging that the Assigned Patent is invalid or unenforceable.
+
+5.2 Assignor has disclosed to Assignee all prior art known to Assignor that is
+material to the patentability of the claims of the Assigned Patent.
+
+6. FURTHER ASSURANCES
+
+6.1 Assignor shall, at Assignee's request and expense, execute all further
+documents and take all further actions reasonably necessary to perfect, record,
+maintain, defend, or enforce Assignee's rights in the Assigned Patent, including
+the execution of any confirmatory assignment or power of attorney.
+
+6.2 Assignor shall cooperate in good faith with Assignee in the prosecution of
+any pending or future application claiming priority to the Assigned Patent and in
+any enforcement action, and shall make the named inventors reasonably available
+for such purposes.
+
+7. GENERAL PROVISIONS
+
+7.1 Governing Law. This Assignment is governed by the laws of the State of
+Delaware without regard to conflict-of-laws principles.
+
+7.2 Entire Agreement. This Assignment constitutes the entire agreement of the
+parties concerning its subject matter and supersedes all prior understandings. It
+may be amended only in a writing signed by both parties.
+
+7.3 Binding Effect. This Assignment binds and inures to the benefit of the
+parties and their respective successors and permitted assigns.
+
+7.4 Counterparts. This Assignment may be executed in counterparts and delivered
+electronically, each counterpart being deemed an original.
+
+IN WITNESS WHEREOF, the parties have executed this Assignment as of the Effective
+Date.
+
+ASSIGNOR:
+
+QUARTZ INNOVATIONS LLC
+
+
+_______________________________       Date: April 2, 2026
+By: Sylvane O. Kettridge
+Title: Managing Member
+Email: s.kettridge@example.com
+Telephone: (555) 0155-6600
+
+
+ASSIGNEE:
+
+MERIDIAN TECH HOLDINGS
+
+
+_______________________________       Date: April 2, 2026
+By: Rosalind T. Okonkwo-Baird
+Title: Chief Executive Officer
+Email: r.okonkwobaird@example.com
+Telephone: (555) 0166-2100
+
+END OF ASSIGNMENT

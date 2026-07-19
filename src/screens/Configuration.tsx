@@ -3,11 +3,19 @@ import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
 import type {
   AiPublic,
+  ClioPublic,
   DocuSignPublic,
+  PracticePantherPublic,
   SmtpPublic,
   TwilioPublic,
   VaultPublic,
 } from "../lib/vaultTypes";
+import {
+  sendClioWebhook,
+  sendPracticePantherWebhook,
+  CLIO_TEST_EVENT,
+  PRACTICE_PANTHER_TEST_TRIGGER,
+} from "../lib/integrations";
 
 const PROVIDER_SUGGESTIONS = ["Claude", "GPT-4o", "Gemini", "Custom"];
 
@@ -597,6 +605,250 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
   );
 }
 
+// ── Practice-management integrations (spec §14 V1) ───────────────────────────
+
+/**
+ * Shared card for the two webhook integrations.
+ *
+ * Clio and PracticePanther differ only in their event vocabulary — which is a
+ * property of the *payload*, not of the configuration — so a second near-
+ * identical card would be duplication with no compensating clarity. The vendor
+ * differences that matter to the operator (the test event name, the URL
+ * placeholder) are passed in.
+ */
+function WebhookCard({
+  title,
+  subtitle,
+  data,
+  urlPlaceholder,
+  testLabel,
+  onSave,
+  onTest,
+  refresh,
+}: {
+  title: string;
+  subtitle: string;
+  data: ClioPublic | PracticePantherPublic | null;
+  urlPlaceholder: string;
+  testLabel: string;
+  onSave: (input: { webhookUrl: string; matterId?: string; apiKey?: string }) => Promise<void>;
+  onTest: (input: { webhookUrl: string; matterId?: string; apiKey?: string }) => Promise<string>;
+  refresh: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [matterId, setMatterId] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  const configured = !!data?.webhookUrl;
+
+  const openEdit = () => {
+    setWebhookUrl(data?.webhookUrl ?? "");
+    setMatterId(data?.matterId ?? "");
+    setApiKey("");
+    setErr(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await onSave({
+        webhookUrl,
+        matterId: matterId || undefined,
+        apiKey: apiKey || undefined,
+      });
+      setEditing(false);
+      setTestResult(null);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  /**
+   * Fire a test webhook.
+   *
+   * Tests the values currently on screen rather than what is stored, so an
+   * operator can validate a URL and key *before* committing them — and, more
+   * importantly, so the stored API key never has to be read back out of the
+   * vault to be exercised.
+   */
+  const test = async () => {
+    setTestResult("Sending…");
+    try {
+      setTestResult(
+        await onTest({
+          webhookUrl: editing ? webhookUrl : (data?.webhookUrl ?? ""),
+          matterId: (editing ? matterId : data?.matterId) || undefined,
+          apiKey: apiKey || undefined,
+        }),
+      );
+    } catch (e) {
+      setTestResult(`❌ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const disable = async () => {
+    // A blank URL clears the entry in both vault implementations, so the token
+    // does not linger after the integration is switched off.
+    await onSave({ webhookUrl: "" });
+    setTestResult(null);
+    refresh();
+  };
+
+  return (
+    <CardShell title={title} subtitle={subtitle}>
+      {!editing ? (
+        <div>
+          {configured ? (
+            <dl className="space-y-1.5 text-sm">
+              <Row k="Webhook URL" v={data?.webhookUrl ?? ""} mono />
+              <Row k="Matter ID" v={data?.matterId || "not set"} />
+              <Row k="API key" v={data?.hasApiKey ? "•••••••• stored" : "not set"} />
+            </dl>
+          ) : (
+            <p className="text-sm text-slate-400">
+              No webhook configured — escrow events are not forwarded.
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn btn-secondary" onClick={openEdit}>
+              {configured ? "Edit" : "Add"}
+            </button>
+            <button className="btn btn-secondary" disabled={!configured} onClick={test}>
+              Test
+            </button>
+            {configured && (
+              <button className="btn btn-secondary text-red-600" onClick={disable}>
+                Delete
+              </button>
+            )}
+          </div>
+          {testResult && (
+            <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
+              {testResult}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="label">Webhook URL</label>
+            <input
+              className="input"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              placeholder={urlPlaceholder}
+            />
+          </div>
+          <div>
+            <label className="label">Matter ID (optional)</label>
+            <input
+              className="input"
+              value={matterId}
+              onChange={(e) => setMatterId(e.target.value)}
+              placeholder="associates events with an existing matter"
+            />
+          </div>
+          <div>
+            <label className="label">API key</label>
+            <SecretInput
+              value={apiKey}
+              onChange={setApiKey}
+              placeholder={data?.hasApiKey ? "leave blank to keep existing" : "bearer token"}
+            />
+          </div>
+          <Err msg={err} />
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary" disabled={busy || !webhookUrl} onClick={save}>
+              Save
+            </button>
+            <button className="btn btn-secondary" disabled={!webhookUrl} onClick={test}>
+              Test — {testLabel}
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+          {testResult && (
+            <div className="rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
+              {testResult}
+            </div>
+          )}
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+/** Human-readable outcome of a test webhook. */
+function describeTest(result: { success: boolean; statusCode?: number; error?: string }): string {
+  if (result.success) return `✅ Delivered — HTTP ${result.statusCode ?? 200}`;
+  return `❌ ${result.error ?? `HTTP ${result.statusCode ?? "error"}`}`;
+}
+
+function ClioCard({ data, refresh }: { data: ClioPublic | null; refresh: () => void }) {
+  return (
+    <WebhookCard
+      title="Clio"
+      subtitle="Matter updates posted as escrow events occur"
+      data={data}
+      urlPlaceholder="https://app.clio.com/webhooks/…"
+      testLabel={CLIO_TEST_EVENT}
+      refresh={refresh}
+      onSave={(input) => backend.setClio(input)}
+      onTest={async (input) =>
+        describeTest(
+          await sendClioWebhook(input, {
+            event: CLIO_TEST_EVENT,
+            sessionId: "test",
+            assetClass: "legal",
+            timestamp: new Date().toISOString(),
+            data: { source: "LexEscrow configuration test" },
+          }),
+        )
+      }
+    />
+  );
+}
+
+function PracticePantherCard({
+  data,
+  refresh,
+}: {
+  data: PracticePantherPublic | null;
+  refresh: () => void;
+}) {
+  return (
+    <WebhookCard
+      title="PracticePanther"
+      subtitle="Matter triggers fired as escrow events occur"
+      data={data}
+      urlPlaceholder="https://api.practicepanther.com/webhooks/…"
+      testLabel={PRACTICE_PANTHER_TEST_TRIGGER}
+      refresh={refresh}
+      onSave={(input) => backend.setPracticePanther(input)}
+      onTest={async (input) =>
+        describeTest(
+          await sendPracticePantherWebhook(input, {
+            trigger: PRACTICE_PANTHER_TEST_TRIGGER,
+            source: "lexescrow",
+            session_id: "test",
+            occurred_at: new Date().toISOString(),
+            metadata: { source: "LexEscrow configuration test" },
+          }),
+        )
+      }
+    />
+  );
+}
+
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -674,6 +926,8 @@ export function Configuration() {
   const [unlocked, setUnlocked] = useState(false);
   const [pub, setPub] = useState<VaultPublic | null>(null);
   const [docusign, setDocusign] = useState<DocuSignPublic | null>(null);
+  const [clio, setClio] = useState<ClioPublic | null>(null);
+  const [practicePanther, setPracticePanther] = useState<PracticePantherPublic | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -683,14 +937,18 @@ export function Configuration() {
     setExists(status.exists);
     setUnlocked(status.unlocked);
     if (status.unlocked) {
-      // DocuSign lives outside VaultPublic — its public shape is deliberately
-      // narrower (no key, no user ID, account ID reduced to a hint).
-      const [vaultPub, dsPub] = await Promise.all([
+      // DocuSign and the two webhook integrations live outside VaultPublic —
+      // each has its own deliberately narrower public shape.
+      const [vaultPub, dsPub, clioPub, ppPub] = await Promise.all([
         backend.vaultGetPublic(),
         backend.getDocuSignPublic(),
+        backend.getClioPublic(),
+        backend.getPracticePantherPublic(),
       ]);
       setPub(vaultPub);
       setDocusign(dsPub);
+      setClio(clioPub);
+      setPracticePanther(ppPub);
     }
   };
 
@@ -723,6 +981,8 @@ export function Configuration() {
     setUnlocked(false);
     setPub(null);
     setDocusign(null);
+    setClio(null);
+    setPracticePanther(null);
   };
 
   return (
@@ -772,6 +1032,19 @@ export function Configuration() {
           <SmtpCard data={pub?.smtp ?? null} refresh={refresh} />
           <TwilioCard data={pub?.twilio ?? null} refresh={refresh} />
           <DocuSignCard data={docusign} refresh={refresh} />
+
+          <div className="pt-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Integrations
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Escrow lifecycle events are forwarded to your practice-management system. Delivery is
+              best-effort — a failed webhook never blocks a settlement.
+            </p>
+          </div>
+          <ClioCard data={clio} refresh={refresh} />
+          <PracticePantherCard data={practicePanther} refresh={refresh} />
+
           <ChangePassword />
         </div>
       )}

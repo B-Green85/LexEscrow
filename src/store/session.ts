@@ -36,6 +36,8 @@ import type {
 import { normalizeName } from "../lexguard/anchor-matcher";
 import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
+import { fireIntegrationWebhooks } from "../lib/integrations";
+import { downloadAuditReport as downloadAuditReportPdf } from "../lib/export/audit-pdf-export";
 import {
   buildConditions,
   evaluateSummary,
@@ -148,6 +150,19 @@ const manualProvider: AIParserProvider = {
 };
 
 const OPERATOR_DEFAULT = "paralegal@lawfirm.com";
+
+/**
+ * Demo build flag (spec Task 11).
+ *
+ * Switches the *externally-facing* seams to their mock counterparts — eSign
+ * provider, adapter URLs, on-chain tx format — and nothing else. Everything
+ * between: ArtifactGuard hashing, the LexGuard pipeline, the audit chain, the
+ * condition engine, the release paths, runs exactly the production code. A demo
+ * that took a different path through the workflow would not be demonstrating
+ * the product.
+ */
+export const DEMO_MODE =
+  import.meta.env?.VITE_DEMO_MODE === "true" || import.meta.env?.MODE === "demo";
 
 const emptyAnchors: TrustAnchors = {
   attorneyBarNumber: "",
@@ -337,7 +352,7 @@ function newId(prefix: string): string {
   return `${prefix}-${rand}`;
 }
 
-interface SessionState {
+export interface SessionState {
   screen: Screen;
   prevScreen: Screen;
   operator: string;
@@ -469,6 +484,8 @@ interface SessionState {
   applyHumanCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
   applyHumanOverride: (override: HumanOverrideInput) => Promise<void>;
   buildAuditReport: () => Promise<string>;
+  /** Printable audit report (spec §14 V1) — opens the browser print dialog. */
+  downloadAuditReport: () => Promise<void>;
 }
 
 function stepStatus(steps: ProcessingStep[], key: string, status: StepStatus): ProcessingStep[] {
@@ -489,6 +506,35 @@ export const useSession = create<SessionState>((set, get) => {
 
   const setStep = (key: string, status: StepStatus) =>
     set((s) => ({ steps: stepStatus(s.steps, key, status) }));
+
+  /**
+   * Report a lifecycle event to whichever practice-management systems are
+   * configured (spec §14 V1).
+   *
+   * Fire-and-forget by contract. Every call site awaits this — so ordering
+   * stays deterministic and tests are not racing background work — but nothing
+   * downstream branches on the outcome, and no failure propagates. The escrow
+   * event being reported has already happened and is already on the audit
+   * chain; a practice-management server that is down cannot retract it.
+   *
+   * Under Tauri the configs come back without their API keys and delivery is
+   * delegated to the Rust backend, which holds the credential. That is why the
+   * transport is swapped in here rather than the key being fetched: the vault's
+   * invariant is that secrets do not cross IPC, and webhooks are not an
+   * exception to it.
+   */
+  const notifyIntegrations = async (event: string) => {
+    try {
+      const configs = await backend.getIntegrationConfigs();
+      if (!configs.clio && !configs.practicePanther) return;
+      await fireIntegrationWebhooks(event, get(), {
+        ...configs,
+        ...(backend.isTauri() && { transport: backend.sendIntegrationWebhook }),
+      });
+    } catch (e) {
+      console.error("integration webhooks failed", event, e);
+    }
+  };
 
   /**
    * HUMAN_CORRECTION (spec §32) — the officer restated a value the nudge loop
@@ -827,6 +873,7 @@ export const useSession = create<SessionState>((set, get) => {
           client_name: anchors.clientFullLegalName,
         });
         setStep("hash", "done");
+        await notifyIntegrations("session.created");
 
         // 1b) AnchorReceipt — seal the fingerprint, anchor it on-chain, issue
         // the portable receipt (spec §8). Runs after `createSession` because
@@ -854,6 +901,7 @@ export const useSession = create<SessionState>((set, get) => {
             overall_status: receipt.summary.overallStatus,
           });
           setStep("anchor", "done");
+          await notifyIntegrations("receipt.issued");
         } catch (e) {
           // The commonest cause is a locked vault — the seal key is per-install
           // and lives there, so a locked vault means this install cannot
@@ -1185,11 +1233,21 @@ export const useSession = create<SessionState>((set, get) => {
       const priorStatus = new Map(previous.map((c) => [c.id, c.status]));
       const changed = conditions.filter((c) => priorStatus.get(c.id) !== c.status);
 
+      const wasAllMet = get().conditionSummary.allMet;
+      const summary = evaluateSummary(conditions);
+
       set({
         conditions,
-        conditionSummary: evaluateSummary(conditions),
+        conditionSummary: summary,
         conditionsUpdatedAt: new Date().toISOString(),
       });
+
+      // Only on the *transition*. The sweep runs every thirty seconds and this
+      // stays true once reached, so an unguarded call would re-notify the
+      // firm's practice-management system twice a minute until settlement.
+      if (summary.allMet && !wasAllMet) {
+        void notifyIntegrations("conditions.met");
+      }
 
       if (changed.length === 0) return;
 
@@ -1259,6 +1317,7 @@ export const useSession = create<SessionState>((set, get) => {
           officer_identity: get().operator,
           block_timestamp: new Date().toISOString(),
         });
+        await notifyIntegrations("funds.deposited");
       })();
 
       get().startConditionPolling();
@@ -1748,6 +1807,9 @@ export const useSession = create<SessionState>((set, get) => {
       const path = payload.recommendedPath;
       await backend.setExecutionPath(sessionId, path);
       await backend.updateSessionState(sessionId, "APPROVED");
+      // The human authorization moment — the officer has re-acknowledged and
+      // the artifact re-verified, so this is where liability transfers.
+      await notifyIntegrations("review.approved");
 
       // ── Path B — ArbitrationEscrow (spec §6) ─────────────────────────────
       // Lock the escrow and stop. Nothing settles until the multi-sig
@@ -1823,6 +1885,7 @@ export const useSession = create<SessionState>((set, get) => {
 
       set({ execution: { phase: "done", path, txHash, clientCents, firmCents, notifications } });
       set({ busy: false });
+      await notifyIntegrations("settlement.complete");
     },
 
     // ── Path B — Arbitration signatures (spec §6) ───────────────────────────
@@ -1854,6 +1917,10 @@ export const useSession = create<SessionState>((set, get) => {
           execution: { ...get().execution, phase: "done", txHash: txHash ?? null, clientCents, notifications },
           busy: false,
         });
+        // Path B settles too — from the client's side the money moved, so the
+        // same event fires as for Path A rather than the integration silently
+        // seeing nothing for two of the three release paths.
+        await notifyIntegrations("settlement.complete");
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         set({ error: `Arbitration signature failed: ${message}`, busy: false });
@@ -1940,6 +2007,9 @@ export const useSession = create<SessionState>((set, get) => {
           execution: { ...get().execution, phase: "done", txHash, clientCents, notifications },
           busy: false,
         });
+        // Fires on the final release only — `complete` above gates this — so a
+        // three-stage schedule notifies once, not once per milestone.
+        await notifyIntegrations("settlement.complete");
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         set({ error: `Milestone release failed: ${message}`, busy: false });
@@ -2104,6 +2174,25 @@ export const useSession = create<SessionState>((set, get) => {
         null,
         2,
       );
+    },
+
+    /**
+     * Printable audit report (spec §14 V1).
+     *
+     * Sits alongside `buildAuditReport`, which produces the machine-readable
+     * JSON, rather than replacing it: the JSON is for systems that re-verify
+     * the chain, the PDF is for the humans and counterparties who need to read
+     * what happened. Neither substitutes for the other.
+     */
+    downloadAuditReport: async () => {
+      const { sessionId } = get();
+      if (!sessionId) return;
+      try {
+        await downloadAuditReportPdf(sessionId, useSession);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `Audit report export failed: ${message}` });
+      }
     },
   };
 });

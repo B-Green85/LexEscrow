@@ -57,6 +57,40 @@ export interface VaultPublic {
   twilio: TwilioPublic | null;
 }
 
+/**
+ * Practice-management webhook public views (spec §14 V1).
+ *
+ * The webhook URL and matter ID are shown in full — they are addressing
+ * information the operator typed and needs to confirm — while the API key is a
+ * bearer token for a firm's matter data and is reduced to a presence flag, as
+ * every other secret in the vault is.
+ */
+export interface ClioPublic {
+  webhookUrl: string;
+  matterId: string;
+  hasApiKey: boolean;
+}
+
+export interface PracticePantherPublic {
+  webhookUrl: string;
+  matterId: string;
+  hasApiKey: boolean;
+}
+
+/** Setter payload — a blank `apiKey` keeps the stored one, as elsewhere. A
+ *  blank `webhookUrl` clears the entry, which is how the UI disables it. */
+export interface ClioConfigInput {
+  webhookUrl: string;
+  matterId?: string;
+  apiKey?: string;
+}
+
+export interface PracticePantherConfigInput {
+  webhookUrl: string;
+  matterId?: string;
+  apiKey?: string;
+}
+
 export interface AiInput {
   providerName: string;
   endpoint: string;
