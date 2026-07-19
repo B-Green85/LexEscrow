@@ -1,0 +1,422 @@
+// @vitest-environment jsdom
+/**
+ * Embedded signing tests (spec §22).
+ *
+ * The panel is the one place in the eSign layer with real lifecycle — an async
+ * URL fetch, a WebView it owns, and a Tauri subscription it must tear down — so
+ * unlike the other screen tests these mount into a DOM rather than rendering to
+ * a string. The Tauri surface (`listen`, `WebviewWindow`) and the provider are
+ * mocked; everything between them is the real component.
+ *
+ * The assertions that matter most are the ones about *not* completing: a
+ * cancelled ceremony, a declined one, and an event belonging to a different
+ * envelope must all leave the signature uncollected, because `onComplete` is
+ * what runs the certificate pipeline and fulfills the condition.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { renderToString } from "react-dom/server";
+import { createElement } from "react";
+import type { EmbeddedSigningResult, eSignProvider } from "../lib/esign";
+
+// Hoisted so the `vi.mock` factories below — which are lifted above the
+// imports — can reach the same objects the tests assert against.
+const tauri = vi.hoisted(() => ({
+  handler: null as ((event: { payload: EmbeddedSigningResult }) => void) | null,
+  unlisten: null as ReturnType<typeof vi.fn> | null,
+  windows: [] as Array<{ label: string; options: Record<string, unknown>; close: ReturnType<typeof vi.fn> }>,
+}));
+
+const esign = vi.hoisted(() => ({
+  provider: null as Partial<eSignProvider> | null,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (_name: string, cb: (e: { payload: EmbeddedSigningResult }) => void) => {
+    tauri.handler = cb;
+    tauri.unlisten = vi.fn();
+    return tauri.unlisten;
+  }),
+}));
+
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  WebviewWindow: class {
+    close = vi.fn(async () => {});
+    constructor(label: string, options: Record<string, unknown>) {
+      tauri.windows.push({ label, options, close: this.close });
+    }
+  },
+}));
+
+vi.mock("../lib/backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/backend")>()),
+  isTauri: () => true,
+}));
+
+vi.mock("../lib/esign", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/esign")>()),
+  resolveESignProvider: async () => esign.provider,
+}));
+
+import { EmbeddedSigningPanel, isSigningComplete, outcomeFromUrl } from "./EmbeddedSigningPanel";
+import { ConditionDefinitionView, type ConditionDefinitionViewProps } from "../screens/ConditionDefinition";
+import { anchorsToTrustAnchors, ASSET_CLASSES, emptyAnchorsFor, type AssetClass } from "../lib/assetClasses";
+
+const SIGNING_URL = "https://demo.docusign.net/Signing/StartInSession?t=abc123";
+const ENVELOPE_ID = "DEMO-ENV-1700000000";
+const SIGNER = {
+  email: "officer@lawfirm.example",
+  name: "Dana Whitfield",
+  clientUserId: "paralegal@lawfirm.example-officer@lawfirm.example",
+};
+
+type GetUrl = NonNullable<eSignProvider["getEmbeddedSigningUrl"]>;
+
+let getEmbeddedSigningUrl: Mock<GetUrl>;
+let onComplete: Mock<(event: string) => void>;
+let onCancel: Mock<() => void>;
+
+beforeEach(() => {
+  tauri.handler = null;
+  tauri.unlisten = null;
+  tauri.windows = [];
+
+  getEmbeddedSigningUrl = vi.fn<GetUrl>(async () => SIGNING_URL);
+  onComplete = vi.fn<(event: string) => void>();
+  onCancel = vi.fn<() => void>();
+
+  esign.provider = { providerName: () => "DocuSign", getEmbeddedSigningUrl };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+function mount() {
+  return render(
+    <EmbeddedSigningPanel
+      envelopeId={ENVELOPE_ID}
+      signerEmail={SIGNER.email}
+      signerName={SIGNER.name}
+      clientUserId={SIGNER.clientUserId}
+      onComplete={onComplete}
+      onCancel={onCancel}
+    />,
+  );
+}
+
+/** Mount and wait until the ceremony is open and listening. */
+async function mountAndOpen() {
+  const result = mount();
+  await screen.findByText(/Signing in progress/);
+  return result;
+}
+
+/** Deliver a callback event as the loopback listener would. */
+async function emit(event: string, envelopeId: string = ENVELOPE_ID) {
+  await act(async () => {
+    tauri.handler?.({ payload: { envelopeId, event } });
+  });
+}
+
+// ── Mount and URL acquisition ────────────────────────────────────────────────
+
+describe("EmbeddedSigningPanel — opening the ceremony", () => {
+  it("shows a loading state on mount", () => {
+    mount();
+    // Synchronous assertion: the URL fetch has not resolved yet.
+    expect(screen.getByText(/Preparing signing session/)).toBeTruthy();
+  });
+
+  it("calls getEmbeddedSigningUrl on mount with the signer's identity", async () => {
+    mount();
+    await waitFor(() => expect(getEmbeddedSigningUrl).toHaveBeenCalledOnce());
+    expect(getEmbeddedSigningUrl).toHaveBeenCalledWith(
+      ENVELOPE_ID,
+      SIGNER.email,
+      SIGNER.name,
+      SIGNER.clientUserId,
+    );
+  });
+
+  it("shows the waiting state while the signing panel is open", async () => {
+    await mountAndOpen();
+    expect(screen.getByText(/complete the signature in the DocuSign window/)).toBeTruthy();
+    expect(screen.getByText(ENVELOPE_ID)).toBeTruthy();
+  });
+
+  it("opens a WebviewWindow at the signing URL", async () => {
+    await mountAndOpen();
+
+    expect(tauri.windows).toHaveLength(1);
+    expect(tauri.windows[0].label).toBe("esign-panel");
+    expect(tauri.windows[0].options.url).toBe(SIGNING_URL);
+    expect(tauri.windows[0].options.title).toBe("Sign Document — LexEscrow");
+    expect(tauri.windows[0].options.width).toBe(900);
+    expect(tauri.windows[0].options.height).toBe(700);
+  });
+
+  it("subscribes to the completion event before opening the window", async () => {
+    // A demo ceremony completes on redirect, which can beat a subscription
+    // registered afterwards — the panel would then wait on an event already
+    // fired.
+    await mountAndOpen();
+    expect(tauri.handler).not.toBeNull();
+  });
+
+  it("surfaces an error when the provider cannot host an in-app ceremony", async () => {
+    esign.provider = { providerName: () => "HelloSign" };
+    mount();
+
+    await screen.findByText(/In-app signing unavailable/);
+    expect(screen.getByText(/does not support in-app signing/)).toBeTruthy();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("surfaces an error when minting the signing URL fails", async () => {
+    esign.provider = {
+      providerName: () => "DocuSign",
+      getEmbeddedSigningUrl: vi.fn<GetUrl>(async () => {
+        throw new Error("DocuSign refused the embedded signing view (HTTP 400)");
+      }),
+    };
+    mount();
+
+    await screen.findByText(/In-app signing unavailable/);
+    expect(screen.getByText(/HTTP 400/)).toBeTruthy();
+  });
+});
+
+// ── Outcomes ─────────────────────────────────────────────────────────────────
+
+describe("EmbeddedSigningPanel — outcomes", () => {
+  it("calls onComplete when signing_complete is received", async () => {
+    await mountAndOpen();
+    await emit("signing_complete");
+
+    expect(onComplete).toHaveBeenCalledWith("signing_complete");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("calls onCancel when a cancel event is received", async () => {
+    await mountAndOpen();
+    await emit("cancel");
+
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("calls onCancel when the signer declines", async () => {
+    await mountAndOpen();
+    await emit("decline");
+
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it.each(["session_timeout", "ttl_expired", "viewing_complete"])(
+    "treats %s as no signature collected",
+    async (event) => {
+      await mountAndOpen();
+      await emit(event);
+
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("closes the signing window once the ceremony resolves", async () => {
+    await mountAndOpen();
+    const webview = tauri.windows[0];
+    await emit("signing_complete");
+
+    expect(webview.close).toHaveBeenCalled();
+    expect(tauri.unlisten).toHaveBeenCalled();
+  });
+
+  it("ignores an event belonging to a different envelope", async () => {
+    await mountAndOpen();
+    await emit("signing_complete", "SOME-OTHER-ENVELOPE");
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    // Still waiting on its own envelope.
+    expect(screen.getByText(/Signing in progress/)).toBeTruthy();
+  });
+
+  it("resolves only once when the same outcome arrives twice", async () => {
+    // A duplicate would re-run the certificate pipeline against an envelope
+    // already registered on-chain.
+    await mountAndOpen();
+    await emit("signing_complete");
+    await emit("signing_complete");
+
+    expect(onComplete).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the ceremony from the main window's Cancel button", async () => {
+    await mountAndOpen();
+    const webview = tauri.windows[0];
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Cancel" }).click();
+    });
+
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(webview.close).toHaveBeenCalled();
+  });
+
+  it("unsubscribes on unmount so a later event cannot resolve a dead panel", async () => {
+    const { unmount } = await mountAndOpen();
+    unmount();
+
+    expect(tauri.unlisten).toHaveBeenCalled();
+    expect(tauri.windows[0].close).toHaveBeenCalled();
+  });
+});
+
+// ── Outcome classification ───────────────────────────────────────────────────
+
+describe("isSigningComplete", () => {
+  it("accepts only signing_complete", () => {
+    expect(isSigningComplete("signing_complete")).toBe(true);
+    for (const e of ["cancel", "decline", "session_timeout", "ttl_expired", "viewing_complete"]) {
+      expect(isSigningComplete(e)).toBe(false);
+    }
+  });
+
+  it("rejects an unrecognized event rather than defaulting to complete", () => {
+    expect(isSigningComplete("")).toBe(false);
+    expect(isSigningComplete("some_new_docusign_event")).toBe(false);
+  });
+});
+
+describe("outcomeFromUrl", () => {
+  it("reads the outcome the demo provider encodes in the signing URL", () => {
+    expect(
+      outcomeFromUrl("http://localhost:55432/esign-complete?event=signing_complete&envelopeId=E-1"),
+    ).toEqual({ event: "signing_complete", envelopeId: "E-1" });
+  });
+
+  it("returns null for a real ceremony URL that carries no outcome", () => {
+    expect(outcomeFromUrl(SIGNING_URL)).toBeNull();
+    expect(outcomeFromUrl("http://localhost:55432/esign-complete?event=cancel")).toBeNull();
+    expect(outcomeFromUrl("")).toBeNull();
+  });
+});
+
+// ── Condition Definition — both routes to a signature ────────────────────────
+
+function conditionProps(cls: AssetClass = "legal"): ConditionDefinitionViewProps {
+  const raw = emptyAnchorsFor(cls);
+  for (const field of ASSET_CLASSES[cls].anchorFields) {
+    if (raw[field.key]) continue;
+    raw[field.key] =
+      field.type === "email"
+        ? `${field.key.toLowerCase()}@example.com`
+        : field.type === "money"
+          ? "100000"
+          : field.type === "state"
+            ? "California"
+            : `${field.label} Value`;
+  }
+  return {
+    assetClass: cls,
+    anchors: anchorsToTrustAnchors(cls, raw),
+    rawAnchors: raw,
+    artifact: { filename: "agreement.pdf", hash: "sha256:" + "a".repeat(64), size: 2048 },
+    eSignEnvelopes: [],
+    eSignPolling: false,
+    busy: false,
+    error: null,
+    barActive: true,
+    cannaVerifyConditions: null,
+    cannaVerifyRunning: false,
+    onSendForSignature: async () => {},
+    onRunCannaVerify: () => {},
+    onProceed: () => {},
+    onSignInApp: async () => null,
+  };
+}
+
+describe("ConditionDefinition — Send Email and Sign Here", () => {
+  it("offers a Sign Here button for each required signer", () => {
+    const html = renderToString(createElement(ConditionDefinitionView, conditionProps()));
+
+    expect(html).toContain("Sign Here");
+    // Named for the signer it acts on, so two signers cannot share one button.
+    expect(html).toContain("Sign in LexEscrow as");
+  });
+
+  it("offers a Send Email button alongside Sign Here", () => {
+    const html = renderToString(createElement(ConditionDefinitionView, conditionProps()));
+
+    expect(html).toContain("Send Email");
+    expect(html).toContain("Sign Here");
+    // The bulk email drawer is unchanged — the per-signer buttons are additive.
+    expect(html).toContain("Send for Signature");
+  });
+
+  it("shows one Send Email and one Sign Here per signer", () => {
+    const html = renderToString(createElement(ConditionDefinitionView, conditionProps("real_estate")));
+    const sendEmail = html.split("Send Email").length - 1;
+    const signHere = html.split("Sign Here").length - 1;
+
+    expect(sendEmail).toBeGreaterThan(1); // real estate has buyer + seller
+    expect(sendEmail).toBe(signHere);
+  });
+
+  it("replaces both buttons with a Signed in app badge once the envelope completes", () => {
+    const props = conditionProps();
+    const signerEmail = props.anchors.clientEmail;
+    const html = renderToString(
+      createElement(ConditionDefinitionView, {
+        ...props,
+        eSignEnvelopes: [
+          {
+            envelopeId: ENVELOPE_ID,
+            sessionId: "wf-1",
+            documentLabel: "agreement.pdf",
+            signers: [
+              { name: "Dana Whitfield", email: signerEmail, role: "Client", routingOrder: 1 },
+            ],
+            status: "completed",
+            sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
+            embeddedSigning: true,
+            embeddedSignerName: "Dana Whitfield",
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("✅ Signed in app");
+  });
+
+  it("does not claim in-app signature for an envelope still in flight", () => {
+    const props = conditionProps();
+    const html = renderToString(
+      createElement(ConditionDefinitionView, {
+        ...props,
+        eSignEnvelopes: [
+          {
+            envelopeId: ENVELOPE_ID,
+            sessionId: "wf-1",
+            documentLabel: "agreement.pdf",
+            signers: [
+              { name: "Dana Whitfield", email: props.anchors.clientEmail, role: "Client", routingOrder: 1 },
+            ],
+            status: "sent",
+            sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
+            embeddedSigning: true,
+          },
+        ],
+      }),
+    );
+
+    expect(html).not.toContain("Signed in app");
+    expect(html).toContain("Sign Here");
+  });
+});

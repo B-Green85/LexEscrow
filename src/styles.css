@@ -159,6 +159,11 @@
     @apply px-6 py-3 text-base;
   }
 
+  /* Inline actions that sit inside a list row rather than terminating a card. */
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+
   .label {
     @apply mb-1.5 block text-sm font-medium text-slate-300;
   }

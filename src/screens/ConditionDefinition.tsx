@@ -20,9 +20,18 @@ import { useMemo, useState } from "react";
 import { useSession } from "../store/session";
 import { descriptorFor, ASSET_CLASSES, type AssetClass } from "../lib/assetClasses";
 import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
-import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
+import { EmbeddedSigningPanel } from "../components/EmbeddedSigningPanel";
+import type {
+  EmbeddedSigningTarget,
+  ESignEnvelope,
+  ESignSigner,
+  ESignStatus,
+} from "../lib/esign";
 import type { TrustAnchors } from "../lexguard/types";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
+
+/** Re-exported so callers of this screen need only one import. */
+export type { EmbeddedSigningTarget } from "../lib/esign";
 
 // ── Signer derivation ────────────────────────────────────────────────────────
 
@@ -131,6 +140,75 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
         {value}
       </span>
     </div>
+  );
+}
+
+// ── Signer row ───────────────────────────────────────────────────────────────
+
+/**
+ * One required signer, with both routes to their signature.
+ *
+ * The choice is about *who the signer is*, not about convenience. An external
+ * party — client, counterparty, opposing counsel — gets an email, because
+ * LexEscrow has no standing to authenticate them and DocuSign's own identity
+ * assurance is the point. An internal party is already authenticated to this
+ * machine and this vault, so routing them through an inbox adds a hop and
+ * proves nothing extra.
+ *
+ * Both routes converge: same envelope, same certificate, same AnchorReceipt
+ * registration, same AnchorMatcher check.
+ */
+function SignerRow({
+  signer,
+  signedInApp,
+  busy,
+  preparing,
+  canSendEmail,
+  canSignInApp,
+  onSendEmail,
+  onSignHere,
+}: {
+  signer: ESignSigner;
+  signedInApp: boolean;
+  busy: boolean;
+  preparing: boolean;
+  canSendEmail: boolean;
+  canSignInApp: boolean;
+  onSendEmail: () => void;
+  onSignHere: () => void;
+}) {
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 py-1 text-sm">
+      <span className="min-w-0">
+        <span className="text-slate-800">{signer.name}</span>{" "}
+        <span className="truncate text-xs text-slate-500" title={signer.email}>
+          · {signer.role} · {signer.email}
+        </span>
+      </span>
+
+      {signedInApp ? (
+        <span className="badge badge-emerald">✅ Signed in app</span>
+      ) : (
+        <span className="flex shrink-0 gap-1.5">
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={!canSendEmail || busy}
+            onClick={onSendEmail}
+            title={`Email a DocuSign envelope to ${signer.email}`}
+          >
+            Send Email
+          </button>
+          <button
+            className="btn btn-primary btn-sm"
+            disabled={!canSignInApp || busy || preparing}
+            onClick={onSignHere}
+            title={`Sign in LexEscrow as ${signer.name} — no email sent`}
+          >
+            {preparing ? "Opening…" : "Sign Here"}
+          </button>
+        </span>
+      )}
+    </li>
   );
 }
 
@@ -284,6 +362,17 @@ export interface ConditionDefinitionViewProps {
   ) => Promise<void>;
   onRunCannaVerify: () => void;
   onProceed: () => void;
+  /**
+   * Raise an embedded envelope for one internal signer and return what the
+   * signing panel needs. Optional so the view stays renderable — and testable —
+   * without the store; absent, "Sign Here" is inert rather than missing, since
+   * hiding the route entirely would misrepresent what the screen supports.
+   */
+  onSignInApp?: (signer: ESignSigner) => Promise<EmbeddedSigningTarget | null>;
+  /** In-app signature collected — hand off to the certificate pipeline. */
+  onEmbeddedSigningComplete?: (envelopeId: string, event: string) => void;
+  /** Ceremony ended without a signature (cancelled, declined, timed out). */
+  onEmbeddedSigningCancel?: (envelopeId: string) => void;
 }
 
 /** Store container — resolves state and hands it to the pure view. */
@@ -303,6 +392,9 @@ export function ConditionDefinition() {
     cannaVerifyRunning,
     runCannaVerify,
     navigateToEscrowMonitor,
+    signInApp,
+    completeEmbeddedSigning,
+    cancelEmbeddedSigning,
   } = useSession();
 
   return (
@@ -321,6 +413,11 @@ export function ConditionDefinition() {
       onSendForSignature={sendForSignature}
       onRunCannaVerify={() => void runCannaVerify()}
       onProceed={() => navigateToEscrowMonitor()}
+      onSignInApp={(signer) => signInApp(artifact?.filename ?? "Escrow document", signer)}
+      onEmbeddedSigningComplete={(envelopeId, event) =>
+        void completeEmbeddedSigning(envelopeId, event)
+      }
+      onEmbeddedSigningCancel={(envelopeId) => void cancelEmbeddedSigning(envelopeId)}
     />
   );
 }
@@ -340,6 +437,9 @@ export function ConditionDefinitionView({
   onSendForSignature,
   onRunCannaVerify,
   onProceed,
+  onSignInApp,
+  onEmbeddedSigningComplete,
+  onEmbeddedSigningCancel,
 }: ConditionDefinitionViewProps) {
   const descriptor = descriptorFor(assetClass);
   const signers = useMemo(
@@ -349,6 +449,36 @@ export function ConditionDefinitionView({
 
   const [releaseDate, setReleaseDate] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /** The open signing ceremony, if any. */
+  const [signingTarget, setSigningTarget] = useState<EmbeddedSigningTarget | null>(null);
+  /** Email of the signer whose envelope is being raised right now. */
+  const [preparing, setPreparing] = useState<string | null>(null);
+
+  /**
+   * Who has already signed in-app. Derived from the envelopes rather than
+   * tracked locally, so the badge reflects a completed certificate pipeline
+   * and not merely a ceremony the officer walked through.
+   */
+  const signedInApp = useMemo(
+    () =>
+      new Set(
+        eSignEnvelopes
+          .filter((e) => e.embeddedSigning && e.status === "completed")
+          .flatMap((e) => e.signers.map((s) => s.email.trim().toLowerCase())),
+      ),
+    [eSignEnvelopes],
+  );
+
+  const signHere = async (signer: ESignSigner) => {
+    if (!onSignInApp) return;
+    setPreparing(signer.email);
+    try {
+      const target = await onSignInApp(signer);
+      if (target) setSigningTarget(target);
+    } finally {
+      setPreparing(null);
+    }
+  };
   const [subject, setSubject] = useState(
     `Signature required — ${descriptor.displayName} escrow release`,
   );
@@ -448,14 +578,30 @@ export function ConditionDefinitionView({
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 Required signers
               </div>
-              <ul className="mt-1.5 space-y-1">
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Send Email for external parties · Sign Here for internal parties, signed in
+                LexEscrow with no email sent.
+              </p>
+              <ul className="mt-1.5 divide-y divide-[#2D3A4A]">
                 {signers.map((s) => (
-                  <li key={s.email} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-slate-800">{s.name}</span>
-                    <span className="truncate text-xs text-slate-500" title={s.email}>
-                      {s.role} · {s.email}
-                    </span>
-                  </li>
+                  <SignerRow
+                    key={s.email}
+                    signer={s}
+                    signedInApp={signedInApp.has(s.email.trim().toLowerCase())}
+                    busy={busy}
+                    preparing={preparing === s.email}
+                    canSendEmail={documentReady}
+                    canSignInApp={documentReady && !!onSignInApp}
+                    onSendEmail={() =>
+                      void onSendForSignature(
+                        artifact?.filename ?? "Escrow document",
+                        [s],
+                        subject,
+                        message,
+                      )
+                    }
+                    onSignHere={() => void signHere(s)}
+                  />
                 ))}
               </ul>
 
@@ -550,6 +696,23 @@ export function ConditionDefinitionView({
           Confirm Conditions &amp; Proceed to Escrow
         </button>
       </div>
+
+      {signingTarget && (
+        <EmbeddedSigningPanel
+          envelopeId={signingTarget.envelopeId}
+          signerEmail={signingTarget.signer.email}
+          signerName={signingTarget.signer.name}
+          clientUserId={signingTarget.clientUserId}
+          onComplete={(event) => {
+            setSigningTarget(null);
+            onEmbeddedSigningComplete?.(signingTarget.envelopeId, event);
+          }}
+          onCancel={() => {
+            setSigningTarget(null);
+            onEmbeddedSigningCancel?.(signingTarget.envelopeId);
+          }}
+        />
+      )}
     </div>
   );
 }

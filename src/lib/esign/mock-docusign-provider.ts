@@ -13,7 +13,7 @@
  * at different moments advance independently — exactly as real ones would.
  */
 
-import type { ESignSigner, ESignStatus, eSignProvider } from "./types";
+import { EMBEDDED_RETURN_URL, type ESignSigner, type ESignStatus, type eSignProvider } from "./types";
 
 export const DEMO_ENVELOPE_PREFIX = "DEMO-ENV-";
 export const DEMO_CERTIFICATE_TEXT = "DEMO-CERTIFICATE-PDF";
@@ -68,6 +68,27 @@ export class MockDocuSignProvider implements eSignProvider {
       throw new Error(`Unknown envelope: ${envelopeId}`);
     }
     return new TextEncoder().encode(DEMO_CERTIFICATE_TEXT);
+  }
+
+  /**
+   * A signing URL that *is* its own completion callback.
+   *
+   * The demo has no DocuSign ceremony to render, so the URL points straight at
+   * the return endpoint carrying `signing_complete`. Opening it walks the exact
+   * production path — loopback listener → `esign:embedded_complete` → the
+   * certificate pipeline — with the human ceremony collapsed to zero, rather
+   * than short-circuiting to a fake completion the real flow never takes.
+   */
+  async getEmbeddedSigningUrl(
+    envelopeId: string,
+    _signerEmail: string,
+    _signerName: string,
+    _clientUserId: string,
+  ): Promise<string> {
+    if (!this.envelopes.has(envelopeId)) {
+      throw new Error(`Unknown envelope: ${envelopeId}`);
+    }
+    return `${EMBEDDED_RETURN_URL}?event=signing_complete&envelopeId=${encodeURIComponent(envelopeId)}`;
   }
 
   /** Test/demo helper — forget every tracked envelope. */

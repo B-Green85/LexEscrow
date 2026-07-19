@@ -9,7 +9,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "../backend";
-import { toESignStatus, type ESignSigner, type ESignStatus, type eSignProvider } from "./types";
+import {
+  EMBEDDED_RETURN_URL,
+  toESignStatus,
+  type ESignSigner,
+  type ESignStatus,
+  type eSignProvider,
+} from "./types";
 
 /** Thrown when the provider is used outside the desktop shell. */
 export class TauriRequiredError extends Error {
@@ -58,5 +64,30 @@ export class DocuSignProvider implements eSignProvider {
     requireTauri();
     const bytes = await invoke<number[]>("docusign_get_certificate", { envelopeId });
     return Uint8Array.from(bytes);
+  }
+
+  /**
+   * Recipient view URL for an embedded signer (spec §22).
+   *
+   * The URL is single-use and expires in minutes, so it is fetched when the
+   * signing window opens and never stored. `returnUrl` is fixed rather than a
+   * parameter: it must match the loopback listener the backend actually runs,
+   * and a caller-supplied value could only ever point somewhere that cannot
+   * report completion.
+   */
+  async getEmbeddedSigningUrl(
+    envelopeId: string,
+    signerEmail: string,
+    signerName: string,
+    clientUserId: string,
+  ): Promise<string> {
+    requireTauri();
+    return invoke<string>("docusign_get_embedded_signing_url", {
+      envelopeId,
+      signerEmail,
+      signerName,
+      clientUserId,
+      returnUrl: EMBEDDED_RETURN_URL,
+    });
   }
 }

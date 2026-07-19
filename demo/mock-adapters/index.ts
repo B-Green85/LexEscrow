@@ -31,7 +31,7 @@ console.log(
   [
     "",
     "  LexEscrow mock adapters running",
-    `    · CA State Bar   http://localhost:${CALBAR_PORT}/calbar/:barNumber`,
+    `    · CA State Bar   http://localhost:${CALBAR_PORT}/verify/:barNumber (BarVerify)`,
     `    · Metrc / SoS    http://localhost:${METRC_PORT}/v2/...`,
     `    · DocuSign       http://localhost:${DOCUSIGN_PORT}/v2.1/accounts/:accountId/envelopes`,
     "",

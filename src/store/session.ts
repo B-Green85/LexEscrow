@@ -25,8 +25,14 @@ import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
 import { runCannaVerify as runCannaVerifyAdapters } from "../lib/cannaverify";
 import type { CannaVerifyConditions } from "../lib/cannaverify/types";
-import { resolveESignProvider, isTerminal } from "../lib/esign";
-import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
+import { verifyBar, CALBAR_DEFAULT_BASE_URL, type BarVerifyResult } from "../lib/adapters";
+import { resolveESignProvider, isTerminal, embeddedClientUserId } from "../lib/esign";
+import type {
+  EmbeddedSigningTarget,
+  ESignEnvelope,
+  ESignSigner,
+  ESignStatus,
+} from "../lib/esign";
 import { normalizeName } from "../lexguard/anchor-matcher";
 import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
@@ -225,9 +231,46 @@ export function mergeConditions(previous: Condition[], next: Condition[]): Condi
  * timestamp fields have their own columns, and a spread-minus-known-keys would
  * silently start duplicating any field added to `Condition` later.
  */
-function conditionMetadata(c: Condition): string {
+/**
+ * Fold the BarVerify verdict into the condition the builder produced.
+ *
+ * `buildConditions` knows only the boolean — it takes `barVerified` and has no
+ * vocabulary for *why*. That is the right shape for a builder shared across
+ * seven asset classes, but it loses exactly what an officer staring at a failed
+ * bar condition needs to know: whether the attorney is suspended, the adapter
+ * was unreachable, or the state simply is not implemented yet. Those call for
+ * three different responses and only one of them concerns the attorney.
+ *
+ * So the reason is attached here, on the way out of the builder, rather than
+ * pushed down into it.
+ */
+function withBarVerifyDetail(
+  conditions: Condition[],
+  result: BarVerifyResult | null,
+): Condition[] {
+  if (!result) return conditions;
+
+  const attribution = [result.attorneyName, result.firmName].filter(Boolean).join(" · ");
+  return conditions.map((c) =>
+    c.type === "bar_verify"
+      ? {
+          ...c,
+          description: attribution ? `${result.detail} (${attribution})` : result.detail,
+          eventDescription: result.detail,
+          creAdapterUrl: CALBAR_DEFAULT_BASE_URL,
+          ...(c.status === "failed" && { failureReason: result.detail }),
+        }
+      : c,
+  );
+}
+
+function conditionMetadata(c: Condition, barVerify: BarVerifyResult | null = null): string {
   return JSON.stringify({
     assetClass: c.assetClass,
+    // The whole adapter verdict, not just the boolean — the persisted
+    // condition row is what an audit reads back, and "active" without the
+    // registry that said so proves nothing.
+    ...(c.type === "bar_verify" && barVerify && { barVerify }),
     ...(c.documentHash !== undefined && { documentHash: c.documentHash }),
     ...(c.documentLabel !== undefined && { documentLabel: c.documentLabel }),
     ...(c.releaseDate !== undefined && { releaseDate: c.releaseDate }),
@@ -320,6 +363,12 @@ interface SessionState {
   corrections: LexGuardCorrection[];
   escalation: Escalation | null;
   barActive: boolean | null;
+  /**
+   * The full adapter verdict behind `barActive`. Kept alongside the boolean
+   * rather than replacing it because the condition metadata and the audit
+   * trail need the reason, while the settlement gate only needs the answer.
+   */
+  barVerifyResult: BarVerifyResult | null;
   steps: ProcessingStep[];
   execution: ExecutionState;
   error: string | null;
@@ -399,6 +448,10 @@ interface SessionState {
     subject: string,
     message: string,
   ) => Promise<void>;
+  /** Raise an embedded envelope for one internal signer (spec §22). */
+  signInApp: (documentLabel: string, signer: ESignSigner) => Promise<EmbeddedSigningTarget | null>;
+  completeEmbeddedSigning: (envelopeId: string, event: string) => Promise<void>;
+  cancelEmbeddedSigning: (envelopeId: string) => Promise<void>;
   startESignPolling: () => void;
   stopESignPolling: () => void;
   pollAllEnvelopes: () => Promise<void>;
@@ -570,6 +623,7 @@ export const useSession = create<SessionState>((set, get) => {
     corrections: [],
     escalation: null,
     barActive: null,
+    barVerifyResult: null,
     steps: initialSteps(),
     execution: {
       phase: "idle",
@@ -679,6 +733,7 @@ export const useSession = create<SessionState>((set, get) => {
         corrections: [],
         escalation: null,
         barActive: null,
+        barVerifyResult: null,
         steps: initialSteps(),
         execution: { phase: "idle", path: null, txHash: null, clientCents: 0n, firmCents: 0n, notifications: [] },
         error: null,
@@ -818,20 +873,45 @@ export const useSession = create<SessionState>((set, get) => {
           await log("anchor_receipt_failed", { error: message });
         }
 
-        // 2) Verify attorney (simulated CA State Bar check) — both modes.
+        // 2) Verify attorney standing via the BarVerify adapter — both modes.
+        //
+        // Replaces the format check this step used to do. A regex over the bar
+        // number proves the number is *shaped* like a bar number; it cannot
+        // tell an active attorney from a suspended one, which is the only
+        // question that matters before releasing a retainer.
         setStep("bar", "active");
-        const active = /^\d{5,8}$/.test(anchors.attorneyBarNumber.trim()) && anchors.state === "California";
-        set({ barActive: active });
+        const barResult = await verifyBar(
+          anchors.attorneyBarNumber,
+          anchors.state,
+          CALBAR_DEFAULT_BASE_URL,
+        );
+        const active = barResult.status === "active";
+        set({ barActive: active, barVerifyResult: barResult });
         await log("bar_verification_result", {
           active,
-          source: "ca-state-bar (simulated)",
+          status: barResult.status,
+          state: barResult.state,
+          source: `BarVerify adapter — ${barResult.state}`,
+          detail: barResult.detail,
+          attorney_name: barResult.attorneyName ?? null,
+          admission_date: barResult.admissionDate ?? null,
+          firm_name: barResult.firmName ?? null,
+          // The number itself stays out of the audit payload — the last four
+          // are enough to correlate an entry without recording the identifier.
           bar_last4: anchors.attorneyBarNumber.slice(-4),
         });
         if (!active) {
           setStep("bar", "error");
           set({
-            error:
-              "Attorney bar number could not be verified as active with the California State Bar. Processing halted.",
+            // The adapter's own detail, not a generic message: "scaffold",
+            // "unreachable" and "suspended" call for three different actions
+            // from the officer, and only one of them is the attorney's problem.
+            // Trailing punctuation is normalized because `detail` comes from
+            // fifty different adapters and cannot be assumed to end cleanly.
+            error: `Attorney bar verification did not pass — ${barResult.detail.replace(
+              /[.\s]*$/,
+              "",
+            )}. Processing halted.`,
             busy: false,
           });
           await backend.updateSessionState(sessionId, "FAILED");
@@ -1020,20 +1100,24 @@ export const useSession = create<SessionState>((set, get) => {
         eSignEnvelopes,
         cannaVerifyConditions,
         barActive,
+        barVerifyResult,
         conditions: previous,
       } = get();
       if (!sessionId || !payload) return;
 
-      const built = buildConditions({
-        sessionId,
-        assetClass,
-        payload,
-        rawAnchors,
-        anchorReceipt,
-        eSignEnvelopes,
-        cannaVerifyConditions,
-        barVerified: barActive,
-      });
+      const built = withBarVerifyDetail(
+        buildConditions({
+          sessionId,
+          assetClass,
+          payload,
+          rawAnchors,
+          anchorReceipt,
+          eSignEnvelopes,
+          cannaVerifyConditions,
+          barVerified: barActive,
+        }),
+        barVerifyResult,
+      );
       const conditions = mergeConditions(previous, built);
 
       set({
@@ -1054,7 +1138,7 @@ export const useSession = create<SessionState>((set, get) => {
               label: c.label,
               description: c.description,
               status: c.status,
-              metadataJson: conditionMetadata(c),
+              metadataJson: conditionMetadata(c, barVerifyResult),
             });
           } catch (e) {
             console.error("condition save failed", c.id, e);
@@ -1078,20 +1162,24 @@ export const useSession = create<SessionState>((set, get) => {
         eSignEnvelopes,
         cannaVerifyConditions,
         barActive,
+        barVerifyResult,
         conditions: previous,
       } = get();
       if (!sessionId || !payload || previous.length === 0) return;
 
-      const built = buildConditions({
-        sessionId,
-        assetClass,
-        payload,
-        rawAnchors,
-        anchorReceipt,
-        eSignEnvelopes,
-        cannaVerifyConditions,
-        barVerified: barActive,
-      });
+      const built = withBarVerifyDetail(
+        buildConditions({
+          sessionId,
+          assetClass,
+          payload,
+          rawAnchors,
+          anchorReceipt,
+          eSignEnvelopes,
+          cannaVerifyConditions,
+          barVerified: barActive,
+        }),
+        barVerifyResult,
+      );
       const conditions = mergeConditions(previous, built);
 
       const priorStatus = new Map(previous.map((c) => [c.id, c.status]));
@@ -1388,6 +1476,114 @@ export const useSession = create<SessionState>((set, get) => {
         const message = e instanceof Error ? e.message : String(e);
         set({ error: `Send for signature failed: ${message}`, busy: false });
       }
+    },
+
+    /**
+     * Raise an envelope for in-app signing by one internal party (spec §22).
+     *
+     * Differs from `sendForSignature` in exactly one respect that matters: the
+     * signer carries a `clientUserId`, which makes them embedded. DocuSign then
+     * sends no email and the ceremony is reachable only through a recipient
+     * view URL — which is what the returned target lets the panel request.
+     *
+     * The envelope is otherwise ordinary. It is persisted, polled and completed
+     * by the same code as an email envelope, so an in-app signature ends up
+     * with the same certificate, the same AnchorReceipt registration and the
+     * same AnchorMatcher verdict. Nothing downstream needs to know which route
+     * collected it.
+     */
+    signInApp: async (documentLabel, signer) => {
+      const { file, sessionId, operator } = get();
+      if (!sessionId) {
+        set({ error: "No active session — load a document first." });
+        return null;
+      }
+      if (!file) {
+        set({ error: "No document loaded to sign." });
+        return null;
+      }
+
+      set({ busy: true, error: null });
+      try {
+        const clientUserId = embeddedClientUserId(operator, signer.email);
+        const embeddedSigner: ESignSigner = { ...signer, clientUserId };
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const provider = await resolveESignProvider();
+
+        // Subject and message are still sent: DocuSign requires a subject on
+        // every envelope, and this one surfaces in the account's envelope list
+        // and audit history even though no email is dispatched.
+        const envelopeId = await provider.sendEnvelope(
+          sessionId,
+          bytes,
+          documentLabel,
+          [embeddedSigner],
+          `Signature required — ${documentLabel}`,
+          `In-app signature by ${signer.name} (${signer.role}).`,
+        );
+
+        await backend.saveDocusignEnvelope({
+          envelopeId,
+          sessionId,
+          documentLabel,
+          signersJson: JSON.stringify([embeddedSigner]),
+        });
+
+        const envelope: ESignEnvelope = {
+          envelopeId,
+          sessionId,
+          documentLabel,
+          signers: [embeddedSigner],
+          status: "sent",
+          sentAt: new Date().toISOString(),
+          embeddedSigning: true,
+          embeddedSignerName: signer.name,
+        };
+        set((s) => ({ eSignEnvelopes: [...s.eSignEnvelopes, envelope], busy: false }));
+
+        await log("esign_embedded_opened", {
+          envelope_id: envelopeId,
+          provider: provider.providerName(),
+          document_label: documentLabel,
+          signer: { name: signer.name, email: signer.email, role: signer.role },
+          client_user_id: clientUserId,
+          officer_identity: operator,
+        });
+
+        // Polling continues alongside the callback. The redirect is the fast
+        // path, not the only one: if the signer closes the window before it
+        // fires, the 30-second poll still catches the completion.
+        get().startESignPolling();
+
+        return { envelopeId, clientUserId, signer: embeddedSigner };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        set({ error: `In-app signing failed: ${message}`, busy: false });
+        return null;
+      }
+    },
+
+    /**
+     * The in-app ceremony reported a signature. Runs the identical completion
+     * pipeline as an email signature — certificate → ArtifactGuard hash →
+     * AnchorReceipt registration → AnchorMatcher.
+     */
+    completeEmbeddedSigning: async (envelopeId, event) => {
+      await log("esign_embedded_completed", { envelope_id: envelopeId, event });
+      await get().handleESignCompletion(envelopeId);
+    },
+
+    /**
+     * The ceremony ended without a signature. The envelope is deliberately left
+     * in flight rather than voided: a cancelled ceremony is an abandoned
+     * attempt, not a refusal to sign, and the officer can reopen it or send the
+     * document by email instead. Polling keeps tracking it either way.
+     */
+    cancelEmbeddedSigning: async (envelopeId) => {
+      await log("esign_embedded_cancelled", {
+        envelope_id: envelopeId,
+        officer_identity: get().operator,
+      });
     },
 
     /** Begin (or continue) the 30-second poll. Idempotent. */

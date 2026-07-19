@@ -46,6 +46,14 @@ const SCOPE: &str = "signature impersonation";
 
 /// One signer on an envelope. `routing_order` drives DocuSign's sequential
 /// signing — equal values sign in parallel, ascending values sign in turn.
+///
+/// `client_user_id` is what separates the two signing modes. Absent, DocuSign
+/// owns the signer: it emails them a link and they sign on DocuSign's site —
+/// the external-party flow. Present, the signer becomes *captive* to this
+/// application: DocuSign sends no email at all and the only way to reach the
+/// signing ceremony is a recipient view URL minted by
+/// [`get_embedded_signing_url`], which is the internal-party flow (law firm
+/// staff, escrow officer) rendered inside LexEscrow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ESignSigner {
@@ -53,6 +61,10 @@ pub struct ESignSigner {
     pub email: String,
     pub role: String,
     pub routing_order: u32,
+    /// `#[serde(default)]` keeps external signers wire-compatible — the
+    /// frontend omits the field entirely for email recipients.
+    #[serde(default)]
+    pub client_user_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,6 +282,18 @@ fn file_extension(document_name: &str) -> String {
         .unwrap_or_else(|| "pdf".to_string())
 }
 
+/// A signer's embedded id, or `None` if they are an email recipient.
+///
+/// Whitespace-only is treated as absent — see the call site in
+/// [`create_envelope`] for why a blank id is worse than no id.
+fn embedded_client_user_id(signer: &ESignSigner) -> Option<&str> {
+    signer
+        .client_user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+}
+
 /// Create and send an envelope. Returns the DocuSign envelope ID.
 pub async fn create_envelope(
     account_id: &str,
@@ -292,14 +316,23 @@ pub async fn create_envelope(
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            json!({
+            let mut recipient = json!({
                 // recipientId is envelope-local and 1-based.
                 "recipientId": (i + 1).to_string(),
                 "name": s.name,
                 "email": s.email,
                 "roleName": s.role,
                 "routingOrder": s.routing_order.to_string(),
-            })
+            });
+            // Only emit the key when it carries a value. An *empty string*
+            // clientUserId is not the same as an absent one to DocuSign — it
+            // marks the recipient embedded, suppressing their email while
+            // leaving no id a recipient view can be requested against, which
+            // strands the signer with no route to the document.
+            if let Some(id) = embedded_client_user_id(s) {
+                recipient["clientUserId"] = json!(id);
+            }
+            recipient
         })
         .collect();
 
@@ -369,6 +402,89 @@ pub async fn get_envelope_status(
     let parsed: EnvelopeStatus = serde_json::from_str(&text)
         .map_err(|e| format!("DocuSign status response was not valid JSON: {e}"))?;
     Ok(parsed.status.to_ascii_lowercase())
+}
+
+/// Mint a recipient view (embedded signing) URL for one signer.
+///
+/// The returned URL is single-use and short-lived — DocuSign expires it in
+/// minutes and burns it on first load — so it is fetched at the moment the
+/// signing window opens and never cached or persisted.
+///
+/// `client_user_id` must be byte-identical to the one the signer was created
+/// with; DocuSign matches on it to locate the recipient, and a mismatch reads
+/// as "no such recipient" rather than as an authorization error.
+pub async fn get_embedded_signing_url(
+    account_id: &str,
+    base_uri: &str,
+    access_token: &str,
+    envelope_id: &str,
+    signer_email: &str,
+    signer_name: &str,
+    client_user_id: &str,
+    return_url: &str,
+) -> Result<String, String> {
+    if client_user_id.trim().is_empty() {
+        return Err("An embedded signer needs a client user ID.".into());
+    }
+    if signer_email.trim().is_empty() || signer_name.trim().is_empty() {
+        return Err("An embedded signer needs both a name and an email address.".into());
+    }
+
+    let url = format!(
+        "{}/{}/views/recipient",
+        envelopes_url(base_uri, account_id),
+        envelope_id
+    );
+    let body = json!({
+        // "none" delegates identity assurance to LexEscrow: the officer is
+        // already authenticated to the desktop app and the vault. DocuSign's
+        // own SMS/phone/KBA options are for recipients it cannot vouch for.
+        "authenticationMethod": "none",
+        "clientUserId": client_user_id,
+        "email": signer_email,
+        "returnUrl": return_url,
+        "userName": signer_name,
+    });
+
+    let resp = http()
+        .post(url)
+        .bearer_auth(access_token)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("DocuSign recipient view request failed: {e}"))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("DocuSign recipient view response was unreadable: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "DocuSign refused the embedded signing view (HTTP {status}): {text}"
+        ));
+    }
+
+    parse_signing_url(&text)
+}
+
+/// Pull the signing URL out of a recipient-view response.
+///
+/// The live API answers `{"url": ...}`; the local mock adapter answers
+/// `{"signingUrl": ...}` because that is the name the rest of LexEscrow uses.
+/// Accepting both means the same code path serves demo mode and production.
+fn parse_signing_url(body: &str) -> Result<String, String> {
+    let parsed: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| format!("DocuSign recipient view response was not valid JSON: {e}"))?;
+
+    parsed
+        .get("url")
+        .or_else(|| parsed.get("signingUrl"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "DocuSign recipient view response carried no signing URL.".to_string())
 }
 
 /// Download the certificate of completion PDF. Only meaningful once the
@@ -460,6 +576,33 @@ pub async fn docusign_poll_status(
 ) -> Result<String, String> {
     let (creds, token) = authed(&vault).await?;
     get_envelope_status(&creds.account_id, &creds.base_uri, &token, &envelope_id).await
+}
+
+/// Mint an embedded signing URL for an internal party.
+///
+/// The signer must already exist on the envelope with this exact
+/// `client_user_id` — see [`ESignSigner::client_user_id`].
+#[tauri::command]
+pub async fn docusign_get_embedded_signing_url(
+    vault: State<'_, VaultState>,
+    envelope_id: String,
+    signer_email: String,
+    signer_name: String,
+    client_user_id: String,
+    return_url: String,
+) -> Result<String, String> {
+    let (creds, token) = authed(&vault).await?;
+    get_embedded_signing_url(
+        &creds.account_id,
+        &creds.base_uri,
+        &token,
+        &envelope_id,
+        &signer_email,
+        &signer_name,
+        &client_user_id,
+        &return_url,
+    )
+    .await
 }
 
 /// Certificate of completion PDF bytes. Call only once status is `completed`.
@@ -563,5 +706,99 @@ mod tests {
             envelopes_url("https://demo.docusign.net/", "acct-1"),
             "https://demo.docusign.net/restapi/v2.1/accounts/acct-1/envelopes"
         );
+    }
+
+    // ── Embedded signing (§22) ──────────────────────────────────────────────
+
+    fn signer_with(client_user_id: Option<&str>) -> ESignSigner {
+        ESignSigner {
+            name: "Dana Whitfield".into(),
+            email: "dana@example.com".into(),
+            role: "Escrow Officer".into(),
+            routing_order: 1,
+            client_user_id: client_user_id.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn external_signers_carry_no_client_user_id() {
+        assert_eq!(embedded_client_user_id(&signer_with(None)), None);
+    }
+
+    #[test]
+    fn blank_client_user_ids_are_treated_as_absent() {
+        // A blank id would suppress the signer's email while leaving no id to
+        // request a recipient view against — strictly worse than no id at all.
+        assert_eq!(embedded_client_user_id(&signer_with(Some(""))), None);
+        assert_eq!(embedded_client_user_id(&signer_with(Some("   "))), None);
+    }
+
+    #[test]
+    fn embedded_signers_expose_a_trimmed_client_user_id() {
+        assert_eq!(
+            embedded_client_user_id(&signer_with(Some(" officer@firm.test-ENV1 "))),
+            Some("officer@firm.test-ENV1")
+        );
+    }
+
+    #[test]
+    fn signers_deserialize_without_a_client_user_id_field() {
+        // The external-party payload the frontend has always sent.
+        let s: ESignSigner = serde_json::from_str(
+            r#"{"name":"A","email":"a@example.com","role":"Buyer","routingOrder":1}"#,
+        )
+        .unwrap();
+        assert_eq!(s.client_user_id, None);
+    }
+
+    #[test]
+    fn signers_deserialize_with_a_client_user_id_field() {
+        let s: ESignSigner = serde_json::from_str(
+            r#"{"name":"A","email":"a@example.com","role":"Officer","routingOrder":1,"clientUserId":"cuid-1"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.client_user_id.as_deref(), Some("cuid-1"));
+    }
+
+    #[test]
+    fn parse_signing_url_accepts_the_live_api_shape() {
+        assert_eq!(
+            parse_signing_url(r#"{"url":"https://demo.docusign.net/Signing/x"}"#).unwrap(),
+            "https://demo.docusign.net/Signing/x"
+        );
+    }
+
+    #[test]
+    fn parse_signing_url_accepts_the_mock_adapter_shape() {
+        assert_eq!(
+            parse_signing_url(r#"{"signingUrl":"http://localhost:55432/esign-complete"}"#).unwrap(),
+            "http://localhost:55432/esign-complete"
+        );
+    }
+
+    #[test]
+    fn parse_signing_url_rejects_a_response_with_no_url() {
+        assert!(parse_signing_url(r#"{"envelopeId":"abc"}"#).is_err());
+        assert!(parse_signing_url(r#"{"url":""}"#).is_err());
+        assert!(parse_signing_url("not json").is_err());
+    }
+
+    #[tokio::test]
+    async fn embedded_signing_url_requires_identity_fields() {
+        // Validated before any network call, so bad input fails fast and
+        // locally rather than as an opaque DocuSign 400.
+        let err = get_embedded_signing_url(
+            "acct", "https://demo.docusign.net", "tok", "env-1", "a@example.com", "A", "  ", "http://x",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("client user ID"));
+
+        let err = get_embedded_signing_url(
+            "acct", "https://demo.docusign.net", "tok", "env-1", "", "A", "cuid", "http://x",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("name and an email"));
     }
 }

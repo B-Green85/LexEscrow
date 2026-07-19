@@ -9,6 +9,7 @@ mod ai;
 mod artifact_guard;
 mod db;
 mod docusign;
+mod esign_callback;
 mod notify;
 mod vault;
 
@@ -20,7 +21,7 @@ pub fn run() {
     // Load SMTP / Twilio config from a local .env if present (optional).
     let _ = dotenvy::dotenv();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ArtifactGuardState::new())
         .setup(|app| {
@@ -33,6 +34,11 @@ pub fn run() {
 
             // Credential vault (locked until the user provides a password).
             app.manage(vault::VaultState::new(&data_dir));
+
+            // Loopback listener for DocuSign's embedded-signing return URL.
+            // Bound to 127.0.0.1 only — the sole client is a WebView on this
+            // machine following a redirect (see esign_callback.rs).
+            app.manage(esign_callback::spawn(app.handle().clone()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -89,7 +95,18 @@ pub fn run() {
             docusign::docusign_send_envelope,
             docusign::docusign_poll_status,
             docusign::docusign_get_certificate,
+            docusign::docusign_get_embedded_signing_url,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Built rather than `run()` directly so the embedded-signing listener can
+    // be closed on exit instead of holding port 55432 until the process dies.
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(server) = app_handle.try_state::<esign_callback::CallbackServer>() {
+                server.shutdown();
+            }
+        }
+    });
 }

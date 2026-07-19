@@ -103,6 +103,28 @@ export function startDocuSignAdapter(port: number = DEFAULT_PORT): Server {
       return res.end(Buffer.from(DEMO_CERTIFICATE_TEXT, "utf8"));
     }
 
+    // ── POST .../envelopes/:envelopeId/views/recipient ───────────────────────
+    // Embedded signing (spec §22). The real API returns a short-lived DocuSign
+    // ceremony URL; the mock returns the return-URL itself carrying
+    // `signing_complete`, so opening it drives the same loopback listener →
+    // `esign:embedded_complete` → certificate pipeline that production does.
+    const viewMatch = url.pathname.match(
+      /^\/v2\.1\/accounts\/([^/]+)\/envelopes\/([^/]+)\/views\/recipient\/?$/,
+    );
+    if (method === "POST" && viewMatch) {
+      const envelopeId = decodeURIComponent(viewMatch[2]);
+      req.resume();
+      if (!envelopes.has(envelopeId)) {
+        log(`views/recipient ${envelopeId} → 404`);
+        return send(404, { errorCode: "ENVELOPE_DOES_NOT_EXIST" });
+      }
+      const signingUrl = `http://localhost:55432/esign-complete?event=signing_complete&envelopeId=${encodeURIComponent(
+        envelopeId,
+      )}`;
+      log(`views/recipient ${envelopeId} → ${signingUrl}`);
+      return send(201, { signingUrl });
+    }
+
     // ── GET /v2.1/accounts/:accountId/envelopes/:envelopeId ─────────────────
     const statusMatch = url.pathname.match(
       /^\/v2\.1\/accounts\/([^/]+)\/envelopes\/([^/]+)\/?$/,

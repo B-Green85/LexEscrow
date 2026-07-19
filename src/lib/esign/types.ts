@@ -11,6 +11,65 @@ export interface ESignSigner {
   email: string;
   role: string;
   routingOrder: number;
+  /**
+   * Set only for *embedded* signers — internal parties (law firm staff, escrow
+   * officer) who sign inside LexEscrow rather than through a DocuSign email.
+   *
+   * Its presence is what makes a recipient embedded: DocuSign sends them no
+   * email and the ceremony is reachable only through a recipient view URL
+   * minted against this exact id. External parties leave it undefined.
+   */
+  clientUserId?: string;
+}
+
+/**
+ * Where DocuSign redirects the signing WebView when the ceremony ends. Served
+ * by the loopback listener in `src-tauri/src/esign_callback.rs`, which turns
+ * the redirect into an `esign:embedded_complete` event.
+ */
+export const EMBEDDED_RETURN_URL = "http://localhost:55432/esign-complete";
+
+/**
+ * DocuSign's embedded-signing outcomes, as they arrive on the return URL.
+ * Deliberately wider than {@link ESignStatus} — "declined" and "timed out" are
+ * different facts about a signer and collapsing them loses the one an auditor
+ * would ask about.
+ */
+export type EmbeddedSigningEvent =
+  | "signing_complete"
+  | "cancel"
+  | "decline"
+  | "session_timeout"
+  | "ttl_expired"
+  | "viewing_complete";
+
+/** Payload of the `esign:embedded_complete` Tauri event. */
+export interface EmbeddedSigningResult {
+  envelopeId: string;
+  event: string;
+}
+
+/**
+ * What a "Sign Here" click resolves to: an envelope raised for embedded
+ * signing, plus the client user ID it was created with. The signing panel needs
+ * both, and DocuSign requires the id to match the envelope byte for byte.
+ */
+export interface EmbeddedSigningTarget {
+  envelopeId: string;
+  clientUserId: string;
+  signer: ESignSigner;
+}
+
+/**
+ * The embedded signer's id for an envelope.
+ *
+ * Deterministic on purpose. DocuSign requires the id used to request a
+ * recipient view to be byte-identical to the one the recipient was created
+ * with, and this is the single place both sides derive it — so envelope
+ * creation and the view request cannot drift apart.
+ */
+export function embeddedClientUserId(operatorEmail: string, signerEmail: string): string {
+  return `${operatorEmail.trim().toLowerCase()}-${signerEmail.trim().toLowerCase()}`;
 }
 
 /**
@@ -42,6 +101,10 @@ export interface ESignEnvelope {
   certificateHash?: string;
   onChainTx?: string;
   anchorMatch?: boolean;
+  /** True when this envelope was raised for in-app (embedded) signing. */
+  embeddedSigning?: boolean;
+  /** Which internal party signs it in-app. */
+  embeddedSignerName?: string;
 }
 
 export interface eSignProvider {
@@ -56,6 +119,19 @@ export interface eSignProvider {
   ): Promise<string>; // returns envelopeId
   pollStatus(envelopeId: string): Promise<ESignStatus>;
   getCertificate(envelopeId: string): Promise<Uint8Array>;
+  /**
+   * Mint a signing-ceremony URL for an embedded signer.
+   *
+   * Optional: embedded signing is a DocuSign capability, not a universal one,
+   * and a provider that cannot host a ceremony in-app should be unable to
+   * claim it rather than obliged to throw. Callers must feature-detect.
+   */
+  getEmbeddedSigningUrl?(
+    envelopeId: string,
+    signerEmail: string,
+    signerName: string,
+    clientUserId: string,
+  ): Promise<string>;
 }
 
 /**
