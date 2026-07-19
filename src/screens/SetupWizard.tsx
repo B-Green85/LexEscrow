@@ -24,6 +24,12 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
 import emblem from "../assets/lexescrow-emblem.png";
+import { InfoTooltip, type InfoTooltipProps } from "../components/InfoTooltip";
+import {
+  BLOCKCHAIN_TOOLTIPS,
+  PrivateKeyWarning,
+  WalletSetupGuide,
+} from "../components/blockchainHelp";
 import {
   DEFAULT_BASE_URI,
   PROVIDER_SUGGESTIONS,
@@ -153,18 +159,28 @@ function Field({
   id,
   label,
   hint,
+  tooltip,
   children,
 }: {
   id: string;
   label: string;
   hint?: string;
+  tooltip?: InfoTooltipProps;
   children: ReactNode;
 }) {
   return (
     <div>
-      <label className="label" htmlFor={id}>
-        {label}
-      </label>
+      {/* The ⓘ is a sibling of the `<label>`, not a child of it. Nesting a
+          button inside a label makes clicking it focus the field as well, and
+          it appends the icon to the field's accessible name — "Chain ID ⓘ" is
+          not what a screen reader should announce, nor what a test asking for
+          the field by its label should have to match. */}
+      <div className="mb-1.5 flex items-center">
+        <label className="block text-sm font-medium text-slate-300" htmlFor={id}>
+          {label}
+        </label>
+        {tooltip && <InfoTooltip {...tooltip} />}
+      </div>
       {children}
       {hint && <p className="mt-1 text-[11px] text-slate-500">{hint}</p>}
     </div>
@@ -210,6 +226,8 @@ export function SetupWizard() {
   const [deployerPrivateKey, setDeployerPrivateKey] = useState("");
   const [usdcAddress, setUsdcAddress] = useState("");
   const [forwarderAddress, setForwarderAddress] = useState("");
+  /** Drives the escalated private key warning — see `PrivateKeyWarning`. */
+  const [keyFocused, setKeyFocused] = useState(false);
 
   // Step 5 — DocuSign.
   const [integrationKey, setIntegrationKey] = useState("");
@@ -644,10 +662,9 @@ export function SetupWizard() {
         }
       >
         <div className="card space-y-4 p-5">
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-400">
-            ⚠️ Your deployer private key controls fund movement on-chain. Never share it. It is
-            encrypted in your vault and never transmitted anywhere.
-          </div>
+          <PrivateKeyWarning expanded={keyFocused || !!deployerPrivateKey} />
+
+          <WalletSetupGuide />
 
           <button className="btn btn-secondary btn-sm" onClick={prefillSepolia}>
             Use Sepolia Defaults
@@ -655,7 +672,11 @@ export function SetupWizard() {
 
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
-              <Field id="wz-bc-network" label="Network name">
+              <Field
+                id="wz-bc-network"
+                label="Network name"
+                tooltip={BLOCKCHAIN_TOOLTIPS.networkName}
+              >
                 <input
                   id="wz-bc-network"
                   className="input"
@@ -664,7 +685,7 @@ export function SetupWizard() {
                 />
               </Field>
             </div>
-            <Field id="wz-bc-chain" label="Chain ID">
+            <Field id="wz-bc-chain" label="Chain ID" tooltip={BLOCKCHAIN_TOOLTIPS.chainId}>
               <input
                 id="wz-bc-chain"
                 className="input"
@@ -678,6 +699,7 @@ export function SetupWizard() {
             id="wz-bc-rpc"
             label="RPC URL"
             hint="Treated as a secret — provider API keys ride in the URL path."
+            tooltip={BLOCKCHAIN_TOOLTIPS.rpcUrl}
           >
             <SecretInput
               id="wz-bc-rpc"
@@ -686,7 +708,11 @@ export function SetupWizard() {
               placeholder="https://eth-sepolia.g.alchemy.com/v2/…"
             />
           </Field>
-          <Field id="wz-bc-contract" label="Contract address">
+          <Field
+            id="wz-bc-contract"
+            label="Contract address"
+            tooltip={BLOCKCHAIN_TOOLTIPS.contractAddress}
+          >
             <input
               id="wz-bc-contract"
               className="input font-mono text-xs"
@@ -695,7 +721,11 @@ export function SetupWizard() {
               placeholder="0x…"
             />
           </Field>
-          <Field id="wz-bc-deployer" label="Deployer wallet address">
+          <Field
+            id="wz-bc-deployer"
+            label="Deployer wallet address"
+            tooltip={BLOCKCHAIN_TOOLTIPS.deployerAddress}
+          >
             <input
               id="wz-bc-deployer"
               className="input font-mono text-xs"
@@ -704,15 +734,21 @@ export function SetupWizard() {
               placeholder="0x…"
             />
           </Field>
-          <Field id="wz-bc-key" label="Deployer private key">
+          <Field
+            id="wz-bc-key"
+            label="Deployer private key"
+            tooltip={BLOCKCHAIN_TOOLTIPS.deployerPrivateKey}
+          >
             <SecretTextarea
               id="wz-bc-key"
               value={deployerPrivateKey}
               onChange={setDeployerPrivateKey}
+              onFocus={() => setKeyFocused(true)}
+              onBlur={() => setKeyFocused(false)}
               placeholder="0x…"
             />
           </Field>
-          <Field id="wz-bc-usdc" label="USDC address">
+          <Field id="wz-bc-usdc" label="USDC address" tooltip={BLOCKCHAIN_TOOLTIPS.usdcAddress}>
             <input
               id="wz-bc-usdc"
               className="input font-mono text-xs"
@@ -721,7 +757,11 @@ export function SetupWizard() {
               placeholder="0x…"
             />
           </Field>
-          <Field id="wz-bc-forwarder" label="Forwarder address">
+          <Field
+            id="wz-bc-forwarder"
+            label="Forwarder address"
+            tooltip={BLOCKCHAIN_TOOLTIPS.forwarderAddress}
+          >
             <input
               id="wz-bc-forwarder"
               className="input font-mono text-xs"

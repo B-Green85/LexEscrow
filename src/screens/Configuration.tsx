@@ -17,6 +17,12 @@ import {
   CLIO_TEST_EVENT,
   PRACTICE_PANTHER_TEST_TRIGGER,
 } from "../lib/integrations";
+import { InfoTooltip, type InfoTooltipProps } from "../components/InfoTooltip";
+import {
+  BLOCKCHAIN_TOOLTIPS,
+  PrivateKeyWarning,
+  WalletSetupGuide,
+} from "../components/blockchainHelp";
 
 export const PROVIDER_SUGGESTIONS = ["Claude", "GPT-4o", "Gemini", "Custom"];
 
@@ -400,11 +406,16 @@ export function SecretTextarea({
   onChange,
   placeholder,
   id,
+  onFocus,
+  onBlur,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   id?: string;
+  /** Used by the blockchain step to escalate the private key warning. */
+  onFocus?: () => void;
+  onBlur?: () => void;
 }) {
   const [show, setShow] = useState(false);
   return (
@@ -417,6 +428,8 @@ export function SecretTextarea({
         className={`input min-h-28 font-mono text-xs ${show ? "" : "text-transparent [text-shadow:0_0_7px_rgba(226,232,240,0.85)] selection:bg-transparent"}`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={onFocus}
+        onBlur={onBlur}
         placeholder={placeholder}
         spellCheck={false}
         autoComplete="off"
@@ -879,6 +892,31 @@ export const SEPOLIA_DEFAULTS = {
   forwarderAddress: "0x15fC6ae953E024d975e77382eEeC56A9101f9F88",
 } as const;
 
+/**
+ * A `.label` with an optional ⓘ beside it.
+ *
+ * The button is a sibling of the `<label>`, not a child — see `Field` in
+ * SetupWizard for the reasoning, which applies identically here.
+ */
+function TipLabel({
+  htmlFor,
+  tooltip,
+  children,
+}: {
+  htmlFor: string;
+  tooltip?: InfoTooltipProps;
+  children: string;
+}) {
+  return (
+    <div className="mb-1.5 flex items-center">
+      <label className="block text-sm font-medium text-slate-300" htmlFor={htmlFor}>
+        {children}
+      </label>
+      {tooltip && <InfoTooltip {...tooltip} />}
+    </div>
+  );
+}
+
 export function BlockchainCard({
   data,
   refresh,
@@ -898,6 +936,8 @@ export function BlockchainCard({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** Drives the escalated private key warning — see `PrivateKeyWarning`. */
+  const [keyFocused, setKeyFocused] = useState(false);
 
   const configured = !!data?.hasConfig;
 
@@ -964,10 +1004,10 @@ export function BlockchainCard({
     <CardShell title="Blockchain" subtitle="On-chain settlement — network, contracts, deployer key">
       {/* Always visible, in both the summary and the edit view. An operator who
           is about to paste a key needs the warning; an operator reviewing what
-          is already stored needs to know what they are custodian of. */}
-      <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700">
-        ⚠️ The deployer private key is the most sensitive credential in LexEscrow. It controls fund
-        movement on-chain. Never share it, never commit it, and ensure your vault password is strong.
+          is already stored needs to know what they are custodian of. It
+          escalates to the full rules panel once the key field is live. */}
+      <div className="mb-3">
+        <PrivateKeyWarning expanded={editing && (keyFocused || !!deployerPrivateKey)} />
       </div>
 
       {!editing ? (
@@ -1008,9 +1048,13 @@ export function BlockchainCard({
         </div>
       ) : (
         <div className="space-y-3">
+          <WalletSetupGuide />
+
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
-              <label className="label" htmlFor="bc-network-name">Network name</label>
+              <TipLabel htmlFor="bc-network-name" tooltip={BLOCKCHAIN_TOOLTIPS.networkName}>
+                Network name
+              </TipLabel>
               <input
                 id="bc-network-name"
                 className="input"
@@ -1020,7 +1064,9 @@ export function BlockchainCard({
               />
             </div>
             <div>
-              <label className="label" htmlFor="bc-chain-id">Chain ID</label>
+              <TipLabel htmlFor="bc-chain-id" tooltip={BLOCKCHAIN_TOOLTIPS.chainId}>
+                Chain ID
+              </TipLabel>
               <input
                 id="bc-chain-id"
                 className="input"
@@ -1031,7 +1077,9 @@ export function BlockchainCard({
             </div>
           </div>
           <div>
-            <label className="label" htmlFor="bc-rpc-url">RPC URL</label>
+            <TipLabel htmlFor="bc-rpc-url" tooltip={BLOCKCHAIN_TOOLTIPS.rpcUrl}>
+              RPC URL
+            </TipLabel>
             <SecretInput
               id="bc-rpc-url"
               value={rpcUrl}
@@ -1045,7 +1093,9 @@ export function BlockchainCard({
             </p>
           </div>
           <div>
-            <label className="label" htmlFor="bc-contract-address">Contract address (EscrowSettlement)</label>
+            <TipLabel htmlFor="bc-contract-address" tooltip={BLOCKCHAIN_TOOLTIPS.contractAddress}>
+              Contract address (EscrowSettlement)
+            </TipLabel>
             <input
               id="bc-contract-address"
               className="input font-mono text-xs"
@@ -1055,7 +1105,9 @@ export function BlockchainCard({
             />
           </div>
           <div>
-            <label className="label" htmlFor="bc-deployer-address">Deployer address</label>
+            <TipLabel htmlFor="bc-deployer-address" tooltip={BLOCKCHAIN_TOOLTIPS.deployerAddress}>
+              Deployer address
+            </TipLabel>
             <input
               id="bc-deployer-address"
               className="input font-mono text-xs"
@@ -1065,16 +1117,22 @@ export function BlockchainCard({
             />
           </div>
           <div>
-            <label className="label" htmlFor="bc-deployer-key">Deployer private key</label>
+            <TipLabel htmlFor="bc-deployer-key" tooltip={BLOCKCHAIN_TOOLTIPS.deployerPrivateKey}>
+              Deployer private key
+            </TipLabel>
             <SecretTextarea
               id="bc-deployer-key"
               value={deployerPrivateKey}
               onChange={setDeployerPrivateKey}
+              onFocus={() => setKeyFocused(true)}
+              onBlur={() => setKeyFocused(false)}
               placeholder={data?.hasPrivateKey ? "leave blank to keep existing" : "0x…"}
             />
           </div>
           <div>
-            <label className="label" htmlFor="bc-usdc-address">USDC address</label>
+            <TipLabel htmlFor="bc-usdc-address" tooltip={BLOCKCHAIN_TOOLTIPS.usdcAddress}>
+              USDC address
+            </TipLabel>
             <input
               id="bc-usdc-address"
               className="input font-mono text-xs"
@@ -1084,7 +1142,9 @@ export function BlockchainCard({
             />
           </div>
           <div>
-            <label className="label" htmlFor="bc-forwarder-address">Forwarder address (CRE)</label>
+            <TipLabel htmlFor="bc-forwarder-address" tooltip={BLOCKCHAIN_TOOLTIPS.forwarderAddress}>
+              Forwarder address (CRE)
+            </TipLabel>
             <input
               id="bc-forwarder-address"
               className="input font-mono text-xs"
