@@ -7,6 +7,7 @@ import { DocumentLoad } from "./screens/DocumentLoad";
 import { Processing } from "./screens/Processing";
 import { ParsedOutputReview } from "./screens/ParsedOutputReview";
 import { ConditionDefinition } from "./screens/ConditionDefinition";
+import { EscrowMonitor } from "./screens/EscrowMonitor";
 import { ExecutionConfirmation } from "./screens/ExecutionConfirmation";
 import { LexGuardEscalation } from "./screens/LexGuardEscalation";
 import { Configuration } from "./screens/Configuration";
@@ -19,7 +20,8 @@ const STAGE_INDEX: Record<string, number> = {
   review: 2,
   escalation: 2,
   conditions: 3,
-  execution: 4,
+  "escrow-monitor": 4,
+  execution: 5,
 };
 
 function BatchIcon() {
@@ -116,6 +118,7 @@ function App() {
         {screen === "review" && <ParsedOutputReview />}
         {screen === "escalation" && <LexGuardEscalation />}
         {screen === "conditions" && <ConditionDefinition />}
+        {screen === "escrow-monitor" && <EscrowMonitor />}
         {screen === "execution" && <ExecutionConfirmation />}
         {screen === "config" && <Configuration />}
         {screen === "batch" && <BatchProcessing />}

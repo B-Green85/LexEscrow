@@ -1,4 +1,4 @@
-const STAGES = ["Load", "Process", "Review", "Conditions", "Execute"];
+const STAGES = ["Load", "Process", "Review", "Conditions", "Escrow", "Execute"];
 
 function Check() {
   return (

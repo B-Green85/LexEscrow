@@ -30,6 +30,12 @@ import type { ESignEnvelope, ESignSigner, ESignStatus } from "../lib/esign";
 import { normalizeName } from "../lexguard/anchor-matcher";
 import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
+import {
+  buildConditions,
+  evaluateSummary,
+  type Condition,
+  type ConditionSummary,
+} from "../lib/conditions";
 import type {
   ArbitrationSigner,
   ArbitrationState,
@@ -57,6 +63,7 @@ export type Screen =
   | "processing"
   | "review"
   | "conditions"
+  | "escrow-monitor"
   | "execution"
   | "escalation"
   | "config"
@@ -167,6 +174,74 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 /** Spec §16 — human-timescale events make a 30s poll indistinguishable from real-time. */
 export const ESIGN_POLL_INTERVAL_MS = 30_000;
 
+/** Escrow Monitor condition sweep. Same cadence, same reasoning. */
+export const CONDITION_POLL_INTERVAL_MS = 30_000;
+
+/** An empty checklist — nothing verified, so nothing may settle. */
+export function emptyConditionSummary(): ConditionSummary {
+  return { total: 0, met: 0, pending: 0, failed: 0, allMet: false };
+}
+
+/**
+ * Carry human decisions across a re-derivation of the checklist.
+ *
+ * `buildConditions` is a pure projection of *machine-observable* state, so on
+ * its own it cannot know that an officer waived a condition or manually
+ * confirmed one — it would hand back `pending` and the poll loop would silently
+ * undo the human's decision thirty seconds after they made it. This merge is
+ * what makes the 30-second sweep safe to run against a screen a human is
+ * actively working on.
+ *
+ * Machine-derived statuses are otherwise taken from the fresh build: that is
+ * the whole point of polling.
+ */
+export function mergeConditions(previous: Condition[], next: Condition[]): Condition[] {
+  const prior = new Map(previous.map((c) => [c.id, c]));
+  return next.map((fresh) => {
+    const old = prior.get(fresh.id);
+    if (!old) return fresh;
+
+    // A waiver is a human judgment. Automated re-derivation never revokes it.
+    if (old.status === "waived") {
+      return { ...fresh, status: "waived", metAt: old.metAt, failureReason: old.failureReason };
+    }
+    // Manual conditions have no machine signal at all — only a human moves them.
+    if (fresh.type === "manual") {
+      return { ...fresh, status: old.status, metAt: old.metAt };
+    }
+    // Otherwise trust the fresh status, but never lose an earlier timestamp.
+    return {
+      ...fresh,
+      metAt: fresh.metAt ?? old.metAt,
+      failedAt: fresh.failedAt ?? old.failedAt,
+    };
+  });
+}
+
+/**
+ * The type-specific half of a condition, as stored in `metadata_json`.
+ *
+ * Listed explicitly rather than derived by omission: the identity, status and
+ * timestamp fields have their own columns, and a spread-minus-known-keys would
+ * silently start duplicating any field added to `Condition` later.
+ */
+function conditionMetadata(c: Condition): string {
+  return JSON.stringify({
+    assetClass: c.assetClass,
+    ...(c.documentHash !== undefined && { documentHash: c.documentHash }),
+    ...(c.documentLabel !== undefined && { documentLabel: c.documentLabel }),
+    ...(c.releaseDate !== undefined && { releaseDate: c.releaseDate }),
+    ...(c.envelopeId !== undefined && { envelopeId: c.envelopeId }),
+    ...(c.signers !== undefined && { signers: c.signers }),
+    ...(c.signerStatuses !== undefined && { signerStatuses: c.signerStatuses }),
+    ...(c.cannaVerifyResult !== undefined && { cannaVerifyResult: c.cannaVerifyResult }),
+    ...(c.barNumber !== undefined && { barNumber: c.barNumber }),
+    ...(c.barVerified !== undefined && { barVerified: c.barVerified }),
+    ...(c.eventDescription !== undefined && { eventDescription: c.eventDescription }),
+    ...(c.creAdapterUrl !== undefined && { creAdapterUrl: c.creAdapterUrl }),
+  });
+}
+
 /**
  * Whole-word containment: does `needle` appear in `haystack` as a contiguous
  * run of complete words?
@@ -272,6 +347,21 @@ interface SessionState {
   anchorReceipt: AnchorReceipt | null;
   anchorReceiptIssuing: boolean;
 
+  // ── Conditions + fund custody (spec §6 Stages 6–7) ───────────────────────
+  /** The live checklist. Built on arrival at Condition Definition. */
+  conditions: Condition[];
+  conditionSummary: ConditionSummary;
+  /** True once the officer has recorded the counterparty's deposit. */
+  fundsDeposited: boolean;
+  depositTxHash: string | null;
+  /** Amount held, in integer cents — same discipline as every other money value. */
+  escrowBalance: bigint;
+  conditionPolling: boolean;
+  /** Interval handle, held so `reset()` and `allMet` can clear it. */
+  conditionPollTimer: ReturnType<typeof setInterval> | null;
+  /** When the checklist was last re-evaluated (ISO). Drives the refresh line. */
+  conditionsUpdatedAt: string | null;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
@@ -293,6 +383,16 @@ interface SessionState {
   markScrollCompleted: () => void;
   setAcknowledged: (v: boolean) => Promise<void>;
   navigateToConditions: () => void;
+  navigateToEscrowMonitor: () => void;
+  // ── Condition tracking (spec §6 Stage 7) ────────────────────────────────
+  initConditions: () => void;
+  updateConditions: () => void;
+  confirmFundsDeposited: (txHash: string) => void;
+  startConditionPolling: () => void;
+  stopConditionPolling: () => void;
+  waiveCondition: (conditionId: string, reason: string) => void;
+  markConditionMet: (conditionId: string) => void;
+  proceedToSettlement: () => Promise<void>;
   sendForSignature: (
     documentLabel: string,
     signers: ESignSigner[],
@@ -494,6 +594,14 @@ export const useSession = create<SessionState>((set, get) => {
     releasePathChosen: false,
     anchorReceipt: null,
     anchorReceiptIssuing: false,
+    conditions: [],
+    conditionSummary: emptyConditionSummary(),
+    fundsDeposited: false,
+    depositTxHash: null,
+    escrowBalance: 0n,
+    conditionPolling: false,
+    conditionPollTimer: null,
+    conditionsUpdatedAt: null,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -549,8 +657,9 @@ export const useSession = create<SessionState>((set, get) => {
 
     reset: () => {
       // A dangling interval would keep polling a session that no longer exists.
-      const timer = get().eSignPollTimer;
-      if (timer) clearInterval(timer);
+      const { eSignPollTimer, conditionPollTimer } = get();
+      if (eSignPollTimer) clearInterval(eSignPollTimer);
+      if (conditionPollTimer) clearInterval(conditionPollTimer);
       set({
         screen: "load",
         providerLabel: null,
@@ -587,6 +696,14 @@ export const useSession = create<SessionState>((set, get) => {
         releasePathChosen: false,
         anchorReceipt: null,
         anchorReceiptIssuing: false,
+        conditions: [],
+        conditionSummary: emptyConditionSummary(),
+        fundsDeposited: false,
+        depositTxHash: null,
+        escrowBalance: 0n,
+        conditionPolling: false,
+        conditionPollTimer: null,
+        conditionsUpdatedAt: null,
       });
     },
 
@@ -873,7 +990,340 @@ export const useSession = create<SessionState>((set, get) => {
       }
     },
 
-    navigateToConditions: () => set({ screen: "conditions" }),
+    /**
+     * Stage 4. Building the checklist on arrival — rather than on the monitor —
+     * means the officer confirms conditions that already exist as tracked
+     * objects, so nothing they see on Stage 4 is invented again later.
+     */
+    navigateToConditions: () => {
+      set({ screen: "conditions" });
+      get().initConditions();
+    },
+
+    navigateToEscrowMonitor: () => set({ screen: "escrow-monitor" }),
+
+    // ── Condition tracking (spec §6 Stage 7) ────────────────────────────────
+
+    /**
+     * Build (or rebuild) the checklist from current session state and persist
+     * it. Safe to call repeatedly: ids are deterministic and `mergeConditions`
+     * carries human decisions forward, so re-entering Stage 4 does not discard
+     * a waiver granted on the monitor.
+     */
+    initConditions: () => {
+      const {
+        sessionId,
+        assetClass,
+        payload,
+        rawAnchors,
+        anchorReceipt,
+        eSignEnvelopes,
+        cannaVerifyConditions,
+        barActive,
+        conditions: previous,
+      } = get();
+      if (!sessionId || !payload) return;
+
+      const built = buildConditions({
+        sessionId,
+        assetClass,
+        payload,
+        rawAnchors,
+        anchorReceipt,
+        eSignEnvelopes,
+        cannaVerifyConditions,
+        barVerified: barActive,
+      });
+      const conditions = mergeConditions(previous, built);
+
+      set({
+        conditions,
+        conditionSummary: evaluateSummary(conditions),
+        conditionsUpdatedAt: new Date().toISOString(),
+      });
+
+      // Persistence is sequential and fire-and-forget: the checklist is already
+      // in the store, and a failed write must not block the officer's screen.
+      void (async () => {
+        for (const c of conditions) {
+          try {
+            await backend.saveCondition({
+              sessionId,
+              conditionId: c.id,
+              conditionType: c.type,
+              label: c.label,
+              description: c.description,
+              status: c.status,
+              metadataJson: conditionMetadata(c),
+            });
+          } catch (e) {
+            console.error("condition save failed", c.id, e);
+          }
+        }
+      })();
+    },
+
+    /**
+     * Re-evaluate every condition against current session state and persist
+     * only what actually moved. Called by the 30-second sweep and by the
+     * monitor's manual Refresh.
+     */
+    updateConditions: () => {
+      const {
+        sessionId,
+        assetClass,
+        payload,
+        rawAnchors,
+        anchorReceipt,
+        eSignEnvelopes,
+        cannaVerifyConditions,
+        barActive,
+        conditions: previous,
+      } = get();
+      if (!sessionId || !payload || previous.length === 0) return;
+
+      const built = buildConditions({
+        sessionId,
+        assetClass,
+        payload,
+        rawAnchors,
+        anchorReceipt,
+        eSignEnvelopes,
+        cannaVerifyConditions,
+        barVerified: barActive,
+      });
+      const conditions = mergeConditions(previous, built);
+
+      const priorStatus = new Map(previous.map((c) => [c.id, c.status]));
+      const changed = conditions.filter((c) => priorStatus.get(c.id) !== c.status);
+
+      set({
+        conditions,
+        conditionSummary: evaluateSummary(conditions),
+        conditionsUpdatedAt: new Date().toISOString(),
+      });
+
+      if (changed.length === 0) return;
+
+      void (async () => {
+        for (const c of changed) {
+          try {
+            await backend.updateConditionStatus({
+              conditionId: c.id,
+              status: c.status,
+              metAt: c.metAt ?? null,
+              failedAt: c.failedAt ?? null,
+              failureReason: c.failureReason ?? null,
+              onChainTx: c.onChainTx ?? null,
+            });
+          } catch (e) {
+            console.error("condition status write failed", c.id, e);
+          }
+          // A condition changing state is what moves an escrow toward release,
+          // so each transition is part of the legal record, not just telemetry.
+          await log("condition_status_changed", {
+            condition_id: c.id,
+            condition_type: c.type,
+            label: c.label,
+            from: priorStatus.get(c.id) ?? null,
+            to: c.status,
+            on_chain_tx: c.onChainTx ?? null,
+          });
+        }
+      })();
+    },
+
+    /**
+     * Stage 6 — record the counterparty's deposit into escrow.
+     *
+     * The officer supplies the transaction hash rather than the app watching a
+     * wallet: this build has no chain connection, and inventing a confirmation
+     * the system did not observe would be the one lie the audit trail cannot
+     * afford. The escrow balance is the payload's total held.
+     */
+    confirmFundsDeposited: (txHash) => {
+      const { sessionId, payload } = get();
+      if (!sessionId || !payload) return;
+      const trimmed = txHash.trim();
+      if (!trimmed) {
+        set({ error: "Enter the deposit transaction hash before confirming." });
+        return;
+      }
+
+      const escrowBalance = toPayloadCents(payload).totalHeldCents;
+      set({
+        fundsDeposited: true,
+        depositTxHash: trimmed,
+        escrowBalance,
+        error: null,
+      });
+
+      void (async () => {
+        try {
+          await backend.updateSessionState(sessionId, "FUNDED");
+        } catch (e) {
+          console.error("session state FUNDED failed", e);
+        }
+        await log("funds_deposited", {
+          workflow_id: sessionId,
+          tx_hash: trimmed,
+          amount_usdc: Number(escrowBalance) / 100,
+          officer_identity: get().operator,
+          block_timestamp: new Date().toISOString(),
+        });
+      })();
+
+      get().startConditionPolling();
+    },
+
+    /**
+     * Begin the 30-second condition sweep. Idempotent, and a no-op once every
+     * condition is met — there is nothing left to watch.
+     */
+    startConditionPolling: () => {
+      if (get().conditionPollTimer) return;
+      if (get().conditionSummary.allMet) return;
+
+      const timer = setInterval(() => {
+        void (async () => {
+          const state = get();
+          // Signature status is the commonest thing to move, and it is the one
+          // signal that lives behind an external API rather than in the store.
+          if (state.eSignEnvelopes.some((e) => !isTerminal(e.status))) {
+            try {
+              await state.pollAllEnvelopes();
+            } catch (e) {
+              console.error("envelope poll failed during condition sweep", e);
+            }
+          }
+          get().updateConditions();
+          if (get().conditionSummary.allMet) get().stopConditionPolling();
+        })();
+      }, CONDITION_POLL_INTERVAL_MS);
+
+      set({ conditionPolling: true, conditionPollTimer: timer });
+    },
+
+    stopConditionPolling: () => {
+      const timer = get().conditionPollTimer;
+      if (timer) clearInterval(timer);
+      set({ conditionPolling: false, conditionPollTimer: null });
+    },
+
+    /**
+     * Proceed without a condition being satisfied.
+     *
+     * The reason text is the entire point of the record — a waiver is the
+     * officer accepting personal liability for an unmet gate, and the audit
+     * entry is what makes that transfer legible later.
+     */
+    waiveCondition: (conditionId, reason) => {
+      const { conditions } = get();
+      const target = conditions.find((c) => c.id === conditionId);
+      if (!target || target.status === "waived") return;
+
+      const next = conditions.map((c) =>
+        c.id === conditionId ? { ...c, status: "waived" as const, failureReason: reason } : c,
+      );
+      set({
+        conditions: next,
+        conditionSummary: evaluateSummary(next),
+        conditionsUpdatedAt: new Date().toISOString(),
+      });
+
+      void (async () => {
+        try {
+          await backend.updateConditionStatus({
+            conditionId,
+            status: "waived",
+            failureReason: reason,
+          });
+        } catch (e) {
+          console.error("condition waiver write failed", conditionId, e);
+        }
+        await log("condition_waived", {
+          condition_id: conditionId,
+          condition_type: target.type,
+          label: target.label,
+          previous_status: target.status,
+          waiver_reason: reason,
+          officer_identity: get().operator,
+          block_timestamp: new Date().toISOString(),
+        });
+      })();
+    },
+
+    /**
+     * Human confirmation of a `manual` condition. Restricted to that type on
+     * purpose: everything else has a machine signal, and letting an officer
+     * hand-mark a CannaVerify or signature condition as met would turn a
+     * verified gate into an unverified assertion with no trace of the swap.
+     * Overriding one of those is a *waiver*, and it is recorded as one.
+     */
+    markConditionMet: (conditionId) => {
+      const { conditions } = get();
+      const target = conditions.find((c) => c.id === conditionId);
+      if (!target || target.type !== "manual" || target.status === "met") return;
+
+      const metAt = new Date().toISOString();
+      const next = conditions.map((c) =>
+        c.id === conditionId ? { ...c, status: "met" as const, metAt } : c,
+      );
+      set({
+        conditions: next,
+        conditionSummary: evaluateSummary(next),
+        conditionsUpdatedAt: metAt,
+      });
+
+      void (async () => {
+        try {
+          await backend.updateConditionStatus({ conditionId, status: "met", metAt });
+        } catch (e) {
+          console.error("manual condition write failed", conditionId, e);
+        }
+        await log("condition_manually_confirmed", {
+          condition_id: conditionId,
+          condition_type: target.type,
+          label: target.label,
+          officer_identity: get().operator,
+          attestation: true,
+          block_timestamp: metAt,
+        });
+      })();
+    },
+
+    /**
+     * The settlement gate. A guard wrapper around `proceedToExecution` —
+     * `allMet` is true only when every condition is met or explicitly waived,
+     * so this is the single place the checklist actually blocks money moving.
+     */
+    proceedToSettlement: async () => {
+      const { conditionSummary, fundsDeposited } = get();
+
+      if (!fundsDeposited) {
+        set({ error: "Record the escrow deposit before settling." });
+        return;
+      }
+      if (!conditionSummary.allMet) {
+        set({
+          error:
+            conditionSummary.total === 0
+              ? "No conditions have been defined for this escrow — nothing has been verified."
+              : `${conditionSummary.pending + conditionSummary.failed} condition(s) are still unmet. Satisfy or waive them before settling.`,
+        });
+        return;
+      }
+
+      get().stopConditionPolling();
+      await log("conditions_all_met", {
+        workflow_id: get().sessionId,
+        total: conditionSummary.total,
+        met: conditionSummary.met,
+        waived: conditionSummary.total - conditionSummary.met,
+        officer_identity: get().operator,
+      });
+      await get().proceedToExecution();
+    },
 
     // ── eSign lifecycle (spec §22 Stage 4, §23) ─────────────────────────────
 

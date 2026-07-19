@@ -10,10 +10,10 @@
  *   3. Multi-party     — DocuSign envelopes, live status, certificate + tx.
  *   4. Event-based     — asset-class specific (CannaVerify, bar verification).
  *
- * V1 posture: conditions are *reviewed and confirmed* by a human, not
- * mechanically enforced. Full enforcement — settlement blocked until every
- * condition evaluates true — is V2. The one exception already in force is
- * CannaVerify, which hard-gates cannabis settlement at the review stage.
+ * This screen *defines* conditions; it does not enforce them. Confirming here
+ * hands off to the Escrow Monitor (Stage 6/7), which tracks each condition's
+ * live status and holds the settlement gate closed until every one is met or
+ * explicitly waived.
  */
 
 import { useMemo, useState } from "react";
@@ -302,7 +302,7 @@ export function ConditionDefinition() {
     cannaVerifyConditions,
     cannaVerifyRunning,
     runCannaVerify,
-    proceedToExecution,
+    navigateToEscrowMonitor,
   } = useSession();
 
   return (
@@ -320,7 +320,7 @@ export function ConditionDefinition() {
       cannaVerifyRunning={cannaVerifyRunning}
       onSendForSignature={sendForSignature}
       onRunCannaVerify={() => void runCannaVerify()}
-      onProceed={() => void proceedToExecution()}
+      onProceed={() => navigateToEscrowMonitor()}
     />
   );
 }
@@ -543,8 +543,8 @@ export function ConditionDefinitionView({
 
       <div className="mt-6 flex items-center justify-between">
         <p className="max-w-sm text-xs text-slate-400">
-          V1 requires the escrow officer to confirm conditions are met. Automatic enforcement of
-          every condition is a V2 feature.
+          Confirming moves this escrow to the monitor, where each condition is tracked live and
+          settlement stays blocked until every one is met or waived.
         </p>
         <button className="btn btn-primary btn-lg" disabled={!canProceed || busy} onClick={onProceed}>
           Confirm Conditions &amp; Proceed to Escrow

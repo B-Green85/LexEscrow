@@ -135,6 +135,31 @@ pub struct ArbitrationRow {
     pub resolution_notes: Option<String>,
 }
 
+/// One tracked release condition (spec §6 Stage 7).
+///
+/// `metadata_json` carries the type-specific detail — document hash, envelope
+/// id and per-signer statuses, CannaVerify result — as an opaque JSON blob.
+/// The backend never interprets it; the condition engine on the frontend owns
+/// that shape, and keeping it opaque here means a new condition type needs no
+/// schema change.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionRow {
+    pub condition_id: String,
+    pub session_id: String,
+    pub condition_type: String,
+    pub label: String,
+    pub description: String,
+    pub status: String,
+    pub metadata_json: Option<String>,
+    pub met_at: Option<String>,
+    pub failed_at: Option<String>,
+    pub failure_reason: Option<String>,
+    pub on_chain_tx: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEntry {
@@ -604,6 +629,105 @@ impl Db {
         Ok(row)
     }
 
+    // ---- conditions — Stage 7 condition tracking (spec §6) ----------------
+
+    /// Insert a condition, or refresh the descriptive fields of one already
+    /// stored.
+    ///
+    /// The upsert deliberately does **not** touch `status`, `met_at`,
+    /// `failed_at` or `failure_reason`. `build_conditions` on the frontend
+    /// re-derives the whole checklist on every poll tick and re-saves it, so a
+    /// blind overwrite here would reset an officer's waiver — or a recorded
+    /// failure — back to `pending` thirty seconds after it was set. Status is
+    /// owned exclusively by [`Db::update_condition_status`], exactly as the
+    /// milestone lifecycle is owned by `update_milestone_status`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_condition(
+        &self,
+        session_id: &str,
+        condition_id: &str,
+        condition_type: &str,
+        label: &str,
+        description: &str,
+        status: &str,
+        metadata_json: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "INSERT INTO session_conditions
+                (condition_id, session_id, condition_type, label, description,
+                 status, metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(condition_id) DO UPDATE SET
+                condition_type = excluded.condition_type,
+                label          = excluded.label,
+                description    = excluded.description,
+                metadata_json  = excluded.metadata_json",
+        )
+        .bind(condition_id)
+        .bind(session_id)
+        .bind(condition_type)
+        .bind(label)
+        .bind(description)
+        .bind(status)
+        .bind(metadata_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Move a condition to a new status.
+    ///
+    /// Same `COALESCE` discipline as milestones: a condition that was met,
+    /// then later waived, keeps its original `met_at`. Those timestamps are the
+    /// evidence of *when* each gate opened, and the settlement record is only
+    /// defensible if they survive subsequent transitions.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_condition_status(
+        &self,
+        condition_id: &str,
+        status: &str,
+        met_at: Option<&str>,
+        failed_at: Option<&str>,
+        failure_reason: Option<&str>,
+        on_chain_tx: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "UPDATE session_conditions
+                SET status         = ?,
+                    met_at         = COALESCE(?, met_at),
+                    failed_at      = COALESCE(?, failed_at),
+                    failure_reason = COALESCE(?, failure_reason),
+                    on_chain_tx    = COALESCE(?, on_chain_tx)
+             WHERE condition_id = ?",
+        )
+        .bind(status)
+        .bind(met_at)
+        .bind(failed_at)
+        .bind(failure_reason)
+        .bind(on_chain_tx)
+        .bind(condition_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every condition for a session, in insertion order.
+    pub async fn get_conditions(&self, session_id: &str) -> Result<Vec<ConditionRow>, DbError> {
+        let rows = sqlx::query_as::<_, ConditionRow>(
+            "SELECT condition_id, session_id, condition_type, label, description,
+                    COALESCE(status, 'pending') AS status,
+                    metadata_json, met_at, failed_at, failure_reason, on_chain_tx,
+                    created_at, updated_at
+             FROM session_conditions
+             WHERE session_id = ?
+             ORDER BY created_at ASC, rowid ASC",
+        )
+        .bind(session_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     // ---- audit trail -----------------------------------------------------
 
     /// Append one entry to the hash-chained audit trail and return it.
@@ -1000,6 +1124,66 @@ pub async fn get_arbitration(
     state.get_arbitration(&session_id).await.map_err(err)
 }
 
+// ---- conditions — Stage 7 --------------------------------------------------
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn save_condition(
+    state: State<'_, Db>,
+    session_id: String,
+    condition_id: String,
+    condition_type: String,
+    label: String,
+    description: String,
+    status: String,
+    metadata_json: Option<String>,
+) -> Result<(), String> {
+    state
+        .save_condition(
+            &session_id,
+            &condition_id,
+            &condition_type,
+            &label,
+            &description,
+            &status,
+            metadata_json.as_deref(),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_condition_status(
+    state: State<'_, Db>,
+    condition_id: String,
+    status: String,
+    met_at: Option<String>,
+    failed_at: Option<String>,
+    failure_reason: Option<String>,
+    on_chain_tx: Option<String>,
+) -> Result<(), String> {
+    state
+        .update_condition_status(
+            &condition_id,
+            &status,
+            met_at.as_deref(),
+            failed_at.as_deref(),
+            failure_reason.as_deref(),
+            on_chain_tx.as_deref(),
+        )
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn get_conditions(
+    state: State<'_, Db>,
+    session_id: String,
+) -> Result<Vec<ConditionRow>, String> {
+    state.get_conditions(&session_id).await.map_err(err)
+}
+
 #[tauri::command]
 pub async fn log_event(
     state: State<'_, Db>,
@@ -1200,6 +1384,83 @@ mod tests {
         let a = db.get_arbitration("s7").await.unwrap().unwrap();
         assert_eq!(a.resolution_tx_hash.as_deref(), Some("0xarb-resolve-1234"));
         assert_eq!(a.party1_signed, 1);
+    }
+
+    #[tokio::test]
+    async fn condition_status_survives_a_rebuild_upsert() {
+        let db = temp_db().await;
+        db.create_session(&new_session("s8")).await.unwrap();
+
+        db.save_condition(
+            "s8",
+            "s8-esign-env1",
+            "esign",
+            "All parties signed — Retainer",
+            "Signature collection via DocuSign for 2 required signers.",
+            "pending",
+            Some(r#"{"envelopeId":"env1"}"#),
+        )
+        .await
+        .unwrap();
+
+        db.update_condition_status(
+            "s8-esign-env1",
+            "met",
+            Some("2026-07-18T10:00:00Z"),
+            None,
+            None,
+            Some("0xanchor-esign-1234"),
+        )
+        .await
+        .unwrap();
+
+        // The poll loop re-derives and re-saves the whole checklist every tick.
+        // That must not walk the condition back to `pending`.
+        db.save_condition(
+            "s8",
+            "s8-esign-env1",
+            "esign",
+            "All parties signed — Retainer",
+            "Signature collection via DocuSign for 2 required signers.",
+            "pending",
+            Some(r#"{"envelopeId":"env1","certificateHash":"sha256:abc"}"#),
+        )
+        .await
+        .unwrap();
+
+        let rows = db.get_conditions("s8").await.unwrap();
+        assert_eq!(rows.len(), 1, "upsert must not duplicate the row");
+        let c = &rows[0];
+        assert_eq!(c.status, "met", "re-save must not clobber a resolved status");
+        assert_eq!(c.met_at.as_deref(), Some("2026-07-18T10:00:00Z"));
+        assert_eq!(c.on_chain_tx.as_deref(), Some("0xanchor-esign-1234"));
+        // Descriptive fields *do* refresh — new evidence arrived.
+        assert!(c.metadata_json.as_deref().unwrap().contains("certificateHash"));
+
+        // Waiving preserves the earlier met_at — the audit needs both facts.
+        db.update_condition_status("s8-esign-env1", "waived", None, None, Some("counterparty absent"), None)
+            .await
+            .unwrap();
+        let c = &db.get_conditions("s8").await.unwrap()[0];
+        assert_eq!(c.status, "waived");
+        assert_eq!(c.met_at.as_deref(), Some("2026-07-18T10:00:00Z"));
+        assert_eq!(c.failure_reason.as_deref(), Some("counterparty absent"));
+    }
+
+    #[tokio::test]
+    async fn conditions_are_scoped_to_their_session() {
+        let db = temp_db().await;
+        db.create_session(&new_session("s9")).await.unwrap();
+        db.create_session(&new_session("s10")).await.unwrap();
+
+        for (session, id) in [("s9", "s9-bar"), ("s9", "s9-doc-0"), ("s10", "s10-bar")] {
+            db.save_condition(session, id, "bar_verify", "L", "D", "pending", None)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(db.get_conditions("s9").await.unwrap().len(), 2);
+        assert_eq!(db.get_conditions("s10").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

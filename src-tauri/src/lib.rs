@@ -60,6 +60,10 @@ pub fn run() {
             db::create_arbitration,
             db::update_arbitration,
             db::get_arbitration,
+            // Condition tracking — Stage 7 Escrow Monitor
+            db::save_condition,
+            db::update_condition_status,
+            db::get_conditions,
             db::log_event,
             db::get_audit_trail,
             db::verify_audit_chain,

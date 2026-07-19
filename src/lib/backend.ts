@@ -493,6 +493,105 @@ export async function getArbitration(sessionId: string): Promise<ArbitrationRow 
   return memArbitration.get(sessionId) ?? null;
 }
 
+// ── Conditions — Stage 7 condition tracking (spec §6) ────────────────────────
+
+/** One tracked release condition as it crosses IPC. */
+export interface ConditionRow {
+  conditionId: string;
+  sessionId: string;
+  conditionType: string;
+  label: string;
+  description: string;
+  status: string; // pending | in_progress | met | failed | waived
+  metadataJson: string | null;
+  metAt: string | null;
+  failedAt: string | null;
+  failureReason: string | null;
+  onChainTx: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SaveConditionArgs {
+  sessionId: string;
+  conditionId: string;
+  conditionType: string;
+  label: string;
+  description: string;
+  status: string;
+  metadataJson?: string | null;
+}
+
+/**
+ * Condition status transition. Every optional field is COALESCE'd in SQL, so
+ * omitting one preserves the stored value instead of nulling it.
+ */
+export interface UpdateConditionStatusArgs {
+  conditionId: string;
+  status: string;
+  metAt?: string | null;
+  failedAt?: string | null;
+  failureReason?: string | null;
+  onChainTx?: string | null;
+}
+
+// Browser-mode store. Like the release-path tables and unlike the write-only
+// ones, conditions are *read back* to drive the Escrow Monitor, so a no-op
+// fallback would leave the checklist blank under `npm run dev`. Insertion order
+// is preserved to match the SQL `ORDER BY created_at, rowid`.
+const memConditions = new Map<string, ConditionRow>();
+
+/**
+ * Insert a condition, or refresh the descriptive fields of one already stored.
+ *
+ * Mirrors the Rust upsert exactly, including the part that matters most: an
+ * existing row keeps its `status` and timestamps. The poll loop re-saves the
+ * whole checklist every tick, so overwriting status here would revoke waivers.
+ */
+export async function saveCondition(args: SaveConditionArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("save_condition", { ...args });
+
+  const existing = memConditions.get(args.conditionId);
+  const now = new Date().toISOString();
+  memConditions.set(args.conditionId, {
+    conditionId: args.conditionId,
+    sessionId: args.sessionId,
+    conditionType: args.conditionType,
+    label: args.label,
+    description: args.description,
+    metadataJson: args.metadataJson ?? null,
+    // Preserved across a re-save — status is owned by updateConditionStatus.
+    status: existing?.status ?? args.status,
+    metAt: existing?.metAt ?? null,
+    failedAt: existing?.failedAt ?? null,
+    failureReason: existing?.failureReason ?? null,
+    onChainTx: existing?.onChainTx ?? null,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+}
+
+export async function updateConditionStatus(args: UpdateConditionStatusArgs): Promise<void> {
+  if (isTauri()) return invoke<void>("update_condition_status", { ...args });
+
+  const row = memConditions.get(args.conditionId);
+  if (!row) return;
+  memConditions.set(args.conditionId, {
+    ...row,
+    status: args.status,
+    metAt: coalesce(args.metAt, row.metAt),
+    failedAt: coalesce(args.failedAt, row.failedAt),
+    failureReason: coalesce(args.failureReason, row.failureReason),
+    onChainTx: coalesce(args.onChainTx, row.onChainTx),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+export async function getConditions(sessionId: string): Promise<ConditionRow[]> {
+  if (isTauri()) return invoke<ConditionRow[]>("get_conditions", { sessionId });
+  return [...memConditions.values()].filter((c) => c.sessionId === sessionId);
+}
+
 export async function logEvent(
   sessionId: string,
   eventType: string,
