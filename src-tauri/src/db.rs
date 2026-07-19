@@ -56,6 +56,26 @@ pub struct ReleaseSession {
     pub updated_at: String,
 }
 
+/// One row of the Recent Workflows list (spec §12 Screen 9).
+///
+/// A projection rather than a table. `total_held_cents` comes from a correlated
+/// subquery, not a join: `save_payload` inserts a fresh `payload_id` per parse,
+/// so a session can own several payload rows and a join would emit that session
+/// once per row.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentSession {
+    pub session_id: String,
+    pub client_id: String,
+    pub asset_class: String,
+    pub execution_path: Option<String>,
+    pub current_state: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Null until the session has a parsed payload.
+    pub total_held_cents: Option<i64>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewSession {
@@ -289,6 +309,30 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    /// The `limit` most recently created sessions, newest first.
+    ///
+    /// Ordered by `created_at` then `rowid` because `CURRENT_TIMESTAMP` has
+    /// second resolution — sessions created inside the same second would
+    /// otherwise come back in an arbitrary order.
+    pub async fn get_recent_sessions(&self, limit: i64) -> Result<Vec<RecentSession>, DbError> {
+        let rows = sqlx::query_as::<_, RecentSession>(
+            "SELECT s.session_id, s.client_id, s.asset_class, s.execution_path,
+                    s.current_state, s.created_at, s.updated_at,
+                    (SELECT p.total_held_cents
+                       FROM parsed_payloads p
+                      WHERE p.session_id = s.session_id
+                      ORDER BY p.rowid DESC
+                      LIMIT 1) AS total_held_cents
+             FROM release_sessions s
+             ORDER BY s.created_at DESC, s.rowid DESC
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     // ---- payloads --------------------------------------------------------
@@ -894,6 +938,18 @@ fn compute_entry_hash(
 #[tauri::command]
 pub async fn create_session(state: State<'_, Db>, session: NewSession) -> Result<(), String> {
     state.create_session(&session).await.map_err(err)
+}
+
+/// Recent Workflows list. `limit` is clamped rather than trusted: it crosses
+/// IPC, and a negative value means "no limit" to SQLite — which would let the
+/// WebView pull the entire session table in one call.
+#[tauri::command]
+pub async fn get_recent_sessions(
+    state: State<'_, Db>,
+    limit: Option<i64>,
+) -> Result<Vec<RecentSession>, String> {
+    let limit = limit.unwrap_or(20).clamp(1, 200);
+    state.get_recent_sessions(limit).await.map_err(err)
 }
 
 #[tauri::command]

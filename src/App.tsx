@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useSession } from "./store/session";
+import { useEffect, useState } from "react";
+import { initMenuListeners, useSession, type Screen } from "./store/session";
 import { Brand } from "./components/Brand";
 import { Splash } from "./components/Splash";
 import { WorkflowRail } from "./components/WorkflowRail";
@@ -13,6 +13,19 @@ import { LexGuardEscalation } from "./screens/LexGuardEscalation";
 import { Configuration } from "./screens/Configuration";
 import { BatchProcessing } from "./screens/BatchProcessing";
 import { AnchorReceiptConsole } from "./screens/AnchorReceiptConsole";
+import { RecentWorkflows } from "./screens/RecentWorkflows";
+
+/**
+ * Screens that replace the workflow rail with their own title — they sit
+ * outside the six-stage workflow, so a progress rail would misreport where the
+ * officer is. Membership and label are one lookup so the two cannot disagree.
+ */
+const CHROMELESS_LABELS: Partial<Record<Screen, string>> = {
+  config: "Configuration",
+  batch: "Batch processing",
+  "anchor-receipt": "AnchorReceipt Console",
+  recent: "Recent Workflows",
+};
 
 const STAGE_INDEX: Record<string, number> = {
   load: 0,
@@ -60,25 +73,39 @@ function GearIcon() {
 function App() {
   const { screen, operator, openConfig, openBatch, openAnchorReceiptConsole } = useSession();
   const [showSplash, setShowSplash] = useState(true);
-  const chromeless = screen === "config" || screen === "batch" || screen === "anchor-receipt";
-  const chromeLabel =
-    screen === "config"
-      ? "Configuration"
-      : screen === "anchor-receipt"
-        ? "AnchorReceipt Console"
-        : "Batch processing";
+  const chromeLabel = CHROMELESS_LABELS[screen];
+  const chromeless = chromeLabel !== undefined;
+
+  // Native File-menu items (New Transaction, Recent Workflows) drive the store
+  // through Tauri events. Bound once here and released on unmount — StrictMode
+  // mounts effects twice in development, and a duplicate listener would toggle
+  // Recent Workflows open and shut in the same click.
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void initMenuListeners().then((off) => {
+      if (cancelled) off();
+      else dispose = off;
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
 
   return (
     <div className="flex min-h-screen flex-col">
       {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
       <header className="sticky top-0 z-10 border-b border-[#1A2435] bg-[#0A0F1A]/85 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-6 py-3">
+        <div className="mx-auto grid max-w-6xl grid-cols-[auto_1fr_auto] items-center gap-4 px-6 py-3">
           <Brand />
-          {chromeless ? (
-            <div className="text-sm font-semibold text-slate-500">{chromeLabel}</div>
-          ) : (
-            <WorkflowRail current={STAGE_INDEX[screen]} escalated={screen === "escalation"} />
-          )}
+          <div className="flex min-w-0 justify-center">
+            {chromeless ? (
+              <div className="text-sm font-semibold text-slate-500">{chromeLabel}</div>
+            ) : (
+              <WorkflowRail current={STAGE_INDEX[screen]} escalated={screen === "escalation"} />
+            )}
+          </div>
           <div className="flex items-center gap-3">
             <div className="hidden text-right sm:block">
               <div className="text-[11px] text-slate-400">Operator</div>
@@ -123,6 +150,7 @@ function App() {
         {screen === "config" && <Configuration />}
         {screen === "batch" && <BatchProcessing />}
         {screen === "anchor-receipt" && <AnchorReceiptConsole />}
+        {screen === "recent" && <RecentWorkflows />}
       </main>
 
       <footer className="border-t border-slate-200 py-3 text-center text-xs text-slate-400">

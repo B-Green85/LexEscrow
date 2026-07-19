@@ -59,6 +59,25 @@ export interface NewSession {
   batchId?: string; // default null
 }
 
+/**
+ * One row of the Recent Workflows list (spec §12 Screen 9).
+ *
+ * `totalHeldCents` is `number | null` — null until the session has a parsed
+ * payload, and a `number` rather than `bigint` for the same reason as every
+ * other value crossing IPC: Tauri's JSON transport cannot carry bigint. It is
+ * only ever formatted for display, never used in arithmetic.
+ */
+export interface RecentSessionRow {
+  sessionId: string;
+  clientId: string;
+  assetClass: string;
+  executionPath: string | null;
+  currentState: string;
+  createdAt: string;
+  updatedAt: string;
+  totalHeldCents: number | null;
+}
+
 export interface PayloadCentsRow {
   payloadId: string;
   sessionId: string;
@@ -338,21 +357,62 @@ export async function finalVerifyBeforeExecution(filename: string, bytes: Uint8A
   }
 }
 
+// Browser-mode session store. Unlike the write-only tables, sessions are *read
+// back* — the Recent Workflows list is a query over them — so a no-op fallback
+// would leave that screen permanently empty under `npm run dev`. Insertion
+// order stands in for the SQL `ORDER BY created_at, rowid`.
+const memSessions = new Map<string, RecentSessionRow>();
+
 export async function createSession(session: NewSession): Promise<void> {
   if (isTauri()) return invoke<void>("create_session", { session });
-  // browser: nothing to persist
+  const now = new Date().toISOString();
+  memSessions.set(session.sessionId, {
+    sessionId: session.sessionId,
+    clientId: session.clientId,
+    assetClass: session.assetClass ?? "legal",
+    executionPath: null,
+    currentState: "LOADED",
+    createdAt: now,
+    updatedAt: now,
+    totalHeldCents: null,
+  });
+}
+
+/** Mirrors the SQL `update_session_timestamp` trigger. */
+function memTouchSession(sessionId: string, patch: Partial<RecentSessionRow>): void {
+  const row = memSessions.get(sessionId);
+  if (!row) return;
+  memSessions.set(sessionId, { ...row, ...patch, updatedAt: new Date().toISOString() });
 }
 
 export async function updateSessionState(sessionId: string, newState: string): Promise<void> {
   if (isTauri()) return invoke<void>("update_session_state", { sessionId, newState });
+  memTouchSession(sessionId, { currentState: newState });
 }
 
 export async function setExecutionPath(sessionId: string, path: string): Promise<void> {
   if (isTauri()) return invoke<void>("set_execution_path", { sessionId, path });
+  memTouchSession(sessionId, { executionPath: path });
 }
 
 export async function savePayload(payload: PayloadCentsRow): Promise<void> {
   if (isTauri()) return invoke<void>("save_payload", { payload });
+  memTouchSession(payload.sessionId, { totalHeldCents: payload.totalHeldCents });
+}
+
+/**
+ * The `limit` most recently created sessions, newest first.
+ *
+ * The browser fallback reverses before sorting so that sessions sharing a
+ * timestamp come back newest-first, matching the backend's
+ * `ORDER BY created_at DESC, rowid DESC`.
+ */
+export async function getRecentSessions(limit = 20): Promise<RecentSessionRow[]> {
+  if (isTauri()) return invoke<RecentSessionRow[]>("get_recent_sessions", { limit });
+  return [...memSessions.values()]
+    .reverse()
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, limit);
 }
 
 /** Record a CannaVerify regulatory check result (cannabis asset class). */

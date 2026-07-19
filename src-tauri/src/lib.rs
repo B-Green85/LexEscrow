@@ -11,6 +11,7 @@ mod db;
 mod docusign;
 mod esign_callback;
 mod integrations;
+mod menu;
 mod notify;
 mod vault;
 
@@ -40,6 +41,11 @@ pub fn run() {
             // Bound to 127.0.0.1 only — the sole client is a WebView on this
             // machine following a redirect (see esign_callback.rs).
             app.manage(esign_callback::spawn(app.handle().clone()));
+
+            // Native application menu. The two custom File items emit events
+            // the WebView turns into session-store actions (see menu.rs).
+            app.set_menu(menu::build(app.handle())?)?;
+            app.on_menu_event(menu::handle_event);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -55,6 +61,7 @@ pub fn run() {
             db::update_session_state,
             db::set_execution_path,
             db::get_session,
+            db::get_recent_sessions,
             db::save_payload,
             db::save_cannaverify_result,
             db::save_docusign_envelope,

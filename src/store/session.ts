@@ -76,7 +76,8 @@ export type Screen =
   | "escalation"
   | "config"
   | "batch"
-  | "anchor-receipt";
+  | "anchor-receipt"
+  | "recent";
 export type StepStatus = "pending" | "active" | "done" | "error";
 export type EntryMode = "ai" | "manual";
 export type ProcPhase = "choose" | "running" | "manual";
@@ -437,6 +438,7 @@ export interface SessionState {
   closeConfig: () => void;
   openBatch: () => void;
   openAnchorReceiptConsole: () => void;
+  openRecent: () => void;
   downloadAnchorReceipt: () => void;
   returnToBatch: () => void;
   loadBatchItem: (h: BatchHydration) => void;
@@ -709,17 +711,30 @@ export const useSession = create<SessionState>((set, get) => {
     setEntryMode: (mode) => set({ entryMode: mode }),
     setAssetClass: (cls) => set({ assetClass: cls }),
     openConfig: () =>
-      set((s) => ({ prevScreen: s.screen === "config" ? s.prevScreen : s.screen, screen: "config" })),
+      set((s) =>
+        s.screen === "config" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "config" },
+      ),
     closeConfig: () => set((s) => ({ screen: s.prevScreen })),
-    openBatch: () => set({ screen: "batch" }),
+    openBatch: () =>
+      set((s) =>
+        s.screen === "batch" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "batch" },
+      ),
 
     /** Screen 8 — standalone fingerprinting, outside any escrow workflow.
      *  Remembers where the officer came from so closing returns them there. */
     openAnchorReceiptConsole: () =>
-      set((s) => ({
-        prevScreen: s.screen === "anchor-receipt" ? s.prevScreen : s.screen,
-        screen: "anchor-receipt",
-      })),
+      set((s) =>
+        s.screen === "anchor-receipt"
+          ? { screen: s.prevScreen }
+          : { prevScreen: s.screen, screen: "anchor-receipt" },
+      ),
+
+    /** Screen 9 — the session history, reached from the File menu (Cmd+R).
+     *  Toggles, so the same menu item that opens it closes it again. */
+    openRecent: () =>
+      set((s) =>
+        s.screen === "recent" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "recent" },
+      ),
 
     downloadAnchorReceipt: () => {
       const { anchorReceipt } = get();
@@ -861,7 +876,12 @@ export const useSession = create<SessionState>((set, get) => {
         set({ artifact });
         await backend.createSession({
           sessionId,
-          clientId: "pending",
+          // The anchored party, not the parsed `clientId`. Trust anchors are
+          // authoritative and known now, whereas the payload's client id
+          // arrives several steps later — and Recent Workflows lists sessions
+          // that never got that far, which used to leave every row reading
+          // "pending" in the one column an officer scans by.
+          clientId: anchors.clientFullLegalName.trim() || "Unidentified party",
           attorneyBarNumber: anchors.attorneyBarNumber,
           documentHash: artifact.hash,
           assetClass,
@@ -2240,4 +2260,30 @@ async function sendNotifications(
   }
 
   return out;
+}
+
+/**
+ * Bind the native File-menu items to session actions (spec §12 Screen 9).
+ *
+ * The menu lives in Rust and cannot reach the store directly, so each custom
+ * item emits an event that is translated into an action here. Returns a
+ * disposer rather than binding for the process lifetime: React StrictMode runs
+ * effects twice in development, and a second live listener would toggle
+ * `openRecent` straight back to where it started — the menu item would appear
+ * to do nothing at all.
+ *
+ * Outside Tauri there is no menu to listen to. `npm run dev` in a plain browser
+ * and the test runner both take that path, and the event API is imported
+ * dynamically behind that guard so neither pulls it into the bundle they load
+ * (the same reason `EmbeddedSigningPanel` imports it this way).
+ */
+export async function initMenuListeners(): Promise<() => void> {
+  if (!backend.isTauri()) return () => {};
+
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlisten = await Promise.all([
+    listen("menu:new_transaction", () => useSession.getState().reset()),
+    listen("menu:recent_workflows", () => useSession.getState().openRecent()),
+  ]);
+  return () => unlisten.forEach((off) => off());
 }
