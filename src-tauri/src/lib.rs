@@ -7,6 +7,7 @@
 
 mod ai;
 mod artifact_guard;
+mod cre;
 mod db;
 mod docusign;
 mod esign_callback;
@@ -96,6 +97,11 @@ pub fn run() {
             vault::vault_has_docusign,
             vault::vault_delete,
             vault::vault_change_password,
+            // Blockchain settlement config (vault-held; replaces contracts/.env)
+            vault::vault_set_blockchain,
+            vault::vault_get_blockchain_public,
+            vault::vault_has_blockchain,
+            cre::get_cre_config,
             // Practice-management integrations (Clio / PracticePanther)
             vault::vault_set_clio,
             vault::vault_get_clio_public,

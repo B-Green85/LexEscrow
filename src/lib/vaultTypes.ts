@@ -91,6 +91,64 @@ export interface PracticePantherConfigInput {
   apiKey?: string;
 }
 
+/**
+ * Blockchain settlement config — public view.
+ *
+ * Addresses are echoed in full because they are public on-chain identifiers;
+ * the operator needs to confirm which contract this install settles against.
+ * The two values that are *not* public are handled differently from each
+ * other: `deployerPrivateKey` is reduced to `hasPrivateKey`, and the RPC URL to
+ * `rpcUrlHint` (its host), because providers put the API key in the URL path.
+ *
+ * `hasConfig` means "there is enough here to reach a chain". It does **not**
+ * mean settlement can proceed — that also needs a signing key, which is what
+ * `hasBlockchain()` reports and what the settle gate uses.
+ */
+export interface BlockchainPublic {
+  hasConfig: boolean;
+  networkName: string;
+  chainId: number;
+  contractAddress: string;
+  deployerAddress: string;
+  usdcAddress: string;
+  forwarderAddress: string;
+  rpcUrlHint: string;
+  hasPrivateKey: boolean;
+}
+
+/**
+ * Blockchain setter payload. `rpcUrl` and `deployerPrivateKey` follow the house
+ * rule — blank on edit keeps what is stored — so correcting a mistyped address
+ * never requires re-pasting a key that can move funds.
+ */
+export interface BlockchainInput {
+  rpcUrl: string;
+  chainId: number;
+  contractAddress: string;
+  deployerAddress: string;
+  deployerPrivateKey: string;
+  usdcAddress: string;
+  forwarderAddress: string;
+  networkName: string;
+}
+
+/**
+ * CRE workflow configuration, assembled from the vault (`cre.rs`).
+ *
+ * The secret-free half of what the workflow needs. The RPC credential and the
+ * deployer key stay in Rust — see `resolve_signing_config`.
+ */
+export interface CreConfig {
+  rpcUrlHint: string;
+  contractAddress: string;
+  chainId: number;
+  networkName: string;
+  usdcAddress: string;
+  forwarderAddress: string;
+  chainSelectorName: string;
+  isTestnet: boolean;
+}
+
 export interface AiInput {
   providerName: string;
   endpoint: string;

@@ -7,6 +7,7 @@
  */
 
 import { CHECK_LABELS, type CannaVerifyCheck, type CannaVerifyConditions } from "../lib/cannaverify/types";
+import { txUrl } from "../lib/explorer";
 
 interface Props {
   conditions: CannaVerifyConditions | null;
@@ -52,7 +53,7 @@ function CheckRow({ check }: { check: CannaVerifyCheck }) {
       <p className="mt-1 text-xs leading-relaxed text-slate-400">{check.detail}</p>
       {check.onChainTx && (
         <a
-          href={`https://sepolia.etherscan.io/tx/${check.onChainTx}`}
+          href={txUrl(check.onChainTx)}
           target="_blank"
           rel="noreferrer"
           className="mt-1.5 inline-block font-mono text-[11px] text-[#93C5FD] hover:underline"

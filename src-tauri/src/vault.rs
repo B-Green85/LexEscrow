@@ -147,6 +147,34 @@ pub struct PracticePantherConfig {
     pub api_key: Option<String>,
 }
 
+/// On-chain settlement configuration — RPC endpoint, contract addresses, and
+/// the deployer key.
+///
+/// `deployer_private_key` displaces the DocuSign PEM as the most dangerous
+/// value the vault holds. The PEM can impersonate an account; this key moves
+/// money, irreversibly, with no counterparty to appeal to. It is the reason
+/// this entry never crosses IPC in any form — not even truncated — and the
+/// reason `set_blockchain` is the only setter in this file that re-checks the
+/// vault password before writing.
+///
+/// `rpc_url` is treated as secret rather than as addressing information: an
+/// Alchemy/Infura endpoint carries the API key *in its path*, so echoing the
+/// URL back to the WebView would leak a billable credential. `BlockchainPublic`
+/// therefore exposes only the host.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockchainConfig {
+    pub rpc_url: String,              // SENSITIVE — API key rides in the path
+    #[zeroize(skip)]
+    pub chain_id: u64,                // 11155111 Sepolia, 1 mainnet
+    pub contract_address: String,     // EscrowSettlement / RetainerRelease
+    pub deployer_address: String,     // public — derived from the key below
+    pub deployer_private_key: String, // SENSITIVE — never crosses IPC
+    pub usdc_address: String,         // USDC token contract
+    pub forwarder_address: String,    // Chainlink CRE KeystoneForwarder
+    pub network_name: String,         // "Ethereum Sepolia" | "Ethereum Mainnet"
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct VaultData {
     #[serde(default)]
@@ -163,6 +191,8 @@ struct VaultData {
     clio: Option<ClioConfig>,
     #[serde(default)]
     practice_panther: Option<PracticePantherConfig>,
+    #[serde(default)]
+    blockchain: Option<BlockchainConfig>,
 }
 
 // ============================================================================
@@ -233,6 +263,29 @@ pub struct PracticePantherPublic {
     pub webhook_url: String,
     pub matter_id: String,
     pub has_api_key: bool,
+}
+
+/// Secret-free blockchain view.
+///
+/// Addresses are public by construction — they are on-chain identifiers anyone
+/// can read from a block explorer — so they are echoed in full; the operator
+/// needs to confirm *which* contract this install settles against. The two
+/// values that are not public are handled differently from each other: the
+/// private key is reduced to a bare presence flag, and the RPC URL to its host,
+/// because the API key sits in the URL path and the host alone is what an
+/// operator needs to recognise their provider.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockchainPublic {
+    pub has_config: bool,
+    pub network_name: String,
+    pub chain_id: u64,
+    pub contract_address: String,
+    pub deployer_address: String,
+    pub usdc_address: String,
+    pub forwarder_address: String,
+    pub rpc_url_hint: String, // host only, e.g. "eth-sepolia.g.alchemy.com"
+    pub has_private_key: bool,
 }
 
 // ============================================================================
@@ -306,6 +359,26 @@ pub struct PracticePantherConfigInput {
     matter_id: Option<String>,
     #[serde(default)]
     api_key: Option<String>,
+}
+
+/// Blockchain setter payload.
+///
+/// Both secrets follow the house rule — blank on edit keeps what is stored — so
+/// an operator can correct a mistyped USDC address without re-pasting a private
+/// key, which is exactly the moment a key is most likely to end up in a
+/// clipboard manager or shell history.
+#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockchainInput {
+    rpc_url: String,
+    #[zeroize(skip)]
+    chain_id: u64,
+    contract_address: String,
+    deployer_address: String,
+    deployer_private_key: String,
+    usdc_address: String,
+    forwarder_address: String,
+    network_name: String,
 }
 
 // ============================================================================
@@ -694,12 +767,107 @@ impl VaultState {
         })
     }
 
+    // ---- Blockchain settlement config -----------------------------------
+
+    /// Store the blockchain config, re-authenticating first.
+    ///
+    /// The password check is the one place this file departs from its own
+    /// pattern, and deliberately: every other setter writes a credential that
+    /// can be revoked upstream — rotate the token, disable the integration key,
+    /// the damage stops. A deployer private key cannot be revoked. Whoever
+    /// holds it can drain the escrow, and no action taken afterwards undoes a
+    /// confirmed transaction. So an unlocked vault left open on an unattended
+    /// machine is not sufficient authority to write one; the operator has to
+    /// prove they are still the operator.
+    ///
+    /// The check reuses `change_password`'s comparison: derive a candidate key
+    /// from the submitted password and the stored salt, then compare it against
+    /// the live key in constant time. A wrong password derives a different key
+    /// and never touches the ciphertext.
+    fn set_blockchain(&self, password: &str, input: BlockchainInput) -> Result<(), VaultError> {
+        let mut guard = self.inner.lock().unwrap();
+        let state = guard.as_mut().ok_or(VaultError::Locked)?;
+        let candidate = derive_key(password, &state.salt);
+        if !ct_eq(candidate.as_ref(), state.key.as_ref()) {
+            return Err(VaultError::WrongPassword);
+        }
+
+        let existing = state.data.blockchain.as_ref();
+        let keep = |submitted: &str, current: Option<&String>| -> String {
+            if submitted.is_empty() {
+                current.cloned().unwrap_or_default()
+            } else {
+                submitted.to_string()
+            }
+        };
+
+        state.data.blockchain = Some(BlockchainConfig {
+            rpc_url: keep(input.rpc_url.trim(), existing.map(|e| &e.rpc_url)),
+            chain_id: input.chain_id,
+            contract_address: input.contract_address.trim().to_string(),
+            deployer_address: input.deployer_address.trim().to_string(),
+            deployer_private_key: keep(
+                input.deployer_private_key.trim(),
+                existing.map(|e| &e.deployer_private_key),
+            ),
+            usdc_address: input.usdc_address.trim().to_string(),
+            forwarder_address: input.forwarder_address.trim().to_string(),
+            network_name: input.network_name.trim().to_string(),
+        });
+        persist(&state.data, &state.key, &state.salt, &self.path)
+    }
+
+    fn get_blockchain_public(&self) -> Result<BlockchainPublic, VaultError> {
+        let guard = self.inner.lock().unwrap();
+        let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
+        Ok(match data.blockchain.as_ref() {
+            Some(e) => BlockchainPublic {
+                has_config: has_network_config(e),
+                network_name: e.network_name.clone(),
+                chain_id: e.chain_id,
+                contract_address: e.contract_address.clone(),
+                deployer_address: e.deployer_address.clone(),
+                usdc_address: e.usdc_address.clone(),
+                forwarder_address: e.forwarder_address.clone(),
+                rpc_url_hint: url_host(&e.rpc_url),
+                has_private_key: !e.deployer_private_key.is_empty(),
+            },
+            None => BlockchainPublic {
+                has_config: false,
+                network_name: String::new(),
+                chain_id: 0,
+                contract_address: String::new(),
+                deployer_address: String::new(),
+                usdc_address: String::new(),
+                forwarder_address: String::new(),
+                rpc_url_hint: String::new(),
+                has_private_key: false,
+            },
+        })
+    }
+
+    /// Can this install actually settle on-chain?
+    ///
+    /// Stricter than `has_config`, and for the same reason `has_docusign`
+    /// insists on a PEM: network settings with no signing key describe a chain
+    /// this install can read but not write. The settle button gates on this,
+    /// so "configured" has to mean "a settlement submitted now would succeed".
+    fn has_blockchain(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|s| s.data.blockchain.as_ref())
+            .is_some_and(|e| has_network_config(e) && !e.deployer_private_key.is_empty())
+    }
+
     fn delete_group(&self, group: &str) -> Result<(), VaultError> {
         self.mutate(|data| match group {
             "ai" => data.ai = None,
             "smtp" => data.smtp = None,
             "twilio" => data.twilio = None,
             "docusign" => data.docusign = None,
+            "blockchain" => data.blockchain = None,
             // "seal" is intentionally absent. It is not a user credential, and
             // dropping it would orphan every AnchorReceipt seal this install
             // has ever issued — a destructive, irreversible act with no UI
@@ -763,6 +931,14 @@ impl VaultState {
             .and_then(|s| s.data.practice_panther.clone())
     }
 
+    /// Blockchain config for `cre.rs`. Internal only — this is the accessor
+    /// that hands out the deployer private key, so it exists to serve exactly
+    /// one caller: the Rust-side signer. Nothing that can reach the WebView may
+    /// call it. The returned clone zeroizes on drop.
+    pub fn resolve_blockchain(&self) -> Option<BlockchainConfig> {
+        self.inner.lock().unwrap().as_ref().and_then(|s| s.data.blockchain.clone())
+    }
+
     /// AnchorReceipt seal key for `artifact_guard.rs` (spec §8).
     ///
     /// `None` when the vault is locked — sealing is an attestation, and a
@@ -788,6 +964,31 @@ fn new_seal_entry() -> SealEntry {
     let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     OsRng.fill_bytes(key.as_mut());
     SealEntry { key_b64: B64.encode(key.as_ref()) }
+}
+
+/// Is there enough here to talk to a chain at all? Deliberately does not
+/// consider the private key — see `has_blockchain` for the settle-gate check.
+fn has_network_config(e: &BlockchainConfig) -> bool {
+    !e.rpc_url.is_empty() && !e.contract_address.is_empty() && e.chain_id != 0
+}
+
+/// Host portion of a URL, for display hints.
+///
+/// Exists because RPC providers put the API key in the path
+/// (`https://eth-sepolia.g.alchemy.com/v2/<key>`), so showing the operator
+/// which provider is wired up must not mean showing them the credential.
+/// Everything from the first `/`, `?` or `#` onward is discarded.
+fn url_host(url: &str) -> String {
+    let after_scheme = match url.split_once("://") {
+        Some((_, rest)) => rest,
+        None => url,
+    };
+    after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// Last four characters of an identifier, for display hints. Short values are
@@ -956,6 +1157,34 @@ pub fn vault_get_practice_panther_public(
     state: State<'_, VaultState>,
 ) -> Result<PracticePantherPublic, String> {
     state.get_practice_panther_public().map_err(err)
+}
+
+// ---- Blockchain settlement config -----------------------------------------
+
+/// Write the blockchain config. Takes the vault password as a second factor —
+/// see `VaultState::set_blockchain` for why this setter alone does.
+#[tauri::command]
+pub fn vault_set_blockchain(
+    state: State<'_, VaultState>,
+    password: String,
+    input: BlockchainInput,
+) -> Result<(), String> {
+    state.set_blockchain(&password, input).map_err(err)
+}
+
+#[tauri::command]
+pub fn vault_get_blockchain_public(
+    state: State<'_, VaultState>,
+) -> Result<BlockchainPublic, String> {
+    state.get_blockchain_public().map_err(err)
+}
+
+/// Presence flag gating the settle button. A locked vault reports `false`
+/// rather than erroring, matching `vault_has_docusign` — "not available right
+/// now" is the honest answer, and the caller degrades instead of failing.
+#[tauri::command]
+pub fn vault_has_blockchain(state: State<'_, VaultState>) -> bool {
+    state.has_blockchain()
 }
 
 #[tauri::command]
@@ -1358,6 +1587,130 @@ mod tests {
         assert_eq!(v.resolve_ai().unwrap().api_key, "sk-1");
         assert!(v.resolve_clio().is_none());
         assert!(v.resolve_practice_panther().is_none());
+    }
+
+    // ---- Blockchain settlement config ------------------------------------
+
+    fn chain_input(key: &str) -> BlockchainInput {
+        BlockchainInput {
+            rpc_url: "https://eth-sepolia.g.alchemy.com/v2/SUPER_SECRET_KEY".into(),
+            chain_id: 11155111,
+            contract_address: "0x6f532f0eefc61a5792ad211850a8b48fbc388674".into(),
+            deployer_address: "0x0b370090317443afFa8124Af45b7C2FeB5a01810".into(),
+            deployer_private_key: key.into(),
+            usdc_address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238".into(),
+            forwarder_address: "0x15fC6ae953E024d975e77382eEeC56A9101f9F88".into(),
+            network_name: "Ethereum Sepolia".into(),
+        }
+    }
+
+    #[test]
+    fn blockchain_roundtrip_hides_the_key_and_the_rpc_credential() {
+        let v = temp_state();
+        v.unlock("pw");
+        assert!(!v.has_blockchain());
+
+        v.set_blockchain("pw", chain_input("0xdeadbeefcafe")).unwrap();
+        assert!(v.has_blockchain());
+
+        let p = v.get_blockchain_public().unwrap();
+        assert!(p.has_config && p.has_private_key);
+        assert_eq!(p.chain_id, 11155111);
+        assert_eq!(p.network_name, "Ethereum Sepolia");
+        // Addresses are public on-chain identifiers — echoed in full.
+        assert_eq!(p.contract_address, "0x6f532f0eefc61a5792ad211850a8b48fbc388674");
+        assert_eq!(p.deployer_address, "0x0b370090317443afFa8124Af45b7C2FeB5a01810");
+        // The RPC URL is reduced to its host, because the API key is in the path.
+        assert_eq!(p.rpc_url_hint, "eth-sepolia.g.alchemy.com");
+
+        // Neither secret may appear anywhere in the serialized public shape.
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("0xdeadbeefcafe"));
+        assert!(!json.contains("SUPER_SECRET_KEY"));
+
+        // The internal resolver still has both, for the Rust-side signer.
+        let s = v.resolve_blockchain().unwrap();
+        assert_eq!(s.deployer_private_key, "0xdeadbeefcafe");
+        assert!(s.rpc_url.contains("SUPER_SECRET_KEY"));
+    }
+
+    #[test]
+    fn blockchain_set_requires_the_vault_password() {
+        // The second factor: an unlocked vault is not on its own authority to
+        // write a key that can move funds.
+        let v = temp_state();
+        v.unlock("pw");
+        assert!(v.set_blockchain("not-the-password", chain_input("0xkey")).is_err());
+        assert!(v.resolve_blockchain().is_none());
+        v.set_blockchain("pw", chain_input("0xkey")).unwrap();
+        assert!(v.has_blockchain());
+    }
+
+    #[test]
+    fn blockchain_blank_secrets_on_edit_keep_existing() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_blockchain("pw", chain_input("0xoriginal")).unwrap();
+
+        // Correct the USDC address without re-pasting the key or the RPC URL.
+        let mut edit = chain_input("");
+        edit.rpc_url = String::new();
+        edit.usdc_address = "0xNEW".into();
+        v.set_blockchain("pw", edit).unwrap();
+
+        let s = v.resolve_blockchain().unwrap();
+        assert_eq!(s.deployer_private_key, "0xoriginal");
+        assert!(s.rpc_url.contains("SUPER_SECRET_KEY"));
+        assert_eq!(s.usdc_address, "0xNEW");
+    }
+
+    #[test]
+    fn blockchain_network_config_without_a_key_cannot_settle() {
+        // Readable chain, unsignable transactions — `has_config` yes, gate no.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_blockchain("pw", chain_input("")).unwrap();
+        assert!(!v.has_blockchain());
+        let p = v.get_blockchain_public().unwrap();
+        assert!(p.has_config);
+        assert!(!p.has_private_key);
+    }
+
+    #[test]
+    fn blockchain_survives_lock_unlock_and_is_deletable() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_blockchain("pw", chain_input("0xkey")).unwrap();
+
+        v.lock();
+        assert!(!v.has_blockchain(), "a locked vault cannot settle");
+        assert!(v.unlock("pw").ok);
+        assert_eq!(v.resolve_blockchain().unwrap().deployer_private_key, "0xkey");
+
+        v.delete_group("blockchain").unwrap();
+        assert!(v.resolve_blockchain().is_none());
+        assert!(!v.has_blockchain());
+    }
+
+    #[test]
+    fn blockchain_never_appears_in_the_general_public_shape() {
+        // VaultPublic crosses IPC; no part of the settlement key may ride along.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_blockchain("pw", chain_input("0xdeadbeefcafe")).unwrap();
+        let json = serde_json::to_string(&v.get_public().unwrap()).unwrap();
+        assert!(!json.contains("0xdeadbeefcafe"));
+        assert!(!json.contains("SUPER_SECRET_KEY"));
+        assert!(!json.contains("blockchain"));
+    }
+
+    #[test]
+    fn url_host_strips_the_api_key_from_every_url_shape() {
+        assert_eq!(url_host("https://eth-sepolia.g.alchemy.com/v2/KEY"), "eth-sepolia.g.alchemy.com");
+        assert_eq!(url_host("https://mainnet.infura.io/v3/KEY?x=1"), "mainnet.infura.io");
+        assert_eq!(url_host("eth-sepolia.g.alchemy.com/v2/KEY"), "eth-sepolia.g.alchemy.com");
+        assert_eq!(url_host("http://127.0.0.1:8545"), "127.0.0.1:8545");
+        assert_eq!(url_host(""), "");
     }
 
     #[test]

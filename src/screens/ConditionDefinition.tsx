@@ -29,6 +29,7 @@ import type {
 } from "../lib/esign";
 import type { TrustAnchors } from "../lexguard/types";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
+import { txUrl } from "../lib/explorer";
 
 /** Re-exported so callers of this screen need only one import. */
 export type { EmbeddedSigningTarget } from "../lib/esign";
@@ -248,7 +249,7 @@ function EnvelopeRow({ envelope }: { envelope: ESignEnvelope }) {
             <div className="flex items-center justify-between gap-3">
               <span className="text-xs text-slate-500">AnchorReceipt</span>
               <a
-                href={`https://sepolia.etherscan.io/tx/${envelope.onChainTx}`}
+                href={txUrl(envelope.onChainTx)}
                 target="_blank"
                 rel="noreferrer"
                 className="font-mono text-[11px] text-[#93C5FD] hover:underline"

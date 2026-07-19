@@ -37,6 +37,8 @@ import { normalizeName } from "../lexguard/anchor-matcher";
 import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 import { fireIntegrationWebhooks } from "../lib/integrations";
+import { setExplorerChain } from "../lib/explorer";
+import type { BlockchainPublic } from "../lib/vaultTypes";
 import { downloadAuditReport as downloadAuditReportPdf } from "../lib/export/audit-pdf-export";
 import {
   buildConditions,
@@ -427,6 +429,19 @@ export interface SessionState {
   /** When the checklist was last re-evaluated (ISO). Drives the refresh line. */
   conditionsUpdatedAt: string | null;
 
+  // ── Blockchain settlement config (vault-held) ────────────────────────────
+  /**
+   * Public view of the vault's blockchain entry. Null until first read, and on
+   * a locked vault — the settle gate treats both as "not configured".
+   */
+  blockchain: BlockchainPublic | null;
+  /**
+   * Can this install actually settle on-chain? Distinct from
+   * `blockchain.hasConfig`: this also requires a signing key. The settle button
+   * gates on this; every other step of the workflow ignores it.
+   */
+  blockchainReady: boolean;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
@@ -459,6 +474,8 @@ export interface SessionState {
   waiveCondition: (conditionId: string, reason: string) => void;
   markConditionMet: (conditionId: string) => void;
   proceedToSettlement: () => Promise<void>;
+  /** Re-read the vault's blockchain config. Safe to call on a locked vault. */
+  refreshBlockchainConfig: () => Promise<void>;
   sendForSignature: (
     documentLabel: string,
     signers: ESignSigner[],
@@ -704,6 +721,8 @@ export const useSession = create<SessionState>((set, get) => {
     conditionPolling: false,
     conditionPollTimer: null,
     conditionsUpdatedAt: null,
+    blockchain: null,
+    blockchainReady: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -1464,6 +1483,30 @@ export const useSession = create<SessionState>((set, get) => {
      * `allMet` is true only when every condition is met or explicitly waived,
      * so this is the single place the checklist actually blocks money moving.
      */
+    /**
+     * Re-read the vault's blockchain config into the store.
+     *
+     * Never throws. A locked vault, a browser build with no backend, or an
+     * absent entry all resolve to "not configured" — because the only thing
+     * this gates is settlement, and every other step of the workflow
+     * (parsing, LexGuard, conditions, eSign) must keep working regardless.
+     * Turning a locked vault into a thrown error here would take the whole
+     * screen down over a credential the officer may not need for another hour.
+     */
+    refreshBlockchainConfig: async () => {
+      try {
+        const [pub, ready] = await Promise.all([
+          backend.getBlockchainPublic(),
+          backend.hasBlockchain(),
+        ]);
+        // Explorer links follow the configured chain — see lib/explorer.ts.
+        setExplorerChain(pub.chainId);
+        set({ blockchain: pub, blockchainReady: ready });
+      } catch {
+        set({ blockchain: null, blockchainReady: false });
+      }
+    },
+
     proceedToSettlement: async () => {
       const { conditionSummary, fundsDeposited } = get();
 
@@ -1471,6 +1514,7 @@ export const useSession = create<SessionState>((set, get) => {
         set({ error: "Record the escrow deposit before settling." });
         return;
       }
+
       if (!conditionSummary.allMet) {
         set({
           error:
@@ -1489,6 +1533,28 @@ export const useSession = create<SessionState>((set, get) => {
         waived: conditionSummary.total - conditionSummary.met,
         officer_identity: get().operator,
       });
+
+      // The blockchain gate, checked last and deliberately so.
+      //
+      // Ordering: the checks above are about *this escrow* — is it funded, are
+      // its conditions satisfied. This one is about *this install* — can it
+      // reach a chain and sign at all. An officer who has an unmet condition
+      // should hear about the condition, not about a credential; the missing
+      // chain config is already surfaced as a persistent banner on this screen
+      // from the moment the escrow is funded, so it is never a surprise here.
+      //
+      // Re-read rather than trusting the cached flag: the vault can lock
+      // between the screen rendering and the officer clicking, and a disabled
+      // button is a hint, not a control. This is the control.
+      await get().refreshBlockchainConfig();
+      if (!get().blockchainReady) {
+        set({
+          error:
+            "Blockchain is not configured — set the network, contract and deployer key in Configuration before settling.",
+        });
+        return;
+      }
+
       await get().proceedToExecution();
     },
 

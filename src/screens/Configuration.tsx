@@ -3,6 +3,7 @@ import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
 import type {
   AiPublic,
+  BlockchainPublic,
   ClioPublic,
   DocuSignPublic,
   PracticePantherPublic,
@@ -23,15 +24,18 @@ function SecretInput({
   value,
   onChange,
   placeholder,
+  id,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  id?: string;
 }) {
   const [show, setShow] = useState(false);
   return (
     <div className="relative">
       <input
+        id={id}
         className="input pr-16"
         type={show ? "text" : "password"}
         value={value}
@@ -395,15 +399,18 @@ function SecretTextarea({
   value,
   onChange,
   placeholder,
+  id,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  id?: string;
 }) {
   const [show, setShow] = useState(false);
   return (
     <div className="relative">
       <textarea
+        id={id}
         // Masking a textarea needs a font substitution — `password` is not a
         // valid textarea type. Hidden state keeps the PEM unreadable over a
         // shoulder while preserving the newlines the parser depends on.
@@ -849,6 +856,278 @@ function PracticePantherCard({
   );
 }
 
+// ── Blockchain settlement config ─────────────────────────────────────────────
+
+/**
+ * Ethereum Sepolia testnet defaults.
+ *
+ * These are the addresses this build was developed and deployed against, and
+ * they used to live in `contracts/.env` and `cre/config.json`. They are public
+ * on-chain identifiers, so they are safe to ship in the bundle — unlike the two
+ * values conspicuously absent from this object. The RPC URL is a placeholder
+ * because a real one embeds a billable API key; the private key has no entry at
+ * all, because there is no version of "a default private key" that is not a
+ * catastrophe waiting for someone to click Save.
+ */
+export const SEPOLIA_DEFAULTS = {
+  networkName: "Ethereum Sepolia",
+  chainId: 11155111,
+  rpcUrl: "https://eth-sepolia.g.alchemy.com/v2/",
+  contractAddress: "0x6f532f0eefc61a5792ad211850a8b48fbc388674",
+  deployerAddress: "0x0b370090317443afFa8124Af45b7C2FeB5a01810",
+  usdcAddress: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+  forwarderAddress: "0x15fC6ae953E024d975e77382eEeC56A9101f9F88",
+} as const;
+
+export function BlockchainCard({
+  data,
+  refresh,
+}: {
+  data: BlockchainPublic | null;
+  refresh: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [networkName, setNetworkName] = useState<string>(SEPOLIA_DEFAULTS.networkName);
+  const [chainId, setChainId] = useState<number>(SEPOLIA_DEFAULTS.chainId);
+  const [rpcUrl, setRpcUrl] = useState("");
+  const [contractAddress, setContractAddress] = useState("");
+  const [deployerAddress, setDeployerAddress] = useState("");
+  const [deployerPrivateKey, setDeployerPrivateKey] = useState("");
+  const [usdcAddress, setUsdcAddress] = useState("");
+  const [forwarderAddress, setForwarderAddress] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const configured = !!data?.hasConfig;
+
+  const openEdit = () => {
+    // Addresses round-trip from the public shape — they are public on-chain
+    // identifiers, so re-showing them costs nothing and saves re-typing. The
+    // two secrets start blank and, left blank, keep whatever is stored.
+    setNetworkName(data?.networkName || SEPOLIA_DEFAULTS.networkName);
+    setChainId(data?.chainId || SEPOLIA_DEFAULTS.chainId);
+    setRpcUrl("");
+    setContractAddress(data?.contractAddress ?? "");
+    setDeployerAddress(data?.deployerAddress ?? "");
+    setDeployerPrivateKey("");
+    setUsdcAddress(data?.usdcAddress ?? "");
+    setForwarderAddress(data?.forwarderAddress ?? "");
+    setPassword("");
+    setErr(null);
+    setEditing(true);
+  };
+
+  /** Fill every non-secret field with the Sepolia testnet values. */
+  const prefillDefaults = () => {
+    setNetworkName(SEPOLIA_DEFAULTS.networkName);
+    setChainId(SEPOLIA_DEFAULTS.chainId);
+    setRpcUrl(SEPOLIA_DEFAULTS.rpcUrl);
+    setContractAddress(SEPOLIA_DEFAULTS.contractAddress);
+    setDeployerAddress(SEPOLIA_DEFAULTS.deployerAddress);
+    setUsdcAddress(SEPOLIA_DEFAULTS.usdcAddress);
+    setForwarderAddress(SEPOLIA_DEFAULTS.forwarderAddress);
+    // deployerPrivateKey is deliberately untouched — see SEPOLIA_DEFAULTS.
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.setBlockchain(password, {
+        networkName,
+        chainId,
+        rpcUrl,
+        contractAddress,
+        deployerAddress,
+        deployerPrivateKey,
+        usdcAddress,
+        forwarderAddress,
+      });
+      setDeployerPrivateKey("");
+      setRpcUrl("");
+      setPassword("");
+      setEditing(false);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  const del = async () => {
+    await backend.vaultDelete("blockchain");
+    refresh();
+  };
+
+  return (
+    <CardShell title="Blockchain" subtitle="On-chain settlement — network, contracts, deployer key">
+      {/* Always visible, in both the summary and the edit view. An operator who
+          is about to paste a key needs the warning; an operator reviewing what
+          is already stored needs to know what they are custodian of. */}
+      <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700">
+        ⚠️ The deployer private key is the most sensitive credential in LexEscrow. It controls fund
+        movement on-chain. Never share it, never commit it, and ensure your vault password is strong.
+      </div>
+
+      {!editing ? (
+        <div>
+          {configured ? (
+            <dl className="space-y-1.5 text-sm">
+              <Row k="Network" v={data?.networkName || "—"} />
+              <Row k="Chain ID" v={String(data?.chainId ?? 0)} />
+              <Row k="RPC endpoint" v={data?.rpcUrlHint || "not set"} mono />
+              <Row k="Contract" v={data?.contractAddress || "not set"} mono />
+              <Row k="Deployer" v={data?.deployerAddress || "not set"} mono />
+              <Row k="USDC" v={data?.usdcAddress || "not set"} mono />
+              <Row k="Forwarder" v={data?.forwarderAddress || "not set"} mono />
+              <Row k="Private key" v={data?.hasPrivateKey ? "•••••••• stored" : "not set"} />
+            </dl>
+          ) : (
+            <p className="text-sm text-slate-400">
+              No blockchain configured — settlement is disabled. Parsing, LexGuard and the condition
+              engine are unaffected.
+            </p>
+          )}
+          {configured && !data?.hasPrivateKey && (
+            <div className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700">
+              Network settings are stored but no deployer key is — this install can read the chain
+              but cannot submit a settlement.
+            </div>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button className="btn btn-secondary" onClick={openEdit}>
+              {configured ? "Edit" : "Add"}
+            </button>
+            {configured && (
+              <button className="btn btn-secondary text-red-600" onClick={del}>
+                Delete
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className="label" htmlFor="bc-network-name">Network name</label>
+              <input
+                id="bc-network-name"
+                className="input"
+                value={networkName}
+                onChange={(e) => setNetworkName(e.target.value)}
+                placeholder="Ethereum Sepolia"
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="bc-chain-id">Chain ID</label>
+              <input
+                id="bc-chain-id"
+                className="input"
+                type="number"
+                value={chainId}
+                onChange={(e) => setChainId(parseInt(e.target.value, 10) || 0)}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-rpc-url">RPC URL</label>
+            <SecretInput
+              id="bc-rpc-url"
+              value={rpcUrl}
+              onChange={setRpcUrl}
+              placeholder={
+                data?.rpcUrlHint ? "leave blank to keep existing" : "https://eth-sepolia.g.alchemy.com/v2/…"
+              }
+            />
+            <p className="mt-1 text-[11px] text-slate-400">
+              Treated as a secret — provider API keys ride in the URL path.
+            </p>
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-contract-address">Contract address (EscrowSettlement)</label>
+            <input
+              id="bc-contract-address"
+              className="input font-mono text-xs"
+              value={contractAddress}
+              onChange={(e) => setContractAddress(e.target.value)}
+              placeholder="0x…"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-deployer-address">Deployer address</label>
+            <input
+              id="bc-deployer-address"
+              className="input font-mono text-xs"
+              value={deployerAddress}
+              onChange={(e) => setDeployerAddress(e.target.value)}
+              placeholder="0x…"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-deployer-key">Deployer private key</label>
+            <SecretTextarea
+              id="bc-deployer-key"
+              value={deployerPrivateKey}
+              onChange={setDeployerPrivateKey}
+              placeholder={data?.hasPrivateKey ? "leave blank to keep existing" : "0x…"}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-usdc-address">USDC address</label>
+            <input
+              id="bc-usdc-address"
+              className="input font-mono text-xs"
+              value={usdcAddress}
+              onChange={(e) => setUsdcAddress(e.target.value)}
+              placeholder="0x…"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-forwarder-address">Forwarder address (CRE)</label>
+            <input
+              id="bc-forwarder-address"
+              className="input font-mono text-xs"
+              value={forwarderAddress}
+              onChange={(e) => setForwarderAddress(e.target.value)}
+              placeholder="0x…"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="bc-vault-password">Vault password</label>
+            <SecretInput
+              id="bc-vault-password"
+              value={password}
+              onChange={setPassword}
+              placeholder="confirm to save"
+            />
+            <p className="mt-1 text-[11px] text-slate-400">
+              Re-entered because this is the one credential here that cannot be revoked after it
+              leaks.
+            </p>
+          </div>
+          <Err msg={err} />
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="btn btn-primary"
+              disabled={busy || !password || !contractAddress}
+              onClick={save}
+            >
+              Save
+            </button>
+            <button className="btn btn-secondary" onClick={prefillDefaults}>
+              Pre-fill Sepolia defaults
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4">
@@ -928,6 +1207,7 @@ export function Configuration() {
   const [docusign, setDocusign] = useState<DocuSignPublic | null>(null);
   const [clio, setClio] = useState<ClioPublic | null>(null);
   const [practicePanther, setPracticePanther] = useState<PracticePantherPublic | null>(null);
+  const [blockchain, setBlockchain] = useState<BlockchainPublic | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -939,16 +1219,18 @@ export function Configuration() {
     if (status.unlocked) {
       // DocuSign and the two webhook integrations live outside VaultPublic —
       // each has its own deliberately narrower public shape.
-      const [vaultPub, dsPub, clioPub, ppPub] = await Promise.all([
+      const [vaultPub, dsPub, clioPub, ppPub, chainPub] = await Promise.all([
         backend.vaultGetPublic(),
         backend.getDocuSignPublic(),
         backend.getClioPublic(),
         backend.getPracticePantherPublic(),
+        backend.getBlockchainPublic(),
       ]);
       setPub(vaultPub);
       setDocusign(dsPub);
       setClio(clioPub);
       setPracticePanther(ppPub);
+      setBlockchain(chainPub);
     }
   };
 
@@ -983,6 +1265,7 @@ export function Configuration() {
     setDocusign(null);
     setClio(null);
     setPracticePanther(null);
+    setBlockchain(null);
   };
 
   return (
@@ -1032,6 +1315,17 @@ export function Configuration() {
           <SmtpCard data={pub?.smtp ?? null} refresh={refresh} />
           <TwilioCard data={pub?.twilio ?? null} refresh={refresh} />
           <DocuSignCard data={docusign} refresh={refresh} />
+
+          <div className="pt-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Settlement
+            </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Where funds actually move. Held in the vault rather than in `contracts/.env` — the
+              deployer key never reaches this screen, and never crosses IPC.
+            </p>
+          </div>
+          <BlockchainCard data={blockchain} refresh={refresh} />
 
           <div className="pt-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">

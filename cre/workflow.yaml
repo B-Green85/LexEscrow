@@ -3,6 +3,12 @@
 # ==========================================================================
 # Run from this directory:
 #   cre workflow simulate . --target local-simulation
+#
+# These paths are for the `cre` CLI simulator only. The desktop app does not
+# read them: its settlement config (RPC, contract, deployer key) comes from the
+# credential vault via `get_cre_config` — see cre/README.md and src-tauri/src/
+# cre.rs. Keep real keys out of config.json / secrets.yaml even though both are
+# gitignored; the vault is the place for them.
 # ==========================================================================
 local-simulation:
   user-workflow:

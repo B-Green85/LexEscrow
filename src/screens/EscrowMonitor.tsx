@@ -32,6 +32,7 @@ import { CREEventLog } from "../components/CREEventLog";
 import type { Condition, ConditionStatus, ConditionSummary } from "../lib/conditions";
 import type { ArbitrationSigner, ArbitrationState } from "../lib/releasePaths";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
+import { txUrl } from "../lib/explorer";
 
 const DAY_MS = 86_400_000;
 
@@ -89,7 +90,7 @@ function TxLink({ hash, label = "On-chain TX" }: { hash: string; label?: string 
     <div className="flex items-center justify-between gap-3">
       <span className="text-xs text-slate-500">{label}</span>
       <a
-        href={`https://sepolia.etherscan.io/tx/${hash}`}
+        href={txUrl(hash)}
         target="_blank"
         rel="noreferrer"
         className="truncate font-mono text-[11px] text-[#93C5FD] hover:underline"
@@ -546,6 +547,12 @@ export interface EscrowMonitorViewProps {
   onRunCannaVerify: () => void;
   onProceedToSettlement: () => void;
   onSignArbitration: (signer: ArbitrationSigner) => void;
+  /**
+   * Can this install settle on-chain? Defaults to `true` so the many existing
+   * call sites and tests that predate the vault-held blockchain config keep
+   * their behaviour — the store container passes the real value.
+   */
+  blockchainReady?: boolean;
 }
 
 export function EscrowMonitorView(props: EscrowMonitorViewProps) {
@@ -559,10 +566,16 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
     busy,
     error,
     now = Date.now(),
+    blockchainReady = true,
   } = props;
 
   const descriptor = descriptorFor(assetClass);
   const { total, met, allMet } = conditionSummary;
+
+  // Path B locks and Path C schedules; neither moves funds from this button, so
+  // neither needs a chain configured to get past it. Only Path A settles here.
+  const needsChain = executionPath !== ExecutionPath.StagedRelease;
+  const chainBlocked = needsChain && !blockchainReady;
 
   const waived = useMemo(
     () => conditions.filter((c) => c.status === "waived").length,
@@ -693,29 +706,48 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
               onSign={props.onSignArbitration}
             />
           ) : (
-            <div className="mt-4 flex items-center justify-between gap-4">
-              <p className="max-w-sm text-xs text-slate-400">
-                {allMet
-                  ? "Settlement releases the escrowed funds. This cannot be undone."
-                  : `Blocked by: ${unmet.map((c) => c.label).join(", ")}`}
-              </p>
-              <button
-                className="btn btn-primary btn-lg shrink-0"
-                disabled={!allMet || busy}
-                title={
-                  allMet
-                    ? undefined
-                    : `Unmet: ${unmet.map((c) => c.label).join(", ") || "no conditions defined"}`
-                }
-                onClick={props.onProceedToSettlement}
-              >
-                {executionPath === ExecutionPath.StagedRelease
-                  ? "View Milestone Progress"
-                  : executionPath === ExecutionPath.ArbitrationEscrow
-                    ? "Lock Escrow into Arbitration"
-                    : "Proceed to Settlement"}
-              </button>
-            </div>
+            <>
+              {/* Blockchain gate. Distinct from the condition checklist above:
+                  conditions are about *this escrow* being ready, this is about
+                  *this install* being able to settle at all. An officer who has
+                  satisfied every condition and still cannot settle deserves to
+                  be told which of the two is missing. */}
+              {chainBlocked && (
+                <div
+                  role="status"
+                  className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm text-amber-700"
+                >
+                  ⚠️ Blockchain not configured — set up in Configuration
+                </div>
+              )}
+              <div className="mt-4 flex items-center justify-between gap-4">
+                <p className="max-w-sm text-xs text-slate-400">
+                  {chainBlocked
+                    ? "The network, contract and deployer key are held in the vault. Until they are set, settlement cannot be submitted on-chain."
+                    : allMet
+                      ? "Settlement releases the escrowed funds. This cannot be undone."
+                      : `Blocked by: ${unmet.map((c) => c.label).join(", ")}`}
+                </p>
+                <button
+                  className="btn btn-primary btn-lg shrink-0"
+                  disabled={!allMet || busy || chainBlocked}
+                  title={
+                    chainBlocked
+                      ? "Blockchain not configured — set it up in Configuration"
+                      : allMet
+                        ? undefined
+                        : `Unmet: ${unmet.map((c) => c.label).join(", ") || "no conditions defined"}`
+                  }
+                  onClick={props.onProceedToSettlement}
+                >
+                  {executionPath === ExecutionPath.StagedRelease
+                    ? "View Milestone Progress"
+                    : executionPath === ExecutionPath.ArbitrationEscrow
+                      ? "Lock Escrow into Arbitration"
+                      : "Proceed to Settlement"}
+                </button>
+              </div>
+            </>
           )}
         </div>
       )}
@@ -753,7 +785,17 @@ export function EscrowMonitor() {
     signArbitration,
     startConditionPolling,
     stopConditionPolling,
+    blockchainReady,
+    refreshBlockchainConfig,
   } = useSession();
+
+  // Read the vault's blockchain config on arrival. This screen is where the
+  // officer waits for conditions to clear, so it is the last calm moment before
+  // settlement — the right place to discover a missing chain config, rather
+  // than on the click that was supposed to move the money.
+  useEffect(() => {
+    void refreshBlockchainConfig();
+  }, [refreshBlockchainConfig]);
 
   // Watch while there is something to watch, and stop the moment there is not.
   //
@@ -792,6 +834,7 @@ export function EscrowMonitor() {
       onRunCannaVerify={() => void runCannaVerify()}
       onProceedToSettlement={() => void proceedToSettlement()}
       onSignArbitration={(signer) => void signArbitration(signer)}
+      blockchainReady={blockchainReady}
     />
   );
 }

@@ -17,6 +17,7 @@
  */
 
 import * as backend from "../backend";
+import { txUrl } from "../explorer";
 import type { SessionState } from "../../store/session";
 
 /** Minimal structural view of the session store — keeps this module testable. */
@@ -51,7 +52,10 @@ export interface AuditReportData {
   };
 }
 
-const ETHERSCAN_TX = "https://sepolia.etherscan.io/tx/";
+// Resolved against the vault's configured chain — an exported audit report
+// outlives the session that produced it, so a link to the wrong network's
+// explorer would read as evidence the settlement never happened.
+const explorerTx = (hash: string) => txUrl(hash);
 
 // ── Data assembly ────────────────────────────────────────────────────────────
 
@@ -291,14 +295,14 @@ export function generateAuditReportHtml(data: AuditReportData): string {
     data.onChainTx
       ? summaryRow(
           "On-chain registration",
-          `<a class="mono" href="${escapeHtml(ETHERSCAN_TX + data.onChainTx)}">${escapeHtml(data.onChainTx)}</a>`,
+          `<a class="mono" href="${escapeHtml(explorerTx(data.onChainTx))}">${escapeHtml(data.onChainTx)}</a>`,
         )
       : "",
     summaryRow("Execution path", escapeHtml(data.executionPath)),
     data.settlementTxHash
       ? summaryRow(
           "Settlement transaction",
-          `<a class="mono" href="${escapeHtml(ETHERSCAN_TX + data.settlementTxHash)}">${escapeHtml(data.settlementTxHash)}</a>`,
+          `<a class="mono" href="${escapeHtml(explorerTx(data.settlementTxHash))}">${escapeHtml(data.settlementTxHash)}</a>`,
         )
       : "",
   ].join("");

@@ -26,6 +26,7 @@ import { AnchorReceiptCard } from "../components/AnchorReceiptCard";
 import type { AnchorReceipt } from "../lib/anchor-receipt";
 import type { AssetClass } from "../lib/assetClasses";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
+import { txUrl } from "../lib/explorer";
 import {
   MAX_MILESTONES,
   type ArbitrationSigner,
@@ -62,7 +63,7 @@ function TxLink({ hash }: { hash: string | null }) {
   return (
     <a
       className="font-mono text-sm text-brand-500 underline-offset-2 hover:underline"
-      href={`https://sepolia.etherscan.io/tx/${hash}`}
+      href={txUrl(hash)}
       target="_blank"
       rel="noreferrer"
       data-selectable

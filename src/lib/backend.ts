@@ -13,8 +13,11 @@ import { invoke } from "@tauri-apps/api/core";
 import * as browserVault from "./browserVault";
 import type {
   AiInput,
+  BlockchainInput,
+  BlockchainPublic,
   ClioConfigInput,
   ClioPublic,
+  CreConfig,
   DocuSignInput,
   DocuSignPublic,
   PracticePantherConfigInput,
@@ -770,7 +773,9 @@ export async function vaultSetTwilio(input: TwilioInput): Promise<void> {
   await browserVault.setTwilio(input);
 }
 
-export async function vaultDelete(group: "ai" | "smtp" | "twilio" | "docusign"): Promise<void> {
+export async function vaultDelete(
+  group: "ai" | "smtp" | "twilio" | "docusign" | "blockchain",
+): Promise<void> {
   if (isTauri()) {
     await invoke("vault_delete", { group });
     return;
@@ -797,6 +802,70 @@ export async function setDocuSign(input: DocuSignInput): Promise<void> {
     return;
   }
   await browserVault.setDocusign(input);
+}
+
+// ── Blockchain settlement config ─────────────────────────────────────────────
+
+/**
+ * Public view of the on-chain settlement config.
+ *
+ * Carries no private key and no RPC credential — only `hasPrivateKey` and the
+ * RPC *host*. Everything else is a public on-chain identifier.
+ */
+export async function getBlockchainPublic(): Promise<BlockchainPublic> {
+  if (isTauri()) return invoke<BlockchainPublic>("vault_get_blockchain_public");
+  return browserVault.getBlockchainPublic();
+}
+
+/**
+ * Write the blockchain config.
+ *
+ * Takes the vault password as a second factor — unlike every other setter here.
+ * The deployer private key is the one credential in this application that
+ * cannot be revoked after it leaks, so an unlocked vault on an unattended
+ * machine is not sufficient authority to write one. See `vault.rs`
+ * `set_blockchain`.
+ */
+export async function setBlockchain(password: string, input: BlockchainInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_blockchain", { password, input });
+    return;
+  }
+  await browserVault.setBlockchain(password, input);
+}
+
+/**
+ * Can this install actually settle on-chain? Gates the settle button.
+ *
+ * Stricter than `hasConfig`: network settings with no signing key describe a
+ * chain this install can read but not write. A locked vault reports `false`
+ * rather than throwing, so the workflow degrades instead of failing.
+ */
+export async function hasBlockchain(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      return await invoke<boolean>("vault_has_blockchain");
+    } catch {
+      return false;
+    }
+  }
+  try {
+    return browserVault.hasBlockchain();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * CRE workflow configuration assembled from the vault.
+ *
+ * Outside Tauri there is no Rust signer to assemble it, so this reports "not
+ * configured" rather than synthesising one from the browser vault — the browser
+ * path has no way to run the workflow regardless.
+ */
+export async function getCreConfig(): Promise<CreConfig> {
+  if (!isTauri()) throw new Error("CRE configuration requires the desktop backend.");
+  return invoke<CreConfig>("get_cre_config");
 }
 
 // ── Practice-management integrations (spec §14 V1) ───────────────────────────

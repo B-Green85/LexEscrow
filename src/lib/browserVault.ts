@@ -12,6 +12,8 @@
 import type {
   AiInput,
   AiSecret,
+  BlockchainInput,
+  BlockchainPublic,
   ClioConfigInput,
   ClioPublic,
   DocuSignInput,
@@ -56,6 +58,17 @@ interface WebhookStored {
   matterId: string;
   apiKey: string;
 }
+/** Mirrors the Rust `BlockchainConfig`. Both secrets stay in this module. */
+interface BlockchainStored {
+  rpcUrl: string;
+  chainId: number;
+  contractAddress: string;
+  deployerAddress: string;
+  deployerPrivateKey: string;
+  usdcAddress: string;
+  forwarderAddress: string;
+  networkName: string;
+}
 interface VData {
   ai: AiStored | null;
   smtp: SmtpStored | null;
@@ -63,6 +76,7 @@ interface VData {
   docusign: DocuSignStored | null;
   clio: WebhookStored | null;
   practicePanther: WebhookStored | null;
+  blockchain: BlockchainStored | null;
 }
 
 const STORAGE_KEY = "lexescrow.vault";
@@ -112,7 +126,15 @@ async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey>
 let state: { data: VData; key: CryptoKey; salt: Uint8Array } | null = null;
 
 function emptyData(): VData {
-  return { ai: null, smtp: null, twilio: null, docusign: null, clio: null, practicePanther: null };
+  return {
+    ai: null,
+    smtp: null,
+    twilio: null,
+    docusign: null,
+    clio: null,
+    practicePanther: null,
+    blockchain: null,
+  };
 }
 
 /** A vault written before a group existed decrypts without that key — fill in
@@ -223,11 +245,107 @@ export async function setTwilio(input: TwilioInput): Promise<void> {
 }
 
 export async function deleteGroup(
-  group: "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practicePanther",
+  group: "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practicePanther" | "blockchain",
 ): Promise<void> {
   const s = requireUnlocked();
   s.data[group] = null;
   await persist();
+}
+
+// ── Blockchain settlement config ─────────────────────────────────────────────
+
+/**
+ * Confirm the submitted password is the one this vault is unlocked with.
+ *
+ * The Rust side compares derived keys directly; here the key is a
+ * non-extractable `CryptoKey`, so there is nothing to compare. Re-deriving from
+ * the stored salt and attempting a decrypt of the stored envelope reaches the
+ * same conclusion by the same mechanism the vault already relies on — a wrong
+ * password derives a wrong key and GCM authentication fails.
+ */
+async function verifyPassword(password: string): Promise<boolean> {
+  const s = requireUnlocked();
+  const raw = storeGet();
+  if (raw === null) return false;
+  try {
+    const env = JSON.parse(raw) as { iv: string; data: string };
+    const key = await deriveKey(password, s.salt);
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: unb64(env.iv) },
+      key,
+      unb64(env.data) as unknown as BufferSource,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Host portion of a URL — the API key lives in the path and must not escape. */
+function hostOf(url: string): string {
+  const afterScheme = url.includes("://") ? url.slice(url.indexOf("://") + 3) : url;
+  return afterScheme.split(/[/?#]/)[0].trim();
+}
+
+/** Enough config to reach a chain. Signing is a separate question. */
+function hasNetworkConfig(b: BlockchainStored | null): boolean {
+  return !!b && b.rpcUrl.length > 0 && b.contractAddress.length > 0 && b.chainId !== 0;
+}
+
+/** Mirrors the Rust `set_blockchain`, password re-check included. */
+export async function setBlockchain(password: string, input: BlockchainInput): Promise<void> {
+  const s = requireUnlocked();
+  if (!(await verifyPassword(password))) throw new Error("incorrect password");
+
+  const prev = s.data.blockchain;
+  const keep = (submitted: string, current: string | undefined): string =>
+    submitted.trim().length > 0 ? submitted.trim() : (current ?? "");
+
+  s.data.blockchain = {
+    rpcUrl: keep(input.rpcUrl, prev?.rpcUrl),
+    chainId: input.chainId,
+    contractAddress: input.contractAddress.trim(),
+    deployerAddress: input.deployerAddress.trim(),
+    deployerPrivateKey: keep(input.deployerPrivateKey, prev?.deployerPrivateKey),
+    usdcAddress: input.usdcAddress.trim(),
+    forwarderAddress: input.forwarderAddress.trim(),
+    networkName: input.networkName.trim(),
+  };
+  await persist();
+}
+
+export function getBlockchainPublic(): BlockchainPublic {
+  const b = requireUnlocked().data.blockchain;
+  if (!b) {
+    return {
+      hasConfig: false,
+      networkName: "",
+      chainId: 0,
+      contractAddress: "",
+      deployerAddress: "",
+      usdcAddress: "",
+      forwarderAddress: "",
+      rpcUrlHint: "",
+      hasPrivateKey: false,
+    };
+  }
+  return {
+    hasConfig: hasNetworkConfig(b),
+    networkName: b.networkName,
+    chainId: b.chainId,
+    contractAddress: b.contractAddress,
+    deployerAddress: b.deployerAddress,
+    usdcAddress: b.usdcAddress,
+    forwarderAddress: b.forwarderAddress,
+    rpcUrlHint: hostOf(b.rpcUrl),
+    hasPrivateKey: b.deployerPrivateKey.length > 0,
+  };
+}
+
+/** Mirrors `VaultState::has_blockchain` — network config *and* a signing key. */
+export function hasBlockchain(): boolean {
+  const b = state?.data.blockchain ?? null;
+  return hasNetworkConfig(b) && (b?.deployerPrivateKey.length ?? 0) > 0;
 }
 
 // ── Practice-management webhooks (spec §14 V1) ───────────────────────────────

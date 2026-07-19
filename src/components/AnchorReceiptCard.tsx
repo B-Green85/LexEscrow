@@ -17,6 +17,7 @@ import {
   type ReceiptVerification,
 } from "../lib/anchor-receipt";
 import { descriptorFor } from "../lib/assetClasses";
+import { txUrl } from "../lib/explorer";
 
 /** Middle-elided reference — long enough to compare by eye, short enough to fit. */
 export function shortHash(value: string | null | undefined, head = 10, tail = 6): string {
@@ -30,7 +31,7 @@ export function AnchorTxLink({ hash }: { hash: string | null | undefined }) {
   return (
     <a
       className="font-mono text-sm text-brand-500 underline-offset-2 hover:underline"
-      href={`https://sepolia.etherscan.io/tx/${hash}`}
+      href={txUrl(hash)}
       target="_blank"
       rel="noreferrer"
       data-selectable
