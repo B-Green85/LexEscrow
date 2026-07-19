@@ -14,6 +14,7 @@ import { Configuration } from "./screens/Configuration";
 import { BatchProcessing } from "./screens/BatchProcessing";
 import { AnchorReceiptConsole } from "./screens/AnchorReceiptConsole";
 import { RecentWorkflows } from "./screens/RecentWorkflows";
+import { SetupWizard } from "./screens/SetupWizard";
 
 /**
  * Screens that replace the workflow rail with their own title — they sit
@@ -71,7 +72,8 @@ function GearIcon() {
 }
 
 function App() {
-  const { screen, operator, openConfig, openBatch, openAnchorReceiptConsole } = useSession();
+  const { screen, operator, openConfig, openBatch, openAnchorReceiptConsole, showWizard, checkWizard } =
+    useSession();
   const [showSplash, setShowSplash] = useState(true);
   const chromeLabel = CHROMELESS_LABELS[screen];
   const chromeless = chromeLabel !== undefined;
@@ -93,9 +95,19 @@ function App() {
     };
   }, []);
 
+  // First-run detection. The answer comes from the vault, so this settles well
+  // before the splash finishes and the wizard never flashes in behind it.
+  useEffect(() => {
+    void checkWizard();
+  }, [checkWizard]);
+
   return (
     <div className="flex min-h-screen flex-col">
       {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
+      {/* Sequenced after the splash rather than stacked above it — both are
+          full-window overlays at the same depth, and an onboarding flow that
+          appears mid-fade reads as a rendering fault. */}
+      {!showSplash && showWizard && <SetupWizard />}
       <header className="sticky top-0 z-10 border-b border-[#1A2435] bg-[#0A0F1A]/85 backdrop-blur">
         <div className="mx-auto grid max-w-6xl grid-cols-[auto_1fr_auto] items-center gap-4 px-6 py-3">
           <Brand />

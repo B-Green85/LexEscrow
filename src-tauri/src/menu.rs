@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Runtime};
 /// Item ids, shared with [`handle_event`] so the two cannot drift apart.
 const NEW_TRANSACTION: &str = "new_transaction";
 const RECENT_WORKFLOWS: &str = "recent_workflows";
+const SETUP_WIZARD: &str = "setup_wizard";
 
 /// Build the application menu.
 ///
@@ -55,6 +56,10 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 true,
                 Some("CmdOrCtrl+R"),
             )?,
+            &PredefinedMenuItem::separator(app)?,
+            // No accelerator: this re-runs onboarding, and the two flows either
+            // side of it own the obvious File-menu chords already.
+            &MenuItem::with_id(app, SETUP_WIZARD, "Setup Wizard...", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::close_window(app, None)?,
             // macOS puts Quit in the app submenu; everywhere else it belongs here.
@@ -146,6 +151,7 @@ pub fn handle_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     let topic = match event.id().as_ref() {
         NEW_TRANSACTION => "menu:new_transaction",
         RECENT_WORKFLOWS => "menu:recent_workflows",
+        SETUP_WIZARD => "menu:setup_wizard",
         _ => return,
     };
     if let Err(e) = app.emit(topic, ()) {

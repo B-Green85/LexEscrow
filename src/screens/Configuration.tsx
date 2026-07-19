@@ -18,9 +18,9 @@ import {
   PRACTICE_PANTHER_TEST_TRIGGER,
 } from "../lib/integrations";
 
-const PROVIDER_SUGGESTIONS = ["Claude", "GPT-4o", "Gemini", "Custom"];
+export const PROVIDER_SUGGESTIONS = ["Claude", "GPT-4o", "Gemini", "Custom"];
 
-function SecretInput({
+export function SecretInput({
   value,
   onChange,
   placeholder,
@@ -392,10 +392,10 @@ function TwilioCard({ data, refresh }: { data: TwilioPublic | null; refresh: () 
 
 // ── DocuSign (spec §24) ──────────────────────────────────────────────────────
 
-const DEFAULT_BASE_URI = "https://demo.docusign.net";
+export const DEFAULT_BASE_URI = "https://demo.docusign.net";
 
 /** Multi-line variant of SecretInput — an RSA PEM is ~1,700 characters. */
-function SecretTextarea({
+export function SecretTextarea({
   value,
   onChange,
   placeholder,
@@ -1201,6 +1201,7 @@ function ChangePassword() {
 
 export function Configuration() {
   const closeConfig = useSession((s) => s.closeConfig);
+  const openWizard = useSession((s) => s.openWizard);
   const [exists, setExists] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [pub, setPub] = useState<VaultPublic | null>(null);
@@ -1342,6 +1343,18 @@ export function Configuration() {
           <ChangePassword />
         </div>
       )}
+
+      {/* Outside the unlocked branch on purpose: the wizard creates the vault
+          itself, so it has to be reachable from the locked screen too — which
+          is exactly where an operator who abandoned onboarding ends up. */}
+      <div className="mt-10 border-t border-[#1A2435] pt-4 text-center">
+        <button
+          className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-300"
+          onClick={() => openWizard()}
+        >
+          Re-run setup wizard
+        </button>
+      </div>
     </div>
   );
 }

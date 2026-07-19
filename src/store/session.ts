@@ -442,6 +442,19 @@ export interface SessionState {
    */
   blockchainReady: boolean;
 
+  // ── First-run setup wizard ───────────────────────────────────────────────
+  /**
+   * Is the guided onboarding flow on screen?
+   *
+   * Set by `checkWizard` at mount when no vault exists, and by `openWizard`
+   * when an operator asks to re-run the flow from Configuration or the File
+   * menu. Deliberately absent from `reset()` — starting a new transaction is
+   * not a reason to be onboarded again.
+   */
+  showWizard: boolean;
+  /** True once onboarding has been finished, or found to be unnecessary. */
+  wizardComplete: boolean;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
@@ -454,6 +467,11 @@ export interface SessionState {
   openBatch: () => void;
   openAnchorReceiptConsole: () => void;
   openRecent: () => void;
+  /** Decide, from the vault's existence, whether to onboard. Runs at mount. */
+  checkWizard: () => Promise<void>;
+  /** Re-run onboarding — Configuration's footer link and the File menu. */
+  openWizard: () => void;
+  completeWizard: () => void;
   downloadAnchorReceipt: () => void;
   returnToBatch: () => void;
   loadBatchItem: (h: BatchHydration) => void;
@@ -723,6 +741,8 @@ export const useSession = create<SessionState>((set, get) => {
     conditionsUpdatedAt: null,
     blockchain: null,
     blockchainReady: false,
+    showWizard: false,
+    wizardComplete: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -754,6 +774,46 @@ export const useSession = create<SessionState>((set, get) => {
       set((s) =>
         s.screen === "recent" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "recent" },
       ),
+
+    /**
+     * First-run detection (spec §12 Screen 0).
+     *
+     * The vault's existence *is* the answer. Every credential the wizard
+     * collects lives in the vault, so "no vault" and "this install has never
+     * been set up" are the same condition — and unlike a stored flag, it
+     * survives a cleared browser profile and cannot claim an install is
+     * configured when its credentials are gone.
+     *
+     * A failure here is not fatal: an unreadable vault status is a reason to
+     * leave the operator in the app, not to trap them behind an onboarding
+     * flow whose first step would fail for the same reason.
+     */
+    checkWizard: async () => {
+      try {
+        const status = await backend.vaultStatus();
+        if (status.exists) {
+          set({ showWizard: false, wizardComplete: true });
+        } else {
+          set({ showWizard: true });
+        }
+      } catch (e) {
+        console.error("vault status check failed", e);
+      }
+    },
+
+    openWizard: () => set({ showWizard: true }),
+
+    completeWizard: () => {
+      set({ showWizard: false, wizardComplete: true });
+      // Belt and suspenders. `checkWizard` never reads this back — the vault is
+      // the real check — but it leaves a trace of a completed onboarding for a
+      // future migration that needs one.
+      try {
+        localStorage.setItem("lexescrow_wizard_complete", "true");
+      } catch {
+        // Private-mode or storage-disabled browsers. Nothing depends on it.
+      }
+    },
 
     downloadAnchorReceipt: () => {
       const { anchorReceipt } = get();
@@ -2350,6 +2410,7 @@ export async function initMenuListeners(): Promise<() => void> {
   const unlisten = await Promise.all([
     listen("menu:new_transaction", () => useSession.getState().reset()),
     listen("menu:recent_workflows", () => useSession.getState().openRecent()),
+    listen("menu:setup_wizard", () => useSession.getState().openWizard()),
   ]);
   return () => unlisten.forEach((off) => off());
 }
