@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "LexEscrow",
+        "title": "",
         "width": 1180,
         "height": 820,
         "minWidth": 940,
