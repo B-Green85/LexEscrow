@@ -185,10 +185,10 @@ export function DocumentLoad() {
                 onClick={() => selectClass(cls)}
                 aria-pressed={active}
                 title={d.displayName}
-                className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border p-3 transition-all duration-150 ${
+                className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-xl p-3 transition-all duration-200 ${
                   active
-                    ? "border-brand bg-brand/10 text-text-primary shadow-[0_0_12px_rgba(30,96,145,0.3)]"
-                    : "border-app-border bg-app-input text-text-muted hover:border-white/20 hover:text-text-primary"
+                    ? "border-2 border-[#3B82F6] bg-[#16233B] text-white shadow-[0_0_15px_rgba(59,130,246,0.45),inset_0_0_8px_rgba(59,130,246,0.15)]"
+                    : "border border-white/[0.3] bg-white/[0.27] text-gray-400 hover:border-white/[0.4] hover:bg-white/[0.32] hover:text-white"
                 }`}
               >
                 <span className="text-2xl leading-none" aria-hidden>
@@ -206,7 +206,7 @@ export function DocumentLoad() {
         <label className="label mt-6">{descriptor.uploadLabel}</label>
         <div
           onClick={() => inputRef.current?.click()}
-          className="group cursor-pointer rounded-xl border-2 border-dashed border-app-border bg-app-input p-8 transition-all hover:border-brand/50 hover:bg-brand/5"
+          className="group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/[0.15] bg-white/[0.16] p-8 backdrop-blur-md transition-all hover:border-[#3B82F6]/50"
         >
           <input
             ref={inputRef}
