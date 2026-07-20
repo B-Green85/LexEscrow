@@ -21,7 +21,7 @@ export function Splash({ onFinish }: { onFinish: () => void }) {
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#0A0F1A] transition-opacity duration-500 ${
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-app-bg transition-opacity duration-500 ${
         leaving ? "pointer-events-none opacity-0" : "opacity-100"
       }`}
     >
@@ -34,14 +34,14 @@ export function Splash({ onFinish }: { onFinish: () => void }) {
         draggable={false}
       />
 
-      <h1 className="mt-2 text-5xl font-bold tracking-tight text-[#B45309]">LexEscrow</h1>
+      <h1 className="mt-2 text-5xl font-bold tracking-tight text-gold">LexEscrow</h1>
 
-      <p className="mt-3 text-sm font-medium uppercase tracking-[0.28em] text-[#94A3B8]">
+      <p className="mt-3 text-sm font-medium uppercase tracking-[0.28em] text-text-muted">
         Legal Trust. On-Chain.
       </p>
 
-      <div className="mt-9 h-1 w-52 overflow-hidden rounded-full bg-[#1A2435]">
-        <div className="splash-bar h-full rounded-full bg-gradient-to-r from-[#B45309] to-[#D97706]" />
+      <div className="mt-9 h-1 w-52 overflow-hidden rounded-full bg-app-input">
+        <div className="splash-bar h-full rounded-full bg-gradient-to-r from-gold to-gold-light" />
       </div>
     </div>
   );

@@ -11,8 +11,8 @@ const $ = (n: number) => formatUsd(toCents(n));
 function Row({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between py-2">
-      <span className="text-sm text-slate-500">{label}</span>
-      <span className={`text-sm font-medium text-slate-900 ${mono ? "font-mono" : ""}`}>{value}</span>
+      <span className="text-sm text-text-muted">{label}</span>
+      <span className={`text-sm font-medium text-text-primary ${mono ? "font-mono" : ""}`}>{value}</span>
     </div>
   );
 }
@@ -32,7 +32,7 @@ function appliedCorrections(corrections: LexGuardCorrection[]): Map<string, LexG
 
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
-    <div className="mt-4 mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">{children}</div>
+    <div className="mt-4 mb-1 text-xs font-semibold uppercase tracking-wide text-text-muted">{children}</div>
   );
 }
 
@@ -143,18 +143,18 @@ export function ParsedOutputReview() {
   return (
     <div className="mx-auto w-full max-w-2xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Review parsed output</h1>
+        <h1 className="text-xl font-semibold text-text-primary">Review parsed output</h1>
         <span className={corrections.length ? "badge badge-amber" : "badge badge-emerald"}>
           {corrections.length
             ? `${corrections.length} correction${corrections.length > 1 ? "s" : ""} made`
             : "No corrections required"}
         </span>
       </div>
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="mt-1 text-sm text-text-muted">
         LexGuard reviewed and validated the AI output. Review the complete parsed output carefully —
         errors in parsing will affect fund distribution.
       </p>
-      {providerLabel && <p className="mt-1 text-xs text-slate-400">Parsed via {providerLabel}.</p>}
+      {providerLabel && <p className="mt-1 text-xs text-text-muted">Parsed via {providerLabel}.</p>}
 
       {pendingCorrections.length > 0 && (
         <div
@@ -171,7 +171,7 @@ export function ParsedOutputReview() {
 
       {overrideNotice && (
         <div
-          className="mt-3 rounded-lg border border-brand-500/40 bg-brand-50 px-4 py-3 text-sm text-[#93C5FD]"
+          className="mt-3 rounded-lg border border-brand/40 bg-brand/10 px-4 py-3 text-sm text-brand-fg"
           role="status"
           data-testid="override-notice"
         >
@@ -187,7 +187,7 @@ export function ParsedOutputReview() {
           className="max-h-[44vh] overflow-y-auto px-6 py-4"
         >
           <SectionTitle>Parties</SectionTitle>
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-app-border">
             <Row label="Client" value={payload.clientName ?? "—"} />
             <Row label="Client ID" value={payload.clientId} />
             <Row label="Client wallet" value={payload.clientWallet} mono />
@@ -195,7 +195,7 @@ export function ParsedOutputReview() {
           </div>
 
           <SectionTitle>Billing reconciliation</SectionTitle>
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-app-border">
             <MoneyRow label="Total retainer held" value={payload.totalHeld} {...moneyRowProps("totalHeld")} />
             <MoneyRow label="Earned fees (firm)" value={payload.earnedFees} {...moneyRowProps("earnedFees")} />
             <MoneyRow
@@ -212,7 +212,7 @@ export function ParsedOutputReview() {
           </div>
 
           <SectionTitle>Determination</SectionTitle>
-          <div className="divide-y divide-slate-100">
+          <div className="divide-y divide-app-border">
             <Row
               label="Recommended path"
               value={isDirect ? "Path A — Direct Settlement" : "Path B — Arbitration Escrow"}
@@ -236,7 +236,7 @@ export function ParsedOutputReview() {
 
           <SectionTitle>LexGuard corrections</SectionTitle>
           {corrections.length === 0 ? (
-            <p className="py-2 text-sm text-slate-500">No corrections were required during parsing.</p>
+            <p className="py-2 text-sm text-text-muted">No corrections were required during parsing.</p>
           ) : (
             <ul className="space-y-1 py-1">
               {corrections.map((c, i) => (
@@ -249,7 +249,7 @@ export function ParsedOutputReview() {
             </ul>
           )}
 
-          <div className="mt-4 rounded-md bg-slate-50 px-3 py-2 text-center text-xs text-slate-400">
+          <div className="mt-4 rounded-md bg-app-input px-3 py-2 text-center text-xs text-text-muted">
             — end of parsed output —
           </div>
         </div>
@@ -266,20 +266,20 @@ export function ParsedOutputReview() {
         )}
 
         {/* Acknowledgment footer */}
-        <div className="mt-5 border-t border-slate-100 bg-slate-50/60 px-6 py-4">
+        <div className="mt-5 border-t border-app-border bg-app-input px-6 py-4">
           {!scrollCompleted ? (
-            <p className="text-center text-sm text-slate-400">
+            <p className="text-center text-sm text-text-muted">
               Scroll to the bottom of the parsed output to continue.
             </p>
           ) : (
             <label className="flex cursor-pointer items-start gap-3">
               <input
                 type="checkbox"
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                className="mt-0.5 h-4 w-4 rounded border-app-border accent-brand focus:ring-2 focus:ring-brand/40"
                 checked={acknowledged}
                 onChange={(e) => setAcknowledged(e.target.checked)}
               />
-              <span className="text-sm text-slate-700">
+              <span className="text-sm text-text-primary">
                 I have reviewed the complete parsed output and confirm it is accurate.
               </span>
             </label>

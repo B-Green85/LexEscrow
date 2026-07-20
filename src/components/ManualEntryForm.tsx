@@ -76,8 +76,8 @@ export function ManualEntryForm({
 
   return (
     <div className="card p-6">
-      <div className="text-sm font-semibold text-slate-800">Manual entry</div>
-      <p className="mt-0.5 text-xs text-slate-500">
+      <div className="text-sm font-semibold text-text-primary">Manual entry</div>
+      <p className="mt-0.5 text-xs text-text-muted">
         Enter the retainer fields. LexGuard validates everything you enter against the document —
         arithmetic, anchors, anomalies, and field scope — before you can proceed.
       </p>
@@ -132,11 +132,11 @@ export function ManualEntryForm({
           <input
             id="sigs"
             type="checkbox"
-            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+            className="h-4 w-4 rounded border-app-border accent-brand focus:ring-brand"
             checked={signaturesVerified}
             onChange={(e) => setSignaturesVerified(e.target.checked)}
           />
-          <label htmlFor="sigs" className="text-sm text-slate-700">
+          <label htmlFor="sigs" className="text-sm text-text-primary">
             Signatures verified
           </label>
         </div>

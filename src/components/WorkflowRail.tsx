@@ -24,16 +24,14 @@ export function WorkflowRail({ current, escalated }: { current: number; escalate
           ? "bg-emerald-500 text-white"
           : active
             ? reviewFlag
-              ? "bg-amber-500 text-[#0A0F1A] ring-2 ring-amber-500/25"
-              : "bg-brand-600 text-white ring-2 ring-brand-500/25"
-            : "bg-slate-200 text-slate-400";
+              ? "bg-amber-500 text-app-bg ring-2 ring-amber-500/25"
+              : "bg-brand text-white ring-2 ring-brand/30"
+            : "border border-app-border bg-app-input text-text-muted";
         const text = active
           ? reviewFlag
             ? "text-amber-600"
-            : "text-[#60A5FA]"
-          : done
-            ? "text-slate-300"
-            : "text-slate-400";
+            : "text-brand-fg"
+          : "text-text-muted";
         return (
           <div key={label} className="flex items-center">
             <div className="flex items-center gap-1.5">
@@ -43,7 +41,7 @@ export function WorkflowRail({ current, escalated }: { current: number; escalate
               <span className={`hidden text-[10px] font-medium sm:block ${text}`}>{label}</span>
             </div>
             {i < STAGES.length - 1 && (
-              <div className={`mx-2 h-px w-5 shrink-0 ${i < current ? "bg-emerald-500" : "bg-slate-200"}`} />
+              <div className={`mx-2 h-px w-5 shrink-0 ${i < current ? "bg-emerald-500" : "bg-app-border"}`} />
             )}
           </div>
         );

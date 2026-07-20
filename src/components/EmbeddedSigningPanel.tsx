@@ -223,8 +223,8 @@ export function EmbeddedSigningPanel({
       <div className="card w-full max-w-md p-6">
         {phase === "loading" && (
           <>
-            <div className="text-sm font-semibold text-slate-800">Preparing signing session…</div>
-            <p className="mt-1.5 text-sm text-slate-500">
+            <div className="text-sm font-semibold text-text-primary">Preparing signing session…</div>
+            <p className="mt-1.5 text-sm text-text-muted">
               Requesting a secure signing link from DocuSign for {signerName}.
             </p>
           </>
@@ -232,21 +232,21 @@ export function EmbeddedSigningPanel({
 
         {phase === "waiting" && (
           <>
-            <div className="text-sm font-semibold text-slate-800">
+            <div className="text-sm font-semibold text-text-primary">
               ✍️ Signing in progress — complete the signature in the DocuSign window
             </div>
-            <p className="mt-1.5 text-sm text-slate-500">
+            <p className="mt-1.5 text-sm text-text-muted">
               A signing window has opened for {signerName} ({signerEmail}). This panel closes on its
               own once the signature is complete.
             </p>
-            <div className="mt-3 font-mono text-[11px] text-slate-500">{envelopeId}</div>
+            <div className="mt-3 font-mono text-[11px] text-text-muted">{envelopeId}</div>
           </>
         )}
 
         {phase === "error" && (
           <>
             <div className="text-sm font-semibold text-red-700">In-app signing unavailable</div>
-            <p className="mt-1.5 text-sm text-slate-500">{error}</p>
+            <p className="mt-1.5 text-sm text-text-muted">{error}</p>
           </>
         )}
 

@@ -41,22 +41,22 @@ export function OverrideDialog({
 
   return (
     <div
-      className="mt-2 overflow-hidden rounded-lg border border-brand-500/40 bg-[#111827]"
+      className="mt-2 overflow-hidden rounded-lg border border-brand/40 bg-app-card"
       data-testid="override-dialog"
     >
-      <div className="flex items-center gap-2 border-b border-brand-500/30 bg-[#172554] px-4 py-2.5">
+      <div className="flex items-center gap-2 border-b border-brand/30 bg-brand/10 px-4 py-2.5">
         <span aria-hidden="true">✏️</span>
-        <span className="text-sm font-bold text-[#E2E8F0]">Override LexGuard Correction</span>
+        <span className="text-sm font-bold text-text-primary">Override LexGuard Correction</span>
       </div>
 
       <div className="space-y-3 px-4 py-3">
         <div className="flex items-baseline justify-between gap-4">
-          <span className="text-xs uppercase tracking-wide text-slate-400">Field</span>
-          <span className="font-mono text-sm text-slate-300">{fieldName}</span>
+          <span className="text-xs uppercase tracking-wide text-text-muted">Field</span>
+          <span className="font-mono text-sm text-text-muted">{fieldName}</span>
         </div>
 
         <div className="flex items-baseline justify-between gap-4">
-          <span className="text-xs uppercase tracking-wide text-slate-400">LexGuard corrected to</span>
+          <span className="text-xs uppercase tracking-wide text-text-muted">LexGuard corrected to</span>
           <span className="font-mono text-sm font-semibold text-amber-400">
             {formatFieldValue(fieldName, lexGuardValue)}
           </span>
@@ -87,7 +87,7 @@ export function OverrideDialog({
             onChange={(e) => setReason(e.target.value)}
           />
           {!reason.trim() && (
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-text-muted">
               LexGuard cannot be overridden silently — state your reason to continue.
             </p>
           )}

@@ -22,6 +22,40 @@ const CARD_ORDER: AssetClass[] = [
   "cannabis_ind",
 ];
 
+/**
+ * Short labels for the seven-across selector.
+ *
+ * Three canonical names ("Intellectual Property", "Art & Collectibles",
+ * "Natural Resources") wrap to three lines in a 1/7-width card and drag the
+ * whole row taller than the rest. These are presentation-only shortenings —
+ * the canonical `displayName` in `lib/assetClasses` stays authoritative
+ * everywhere the class is named in prose, so nothing downstream reads these.
+ */
+const SHORT_LABEL: Partial<Record<AssetClass, string>> = {
+  ip: "IP",
+  art: "Art",
+  natural_resources: "Nat. Res.",
+};
+
+/** Cloud-with-arrow — the drop zone's affordance. */
+function UploadIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className="h-8 w-8"
+    >
+      <path d="M12 16V7m0 0L8.5 10.5M12 7l3.5 3.5" />
+      <path d="M20 16.7A4.5 4.5 0 0017.5 8.5h-1.1A7 7 0 104 15.3" />
+    </svg>
+  );
+}
+
 function bytesLabel(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -49,19 +83,19 @@ function DarkSelect({
         onChange={(e) => onChange(e.target.value)}
       >
         {placeholder !== undefined && (
-          <option value="" className="bg-[#1A2435] text-[#F8FAFC]">
+          <option value="" className="bg-app-input text-text-primary">
             {placeholder}
           </option>
         )}
         {options.map((o) => (
-          <option key={o} value={o} className="bg-[#1A2435] text-[#F8FAFC]">
+          <option key={o} value={o} className="bg-app-input text-text-primary">
             {o}
           </option>
         ))}
       </select>
       <span
-        className={`pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm ${
-          value ? "text-[#F8FAFC]" : "text-slate-500"
+        className={`pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-sm ${
+          value ? "text-text-primary" : "text-text-muted"
         }`}
       >
         {value || placeholder || ""}
@@ -70,7 +104,7 @@ function DarkSelect({
         viewBox="0 0 20 20"
         fill="currentColor"
         aria-hidden
-        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted"
       >
         <path
           fillRule="evenodd"
@@ -130,14 +164,14 @@ export function DocumentLoad() {
   const samples = samplesForClass(assetClass);
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
-      <h1 className="text-xl font-bold tracking-tight text-slate-900">Load documents</h1>
-      <p className="mt-1 text-sm text-slate-500">
+    <div className="w-full">
+      <h1 className="text-xl font-semibold text-text-primary">Load documents</h1>
+      <p className="mt-1 text-sm text-text-muted">
         Choose the asset class, provide the document and its trust anchors. Nothing is processed until
         these are in place.
       </p>
 
-      <div className="card mt-6 p-6">
+      <div className="mt-6 w-full rounded-xl border border-app-border bg-app-card p-8 shadow-2xl shadow-black/40">
         {/* Asset class selector */}
         <label className="label">Asset class</label>
         <div className="grid grid-cols-4 gap-2 sm:grid-cols-7">
@@ -150,21 +184,18 @@ export function DocumentLoad() {
                 type="button"
                 onClick={() => selectClass(cls)}
                 aria-pressed={active}
-                className={`flex flex-col items-center gap-1 rounded-lg border px-2 py-3 text-center transition-colors ${
+                title={d.displayName}
+                className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border p-3 transition-all duration-150 ${
                   active
-                    ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500/40"
-                    : "border-[#2D3A4A] bg-[#1A2435] hover:bg-[#22304A]"
+                    ? "border-brand bg-brand/10 text-text-primary shadow-[0_0_12px_rgba(30,96,145,0.3)]"
+                    : "border-app-border bg-app-input text-text-muted hover:border-white/20 hover:text-text-primary"
                 }`}
               >
-                <span className="text-2xl" aria-hidden>
+                <span className="text-2xl leading-none" aria-hidden>
                   {d.icon}
                 </span>
-                <span
-                  className={`text-[11px] font-medium leading-tight ${
-                    active ? "text-white" : "text-slate-300"
-                  }`}
-                >
-                  {d.displayName}
+                <span className="text-center text-[11px] font-medium leading-tight">
+                  {SHORT_LABEL[cls] ?? d.displayName}
                 </span>
               </button>
             );
@@ -175,7 +206,7 @@ export function DocumentLoad() {
         <label className="label mt-6">{descriptor.uploadLabel}</label>
         <div
           onClick={() => inputRef.current?.click()}
-          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:border-brand-400 hover:bg-brand-50/40"
+          className="group cursor-pointer rounded-xl border-2 border-dashed border-app-border bg-app-input p-8 transition-all hover:border-brand/50 hover:bg-brand/5"
         >
           <input
             ref={inputRef}
@@ -184,42 +215,57 @@ export function DocumentLoad() {
             className="hidden"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
-          {file ? (
-            <div>
-              <div className="text-sm font-semibold text-slate-800">{file.name}</div>
-              <div className="mt-0.5 text-xs text-slate-500">{bytesLabel(file.size)} · click to replace</div>
-            </div>
-          ) : (
-            <div>
-              <div className="text-sm font-medium text-slate-600">Click to select a document</div>
-              <div className="mt-0.5 text-xs text-slate-400">.txt, .md, .pdf, .docx</div>
-            </div>
-          )}
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-slate-400">Or load a sample:</span>
-          {samples.map((s) => (
-            <button
-              key={s.key}
-              type="button"
-              className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200"
-              onClick={() => setFile(sampleToFile(s))}
-            >
-              {s.label}
-            </button>
-          ))}
+          <div className="flex flex-col items-center justify-center text-center">
+            <span className="text-text-muted transition-colors group-hover:text-brand-fg">
+              <UploadIcon />
+            </span>
+            {file ? (
+              <>
+                <div className="mt-3 text-sm font-semibold text-text-primary">{file.name}</div>
+                <div className="mt-0.5 text-xs text-text-muted">
+                  {bytesLabel(file.size)} · click to replace
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-3 text-sm text-text-muted">
+                  Drag documents here or click to upload
+                </div>
+                <div className="mt-0.5 text-xs text-text-muted">.txt, .md, .pdf, .docx</div>
+              </>
+            )}
+          </div>
+
+          {/* Samples live inside the zone but must not trigger the file dialog
+              the wrapper opens on click. */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="mt-4 flex flex-wrap items-center justify-center gap-2 border-t border-app-border pt-4"
+          >
+            <span className="text-xs text-text-muted">Or load a sample:</span>
+            {samples.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                className="cursor-pointer rounded-full border border-app-border bg-app-bg px-3 py-1 text-xs text-text-muted transition-colors hover:border-brand/50 hover:text-brand-fg"
+                onClick={() => setFile(sampleToFile(s))}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Trust anchors — rendered dynamically for the selected class */}
-        <div className="mt-6 grid grid-cols-2 gap-4">
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
           {descriptor.anchorFields.map((f) => {
             const value = raw[f.key] ?? "";
-            const span = f.full ? "col-span-2" : "";
+            const span = f.full ? "md:col-span-2" : "";
             return (
               <div key={f.key} className={span}>
                 <label className="label">
                   {f.label}
-                  {!f.required && <span className="font-normal text-slate-400"> (optional)</span>}
+                  {!f.required && <span className="font-normal text-text-muted"> (optional)</span>}
                 </label>
                 {f.type === "select" ? (
                   <DarkSelect value={value} options={f.options ?? []} onChange={(v) => setValue(f.key, v)} />
@@ -251,13 +297,17 @@ export function DocumentLoad() {
           </div>
         )}
 
-        <div className="mt-6 flex items-center justify-between">
-          <p className="max-w-xs text-xs text-slate-400">
+        <div className="mt-6 flex items-center justify-between gap-6 border-t border-app-border pt-6">
+          <p className="max-w-sm text-xs text-text-muted">
             {assetClass === "legal"
               ? "The bar number is verified against the California State Bar before any processing begins."
               : "Trust anchors are matched against the parsed document by LexGuard before any funds move."}
           </p>
-          <button className="btn btn-primary btn-lg" disabled={!canContinue} onClick={() => goToProcessing()}>
+          <button
+            className="btn btn-primary shrink-0 px-8"
+            disabled={!canContinue}
+            onClick={() => goToProcessing()}
+          >
             Continue
           </button>
         </div>

@@ -3,7 +3,7 @@ import { ManualEntryForm } from "../components/ManualEntryForm";
 
 function Spinner() {
   return (
-    <svg className="h-4 w-4 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
+    <svg className="h-4 w-4 animate-spin text-brand-fg" viewBox="0 0 24 24" fill="none">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
     </svg>
@@ -28,7 +28,7 @@ function StepIcon({ status }: { status: ProcessingStep["status"] }) {
         </svg>
       </div>
     );
-  return <div className="h-5 w-5 rounded-full border-2 border-slate-200" />;
+  return <div className="h-5 w-5 rounded-full border-2 border-app-border" />;
 }
 
 function ModeOption({
@@ -46,19 +46,19 @@ function ModeOption({
     <button
       onClick={onSelect}
       className={`flex w-full items-start gap-3 rounded-lg border p-4 text-left transition-colors ${
-        selected ? "border-brand-500 bg-brand-50/50 ring-1 ring-brand-500" : "border-slate-200 hover:bg-slate-50"
+        selected ? "border-brand bg-brand/10 ring-1 ring-brand" : "border-app-border hover:bg-app-input"
       }`}
     >
       <span
         className={`mt-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 ${
-          selected ? "border-brand-600" : "border-slate-300"
+          selected ? "border-brand" : "border-app-border"
         }`}
       >
-        {selected && <span className="h-2 w-2 rounded-full bg-brand-600" />}
+        {selected && <span className="h-2 w-2 rounded-full bg-brand" />}
       </span>
       <span>
-        <span className="block text-sm font-semibold text-slate-800">{title}</span>
-        <span className="block text-xs text-slate-500">{desc}</span>
+        <span className="block text-sm font-semibold text-text-primary">{title}</span>
+        <span className="block text-xs text-text-muted">{desc}</span>
       </span>
     </button>
   );
@@ -83,8 +83,8 @@ export function Processing() {
   if (procPhase === "choose") {
     return (
       <div className="mx-auto w-full max-w-lg">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">How should this document be parsed?</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="text-xl font-semibold text-text-primary">How should this document be parsed?</h1>
+        <p className="mt-1 text-sm text-text-muted">
           Either way, LexGuard validates the result against the document before you can proceed.
         </p>
         <div className="card mt-6 space-y-3 p-5">
@@ -114,8 +114,8 @@ export function Processing() {
   if (procPhase === "manual") {
     return (
       <div className="mx-auto w-full max-w-2xl">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Manual entry</h1>
-        <p className="mt-1 text-sm text-slate-500">
+        <h1 className="text-xl font-semibold text-text-primary">Manual entry</h1>
+        <p className="mt-1 text-sm text-text-muted">
           Document hashed and attorney verified. Enter the retainer fields below.
         </p>
         <div className="mt-6">
@@ -128,25 +128,25 @@ export function Processing() {
   // Phase 2 — running progress.
   return (
     <div className="mx-auto w-full max-w-lg">
-      <h1 className="text-xl font-bold tracking-tight text-slate-900">Processing</h1>
-      <p className="mt-1 text-sm text-slate-500">
+      <h1 className="text-xl font-semibold text-text-primary">Processing</h1>
+      <p className="mt-1 text-sm text-text-muted">
         LexEscrow is hashing the artifact, verifying the attorney, and validating the{" "}
         {entryMode === "manual" ? "entered" : "extracted"} payload.
       </p>
 
-      <div className="card mt-6 divide-y divide-slate-100">
+      <div className="card mt-6 divide-y divide-app-border">
         {steps.map((step) => (
           <div key={step.key} className="flex items-center gap-3 px-5 py-4">
             <StepIcon status={step.status} />
             <span
               className={`text-sm font-medium ${
                 step.status === "done"
-                  ? "text-slate-700"
+                  ? "text-text-primary"
                   : step.status === "active"
-                    ? "text-slate-900"
+                    ? "text-text-primary"
                     : step.status === "error"
                       ? "text-red-700"
-                      : "text-slate-400"
+                      : "text-text-muted"
               }`}
             >
               {step.label}

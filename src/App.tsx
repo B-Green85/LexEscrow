@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { initMenuListeners, useSession, type Screen } from "./store/session";
-import { Brand } from "./components/Brand";
+import emblem from "./assets/lexescrow-emblem.png";
 import { Splash } from "./components/Splash";
 import { WorkflowRail } from "./components/WorkflowRail";
+import { HeaderIconButton } from "./components/HeaderIconButton";
 import { DocumentLoad } from "./screens/DocumentLoad";
 import { Processing } from "./screens/Processing";
 import { ParsedOutputReview } from "./screens/ParsedOutputReview";
@@ -38,6 +39,30 @@ const STAGE_INDEX: Record<string, number> = {
   execution: 5,
 };
 
+/**
+ * Screens whose content is a wide table or console rather than a form. They
+ * get a roomier column than the workflow screens, which read better narrow.
+ */
+const WIDE_SCREENS: Partial<Record<Screen, true>> = {
+  batch: true,
+  "anchor-receipt": true,
+  recent: true,
+};
+
+/** Clock-with-arrow — history, for Recent Workflows. */
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+      <path d="M10 5a1 1 0 011 1v3.6l2.5 1.44a1 1 0 11-1 1.73l-3-1.73A1 1 0 019 10.2V6a1 1 0 011-1z" />
+      <path
+        fillRule="evenodd"
+        d="M2.05 9.1a8 8 0 112.35 6.2 1 1 0 011.4-1.42A6 6 0 104.02 8.6l1.03-.5a1 1 0 01.87 1.8l-3 1.46a1 1 0 01-1.4-.62L.62 7.5a1 1 0 011.93-.52l.3 1.12z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 function BatchIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
@@ -72,8 +97,16 @@ function GearIcon() {
 }
 
 function App() {
-  const { screen, operator, openConfig, openBatch, openAnchorReceiptConsole, showWizard, checkWizard } =
-    useSession();
+  const {
+    screen,
+    operator,
+    openConfig,
+    openBatch,
+    openAnchorReceiptConsole,
+    openRecent,
+    showWizard,
+    checkWizard,
+  } = useSession();
   const [showSplash, setShowSplash] = useState(true);
   const chromeLabel = CHROMELESS_LABELS[screen];
   const chromeless = chromeLabel !== undefined;
@@ -108,65 +141,83 @@ function App() {
           full-window overlays at the same depth, and an onboarding flow that
           appears mid-fade reads as a rendering fault. */}
       {!showSplash && showWizard && <SetupWizard />}
-      <header className="sticky top-0 z-10 border-b border-[#1A2435] bg-[#0A0F1A]/85 backdrop-blur">
-        <div className="mx-auto grid max-w-6xl grid-cols-[auto_1fr_auto] items-center gap-4 px-6 py-3">
-          <Brand />
-          <div className="flex min-w-0 justify-center">
+      {/* `data-tauri-drag-region` makes the whole bar a window handle, which is
+          what the native title bar used to be before `titleBarStyle: Overlay`
+          removed it. Interactive children opt back out by being buttons. */}
+      <header
+        data-tauri-drag-region
+        className="sticky top-0 z-10 select-none border-b border-app-border
+          bg-app-bg/90 backdrop-blur-sm"
+      >
+        {/* The attribute has to repeat on the inner rows: Tauri tests the
+            element actually under the cursor, so tagging only the <header>
+            would leave the bar draggable by its 1px edge and nowhere else. */}
+        <div data-tauri-drag-region className="flex h-12 items-center justify-between px-6">
+          {/* The left inset clears the macOS traffic lights, which `Overlay`
+              floats on top of the web content. */}
+          <div data-tauri-drag-region className="flex shrink-0 items-center gap-2 pl-[72px]">
+            <img src={emblem} alt="" width={24} height={24} className="h-6 w-6" draggable={false} />
+            <span className="text-sm font-semibold tracking-tight text-text-primary">LexEscrow</span>
+          </div>
+
+          <div className="flex min-w-0 flex-1 justify-center">
             {chromeless ? (
-              <div className="text-sm font-semibold text-slate-500">{chromeLabel}</div>
+              <div className="truncate text-sm font-semibold text-text-muted">{chromeLabel}</div>
             ) : (
               <WorkflowRail current={STAGE_INDEX[screen]} escalated={screen === "escalation"} />
             )}
           </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
-              <div className="text-[11px] text-slate-400">Operator</div>
-              <div className="text-xs font-medium text-slate-600">{operator}</div>
-            </div>
-            <button
+
+          <div className="flex shrink-0 items-center gap-1">
+            <span className="mr-3 hidden text-xs text-text-muted sm:block">{operator}</span>
+            <HeaderIconButton
+              icon={<HistoryIcon />}
+              label="Recent Workflows"
+              onClick={() => openRecent()}
+              active={screen === "recent"}
+            />
+            <HeaderIconButton
+              icon={<BatchIcon />}
+              label="Batch Processing"
               onClick={() => openBatch()}
-              aria-label="Batch processing"
-              title="Batch processing"
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-            >
-              <BatchIcon />
-            </button>
-            <button
+              active={screen === "batch"}
+            />
+            <HeaderIconButton
+              icon={<AnchorReceiptIcon />}
+              label="AnchorReceipt Console"
               onClick={() => openAnchorReceiptConsole()}
-              aria-label="AnchorReceipt Console"
-              title="AnchorReceipt Console"
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-            >
-              <AnchorReceiptIcon />
-            </button>
-            <button
+              active={screen === "anchor-receipt"}
+            />
+            <HeaderIconButton
+              icon={<GearIcon />}
+              label="Configuration"
               onClick={() => openConfig()}
-              aria-label="Configuration"
-              title="Configuration"
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-            >
-              <GearIcon />
-            </button>
+              active={screen === "config"}
+            />
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-8">
-        {screen === "load" && <DocumentLoad />}
-        {screen === "processing" && <Processing />}
-        {screen === "review" && <ParsedOutputReview />}
-        {screen === "escalation" && <LexGuardEscalation />}
-        {screen === "conditions" && <ConditionDefinition />}
-        {screen === "escrow-monitor" && <EscrowMonitor />}
-        {screen === "execution" && <ExecutionConfirmation />}
-        {screen === "config" && <Configuration />}
-        {screen === "batch" && <BatchProcessing />}
-        {screen === "anchor-receipt" && <AnchorReceiptConsole />}
-        {screen === "recent" && <RecentWorkflows />}
+      <main className="flex-1 bg-app-bg">
+        <div className={`mx-auto w-full px-6 py-8 ${WIDE_SCREENS[screen] ? "max-w-6xl" : "max-w-4xl"}`}>
+          {screen === "load" && <DocumentLoad />}
+          {screen === "processing" && <Processing />}
+          {screen === "review" && <ParsedOutputReview />}
+          {screen === "escalation" && <LexGuardEscalation />}
+          {screen === "conditions" && <ConditionDefinition />}
+          {screen === "escrow-monitor" && <EscrowMonitor />}
+          {screen === "execution" && <ExecutionConfirmation />}
+          {screen === "config" && <Configuration />}
+          {screen === "batch" && <BatchProcessing />}
+          {screen === "anchor-receipt" && <AnchorReceiptConsole />}
+          {screen === "recent" && <RecentWorkflows />}
+        </div>
       </main>
 
-      <footer className="border-t border-slate-200 py-3 text-center text-xs text-slate-400">
-        AI parses. LexGuard validates. Humans decide. CRE executes.
+      <footer className="border-t border-app-border py-3 text-center">
+        <span className="text-[11px] text-text-muted">
+          AI parses. LexGuard validates. Humans decide. CRE executes.
+        </span>
       </footer>
     </div>
   );

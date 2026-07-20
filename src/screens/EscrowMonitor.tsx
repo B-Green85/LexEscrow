@@ -51,10 +51,10 @@ const STATUS_CHIP: Record<ConditionStatus, { cls: string; text: string }> = {
 
 const STATUS_BORDER: Record<ConditionStatus, string> = {
   met: "border-emerald-500/50",
-  in_progress: "border-brand-500/50 animate-pulse",
-  pending: "border-[#2D3A4A]",
+  in_progress: "border-brand/50 animate-pulse",
+  pending: "border-app-border",
   failed: "border-red-500/50",
-  waived: "border-slate-500/40",
+  waived: "border-app-border",
 };
 
 const TYPE_ICON: Record<Condition["type"], string> = {
@@ -88,12 +88,12 @@ function shortHash(h: string): string {
 function TxLink({ hash, label = "On-chain TX" }: { hash: string; label?: string }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-xs text-slate-500">{label}</span>
+      <span className="text-xs text-text-muted">{label}</span>
       <a
         href={txUrl(hash)}
         target="_blank"
         rel="noreferrer"
-        className="truncate font-mono text-[11px] text-[#93C5FD] hover:underline"
+        className="truncate font-mono text-[11px] text-brand-fg hover:underline"
         title={hash}
       >
         {hash.length <= 24 ? hash : `${hash.slice(0, 12)}…${hash.slice(-8)}`}
@@ -153,12 +153,12 @@ function TimeConditionBody({ condition, now }: { condition: Condition; now: numb
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-slate-500">Release after</span>
-        <span className="font-mono text-xs text-slate-700">{condition.releaseDate}</span>
+        <span className="text-xs text-text-muted">Release after</span>
+        <span className="font-mono text-xs text-text-primary">{condition.releaseDate}</span>
       </div>
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-slate-500">Today</span>
-        <span className="font-mono text-xs text-slate-700">
+        <span className="text-xs text-text-muted">Today</span>
+        <span className="font-mono text-xs text-text-primary">
           {new Date(current).toISOString().slice(0, 10)}
         </span>
       </div>
@@ -168,7 +168,7 @@ function TimeConditionBody({ condition, now }: { condition: Condition; now: numb
         ) : withinWindow ? (
           <span className="text-amber-600">⏳ {formatCountdown(remaining)} remaining</span>
         ) : (
-          <span className="text-slate-500">
+          <span className="text-text-muted">
             ⏳ {days} day{days === 1 ? "" : "s"} remaining
           </span>
         )}
@@ -189,18 +189,18 @@ function ESignConditionBody({ condition }: { condition: Condition }) {
       <ul className="space-y-1">
         {signers.map((name) => (
           <li key={name} className="flex items-center justify-between gap-3 text-xs">
-            <span className="truncate text-slate-700">{name}</span>
-            <span className="shrink-0 text-slate-500">
+            <span className="truncate text-text-primary">{name}</span>
+            <span className="shrink-0 text-text-muted">
               {SIGNER_STATUS[statuses[name] ?? ""] ?? "⏳ Awaiting"}
             </span>
           </li>
         ))}
       </ul>
-      <div className="border-t border-[#2D3A4A] pt-2 text-xs font-medium">
+      <div className="border-t border-app-border pt-2 text-xs font-medium">
         {signers.length > 0 && signedCount === signers.length ? (
           <span className="text-emerald-600">✅ All signed</span>
         ) : (
-          <span className="text-slate-500">
+          <span className="text-text-muted">
             ⏳ {signedCount} of {signers.length} signed
           </span>
         )}
@@ -214,15 +214,15 @@ function DocumentConditionBody({ condition }: { condition: Condition }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-slate-500">Document</span>
-        <span className="truncate text-xs text-slate-700" title={condition.documentLabel}>
+        <span className="text-xs text-text-muted">Document</span>
+        <span className="truncate text-xs text-text-primary" title={condition.documentLabel}>
           {condition.documentLabel ?? "—"}
         </span>
       </div>
       {condition.documentHash && (
         <div className="flex items-center justify-between gap-3">
-          <span className="text-xs text-slate-500">Fingerprint</span>
-          <span className="font-mono text-[11px] text-slate-700" title={condition.documentHash}>
+          <span className="text-xs text-text-muted">Fingerprint</span>
+          <span className="font-mono text-[11px] text-text-primary" title={condition.documentHash}>
             {shortHash(condition.documentHash)}
           </span>
         </div>
@@ -232,7 +232,7 @@ function DocumentConditionBody({ condition }: { condition: Condition }) {
         {condition.onChainTx ? (
           <span className="text-emerald-600">✅ Registered</span>
         ) : (
-          <span className="text-slate-500">⏳ Pending registration</span>
+          <span className="text-text-muted">⏳ Pending registration</span>
         )}
       </div>
     </div>
@@ -243,14 +243,14 @@ function BarVerifyConditionBody({ condition }: { condition: Condition }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-slate-500">Bar number</span>
-        <span className="font-mono text-xs text-slate-700">{condition.barNumber || "—"}</span>
+        <span className="text-xs text-text-muted">Bar number</span>
+        <span className="font-mono text-xs text-text-primary">{condition.barNumber || "—"}</span>
       </div>
       <div className="pt-1 text-xs font-medium">
         {condition.barVerified ? (
           <span className="text-emerald-600">✅ Verified active with the state bar</span>
         ) : (
-          <span className="text-slate-500">❌ Not verified</span>
+          <span className="text-text-muted">❌ Not verified</span>
         )}
       </div>
     </div>
@@ -341,7 +341,7 @@ function WaiverControl({
   }
 
   return (
-    <div className="mt-3 space-y-2 rounded-lg border border-amber-500/40 bg-[#1A2435] p-3">
+    <div className="mt-3 space-y-2 rounded-lg border border-amber-500/40 bg-app-input p-3">
       <label className="label" htmlFor={`waive-${condition.id}`}>
         Reason for waiving this condition
       </label>
@@ -352,7 +352,7 @@ function WaiverControl({
         placeholder="Why is it acceptable to settle without this condition?"
         onChange={(e) => setReason(e.target.value)}
       />
-      <p className="text-[11px] text-slate-400">
+      <p className="text-[11px] text-text-muted">
         Recorded to the audit trail against your identity. A waiver is not a verification.
       </p>
       <div className="flex gap-2">
@@ -404,13 +404,13 @@ function ConditionCard({
         <div className="min-w-0">
           <div
             className={`flex items-center gap-2 text-sm font-semibold ${
-              waived ? "text-slate-500 line-through" : "text-slate-800"
+              waived ? "text-text-muted line-through" : "text-text-primary"
             }`}
           >
             <span aria-hidden>{TYPE_ICON[condition.type]}</span>
             <span className="truncate">{condition.label}</span>
           </div>
-          <div className="mt-0.5 text-xs text-slate-400">{condition.description}</div>
+          <div className="mt-0.5 text-xs text-text-muted">{condition.description}</div>
         </div>
         <span className={`${chip.cls} shrink-0`}>{chip.text}</span>
       </div>
@@ -431,7 +431,7 @@ function ConditionCard({
           <ManualConditionBody condition={condition} busy={busy} onMarkMet={onMarkMet} />
         )}
         {condition.type === "event" && (
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-text-muted">
             {condition.eventDescription ?? "Verified via CRE adapter."}
           </p>
         )}
@@ -441,7 +441,7 @@ function ConditionCard({
         <p className="mt-2 text-xs text-red-500">{condition.failureReason}</p>
       )}
       {waived && condition.failureReason && (
-        <p className="mt-2 text-xs text-slate-500">Waived — {condition.failureReason}</p>
+        <p className="mt-2 text-xs text-text-muted">Waived — {condition.failureReason}</p>
       )}
 
       {isUnmet(condition.status) && (
@@ -476,11 +476,11 @@ function BalanceCard({
           {formatUsd(escrowBalance)} USDC
         </div>
         {depositTxHash && (
-          <div className="mt-4 border-t border-slate-100 pt-3">
+          <div className="mt-4 border-t border-app-border pt-3">
             <TxLink hash={depositTxHash} label="Deposit transaction" />
           </div>
         )}
-        <p className="mt-3 text-xs text-slate-500">
+        <p className="mt-3 text-xs text-text-muted">
           🔒 Funds locked — conditions must be met to release.
         </p>
       </div>
@@ -489,8 +489,8 @@ function BalanceCard({
 
   return (
     <div className="card p-6">
-      <div className="text-sm font-semibold text-slate-700">Awaiting fund deposit</div>
-      <p className="mt-1 text-xs text-slate-400">
+      <div className="text-sm font-semibold text-text-primary">Awaiting fund deposit</div>
+      <p className="mt-1 text-xs text-text-muted">
         Record the transaction hash once the depositing party has funded the escrow contract.
       </p>
       <div className="mt-4">
@@ -590,7 +590,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
     <div className="mx-auto w-full max-w-2xl">
       {/* 1 — Header */}
       <div className="flex items-center justify-between">
-        <h1 className="flex items-center gap-2.5 text-xl font-bold tracking-tight text-slate-900">
+        <h1 className="flex items-center gap-2.5 text-xl font-bold tracking-tight text-text-primary">
           <span aria-hidden>🔒</span>
           Escrow Monitor
         </h1>
@@ -598,7 +598,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
           {descriptor.icon} {descriptor.displayName}
         </span>
       </div>
-      <p className="mt-1 text-sm text-slate-500">Funds held pending condition verification.</p>
+      <p className="mt-1 text-sm text-text-muted">Funds held pending condition verification.</p>
 
       {/* 2 — Balance */}
       <div className="mt-5">
@@ -613,7 +613,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
 
       {/* 3 — Checklist */}
       <div className="mt-6 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-700">Release conditions</h2>
+        <h2 className="text-sm font-semibold text-text-primary">Release conditions</h2>
         <div className="flex items-center gap-2">
           {props.conditionPolling && (
             <span className="badge badge-brand" title="Re-checking every 30 seconds">
@@ -627,7 +627,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
       </div>
 
       {conditions.length === 0 ? (
-        <div className="card mt-3 p-5 text-sm text-slate-500">
+        <div className="card mt-3 p-5 text-sm text-text-muted">
           No conditions have been defined for this escrow.
         </div>
       ) : (
@@ -651,13 +651,13 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
       {/* 4 — Summary bar */}
       <div className="card mt-4 p-5">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-500">
+          <span className="text-text-muted">
             {met} of {total} conditions met
-            {waived > 0 && <span className="text-slate-400"> · {waived} waived</span>}
+            {waived > 0 && <span className="text-text-muted"> · {waived} waived</span>}
           </span>
-          <span className="font-mono text-sm font-bold text-slate-800">{percent}%</span>
+          <span className="font-mono text-sm font-bold text-text-primary">{percent}%</span>
         </div>
-        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200/20">
+        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-app-input">
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
             style={{ width: `${percent}%` }}
@@ -670,7 +670,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
       </div>
 
       {/* 5 — Refresh line */}
-      <div className="mt-2 text-right text-[11px] text-slate-400">
+      <div className="mt-2 text-right text-[11px] text-text-muted">
         Last updated:{" "}
         {props.conditionsUpdatedAt
           ? new Date(props.conditionsUpdatedAt).toLocaleTimeString()
@@ -691,7 +691,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
               ✅ All conditions met — ready to settle
             </div>
           ) : (
-            <div className="rounded-lg border border-[#2D3A4A] bg-[#1A2435] px-4 py-3 text-sm text-slate-500">
+            <div className="rounded-lg border border-app-border bg-app-input px-4 py-3 text-sm text-text-muted">
               {unmet.length} condition{unmet.length === 1 ? "" : "s"} still pending
             </div>
           )}
@@ -721,7 +721,7 @@ export function EscrowMonitorView(props: EscrowMonitorViewProps) {
                 </div>
               )}
               <div className="mt-4 flex items-center justify-between gap-4">
-                <p className="max-w-sm text-xs text-slate-400">
+                <p className="max-w-sm text-xs text-text-muted">
                   {chainBlocked
                     ? "The network, contract and deployer key are held in the vault. Until they are set, settlement cannot be submitted on-chain."
                     : allMet

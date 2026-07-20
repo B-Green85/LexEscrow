@@ -88,8 +88,9 @@ export function InfoTooltip({ title, explanation, learnMore }: InfoTooltipProps)
         aria-expanded={open}
         onClick={toggle}
         className="ml-1.5 inline-flex h-4 w-4 shrink-0 cursor-pointer items-center
-          justify-center rounded-full border border-[#2D3A4A] bg-[#1A2435] text-[10px]
-          font-bold text-slate-400 hover:border-[#60A5FA] hover:text-[#60A5FA]"
+          justify-center rounded-full border border-app-border bg-app-input text-[10px]
+          font-bold text-text-muted transition-colors hover:border-brand-fg
+          hover:text-brand-fg"
       >
         ⓘ
       </button>
@@ -98,18 +99,20 @@ export function InfoTooltip({ title, explanation, learnMore }: InfoTooltipProps)
         <div
           role="dialog"
           aria-label={title}
-          className={`absolute left-0 z-50 max-w-xs rounded-lg border border-[#2D3A4A]
-            bg-[#1A2435] p-3 shadow-xl ${placement === "top" ? "bottom-full mb-2" : "top-full mt-2"}`}
+          className={`absolute left-0 z-50 max-w-xs rounded-lg border border-app-border
+            bg-app-card p-3 shadow-2xl shadow-black/50 ${
+              placement === "top" ? "bottom-full mb-2" : "top-full mt-2"
+            }`}
         >
-          <p className="text-sm font-semibold text-white">{title}</p>
-          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-slate-300">
+          <p className="text-sm font-semibold text-text-primary">{title}</p>
+          <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-text-muted">
             {explanation}
           </p>
           {learnMore && (
             <button
               type="button"
               onClick={() => void openExternal(learnMore)}
-              className="mt-2 cursor-pointer text-xs text-[#60A5FA] hover:underline"
+              className="mt-2 cursor-pointer text-xs text-brand-fg transition-colors hover:text-brand-fg/80 hover:underline"
             >
               Learn more →
             </button>

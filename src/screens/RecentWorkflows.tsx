@@ -116,10 +116,10 @@ export function AuditTrailModal({
       data-testid="audit-trail-modal"
     >
       <div className="card w-full max-w-3xl">
-        <div className="flex items-start justify-between gap-4 border-b border-[#2D3A4A] px-5 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-app-border px-5 py-4">
           <div className="min-w-0">
-            <div className="text-sm font-bold text-[#E2E8F0]">Audit Trail</div>
-            <div className="mt-0.5 truncate font-mono text-xs text-slate-400">{sessionId}</div>
+            <div className="text-sm font-bold text-text-primary">Audit Trail</div>
+            <div className="mt-0.5 truncate font-mono text-xs text-text-muted">{sessionId}</div>
           </div>
           <button className="btn btn-secondary btn-sm shrink-0" onClick={onClose}>
             Close
@@ -127,7 +127,7 @@ export function AuditTrailModal({
         </div>
 
         <div className="px-5 py-4">
-          {loading && <div className="text-sm text-slate-400">Loading audit trail…</div>}
+          {loading && <div className="text-sm text-text-muted">Loading audit trail…</div>}
 
           {error && (
             <div className="rounded-lg border border-red-500/40 bg-red-950/40 px-3 py-2 text-sm text-red-300">
@@ -136,7 +136,7 @@ export function AuditTrailModal({
           )}
 
           {!loading && !error && entries.length === 0 && (
-            <div className="text-sm text-slate-400">
+            <div className="text-sm text-text-muted">
               This session has no audit entries — nothing consequential happened before it ended.
             </div>
           )}
@@ -144,25 +144,25 @@ export function AuditTrailModal({
           {!loading && !error && entries.length > 0 && (
             <ol className="space-y-3">
               {entries.map((entry) => (
-                <li key={entry.logId} className="rounded-lg border border-[#2D3A4A] bg-[#0F1729] p-3">
+                <li key={entry.logId} className="rounded-lg border border-app-border bg-app-input p-3">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className="font-mono text-sm font-semibold text-[#93C5FD]">
+                    <span className="font-mono text-sm font-semibold text-brand-fg">
                       #{entry.logId} · {entry.eventType}
                     </span>
-                    <span className="text-xs text-slate-400">{dateLabel(entry.blockTimestamp)}</span>
+                    <span className="text-xs text-text-muted">{dateLabel(entry.blockTimestamp)}</span>
                   </div>
 
-                  <div className="mt-1 text-xs text-slate-400">by {entry.userIdentity}</div>
+                  <div className="mt-1 text-xs text-text-muted">by {entry.userIdentity}</div>
 
-                  <div className="mt-2 space-y-1 border-t border-[#1E293B] pt-2 font-mono text-[11px]">
+                  <div className="mt-2 space-y-1 border-t border-app-border pt-2 font-mono text-[11px]">
                     <div className="flex gap-2">
-                      <span className="shrink-0 text-slate-500">prev</span>
-                      <span className="min-w-0 break-all text-slate-400" data-selectable>
+                      <span className="shrink-0 text-text-muted">prev</span>
+                      <span className="min-w-0 break-all text-text-muted" data-selectable>
                         {entry.previousHash ?? "— chain origin —"}
                       </span>
                     </div>
                     <div className="flex gap-2">
-                      <span className="shrink-0 text-slate-500">this</span>
+                      <span className="shrink-0 text-text-muted">this</span>
                       <span className="min-w-0 break-all text-emerald-400" data-selectable>
                         {entry.entryHash}
                       </span>
@@ -170,10 +170,10 @@ export function AuditTrailModal({
                   </div>
 
                   <details className="mt-2">
-                    <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">
+                    <summary className="cursor-pointer text-xs text-text-muted hover:text-text-primary">
                       Payload
                     </summary>
-                    <pre className="mt-1.5 overflow-x-auto rounded bg-[#0A0F1A] p-2 text-[11px] text-slate-300">
+                    <pre className="mt-1.5 overflow-x-auto rounded bg-app-bg p-2 text-[11px] text-text-muted">
                       {entry.payloadJson}
                     </pre>
                   </details>
@@ -211,11 +211,11 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
   const searching = search.trim().length > 0;
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <div className="w-full">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-[#F8FAFC]">Recent Workflows</h1>
-          <p className="mt-1 text-sm text-slate-400">
+          <h1 className="text-xl font-semibold text-text-primary">Recent Workflows</h1>
+          <p className="mt-1 text-sm text-text-muted">
             The last {RECENT_LIMIT} escrow sessions on this install, newest first. Read-only — open
             a session's audit trail to see its hash-chained record.
           </p>
@@ -235,7 +235,7 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
             id="recent-search"
             type="search"
             placeholder="Search by client, asset class, session ID, or state..."
-            className="input w-full pr-10"
+            className="pr-10"
             value={search}
             onChange={(e) => props.onSearchChange(e.target.value)}
           />
@@ -245,14 +245,14 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
               aria-label="Clear search"
               title="Clear search"
               onClick={() => props.onSearchChange("")}
-              className="absolute inset-y-0 right-0 flex items-center px-3 text-lg leading-none text-slate-500 hover:text-slate-300"
+              className="absolute inset-y-0 right-0 flex items-center px-3 text-lg leading-none text-text-muted hover:text-text-primary"
             >
               ×
             </button>
           )}
         </div>
         {searching && (
-          <div className="mt-1.5 text-xs text-slate-400" data-testid="result-count">
+          <div className="mt-1.5 text-xs text-text-muted" data-testid="result-count">
             {`${visible.length} ${visible.length === 1 ? "result" : "results"}`}
           </div>
         )}
@@ -264,13 +264,13 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
         </div>
       )}
 
-      {loading && <div className="mt-6 text-sm text-slate-400">Loading sessions…</div>}
+      {loading && <div className="mt-6 text-sm text-text-muted">Loading sessions…</div>}
 
       {/* ── Empty: nothing recorded at all ── */}
       {!loading && !error && sessions.length === 0 && (
         <div className="card mt-6 px-6 py-12 text-center">
-          <div className="text-sm font-semibold text-[#E2E8F0]">No workflows yet</div>
-          <p className="mx-auto mt-1.5 max-w-md text-sm text-slate-400">
+          <div className="text-sm font-semibold text-text-primary">No workflows yet</div>
+          <p className="mx-auto mt-1.5 max-w-md text-sm text-text-muted">
             Every escrow you run is recorded here with its audit trail. Start one to see it appear.
           </p>
           <button className="btn btn-primary mt-5" onClick={props.onNewTransaction}>
@@ -282,8 +282,8 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
       {/* ── Empty: the search excluded everything ── */}
       {!loading && !error && sessions.length > 0 && visible.length === 0 && (
         <div className="card mt-6 px-6 py-10 text-center">
-          <div className="text-sm font-semibold text-[#E2E8F0]">No matching workflows</div>
-          <p className="mt-1.5 text-sm text-slate-400">
+          <div className="text-sm font-semibold text-text-primary">No matching workflows</div>
+          <p className="mt-1.5 text-sm text-text-muted">
             Nothing in the last {sessions.length} sessions matches “{search.trim()}”.
           </p>
           <button className="btn btn-secondary mt-5" onClick={() => props.onSearchChange("")}>
@@ -297,7 +297,7 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
         <div className="card mt-6 overflow-x-auto">
           <table className="w-full min-w-[48rem] text-left text-sm">
             <thead>
-              <tr className="border-b border-[#2D3A4A] text-xs uppercase tracking-wide text-slate-500">
+              <tr className="border-b border-app-border bg-app-input text-xs uppercase tracking-wide text-text-muted">
                 <th className="px-4 py-3 font-medium">Asset class</th>
                 <th className="px-4 py-3 font-medium">Client</th>
                 <th className="px-4 py-3 font-medium">Date</th>
@@ -311,27 +311,27 @@ export function RecentWorkflowsView(props: RecentWorkflowsViewProps) {
               {visible.map((s) => (
                 <tr
                   key={s.sessionId}
-                  className="border-b border-[#1E293B] last:border-0 hover:bg-[#161F2E]"
+                  className="border-b border-app-border last:border-0 hover:bg-white/5"
                 >
-                  <td className="whitespace-nowrap px-4 py-3 text-slate-300">
+                  <td className="whitespace-nowrap px-4 py-3 text-text-primary">
                     {assetLabel(s.assetClass)}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="font-medium text-[#E2E8F0]">{s.clientId}</div>
-                    <div className="mt-0.5 font-mono text-[11px] text-slate-500">
+                    <div className="font-medium text-text-primary">{s.clientId}</div>
+                    <div className="mt-0.5 font-mono text-[11px] text-text-muted">
                       {shortId(s.sessionId)}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                  <td className="whitespace-nowrap px-4 py-3 text-text-muted">
                     {dateLabel(s.createdAt)}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`badge ${stateTone(s.currentState)}`}>{s.currentState}</span>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-slate-400">
+                  <td className="whitespace-nowrap px-4 py-3 text-text-muted">
                     {pathLabel(s.executionPath)}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-slate-300">
+                  <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-text-primary">
                     {amountLabel(s.totalHeldCents)}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-right">

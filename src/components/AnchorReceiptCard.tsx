@@ -27,10 +27,10 @@ export function shortHash(value: string | null | undefined, head = 10, tail = 6)
 }
 
 export function AnchorTxLink({ hash }: { hash: string | null | undefined }) {
-  if (!hash) return <span className="font-mono text-sm text-slate-500">—</span>;
+  if (!hash) return <span className="font-mono text-sm text-text-muted">—</span>;
   return (
     <a
-      className="font-mono text-sm text-brand-500 underline-offset-2 hover:underline"
+      className="font-mono text-sm text-brand-fg underline-offset-2 hover:underline"
       href={txUrl(hash)}
       target="_blank"
       rel="noreferrer"
@@ -64,8 +64,8 @@ function StatusBadge({ summary }: { summary: AnchorReceipt["summary"] }) {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-t border-slate-100 pt-3 first:border-0 first:pt-0">
-      <span className="shrink-0 text-sm text-slate-500">{label}</span>
+    <div className="flex items-center justify-between gap-4 border-t border-app-border pt-3 first:border-0 first:pt-0">
+      <span className="shrink-0 text-sm text-text-muted">{label}</span>
       <span className="min-w-0 text-right">{children}</span>
     </div>
   );
@@ -104,7 +104,7 @@ export function ReceiptVerificationPanel({
       </div>
       <dl className="mt-3 space-y-1.5">
         <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
-          <dt className="shrink-0 text-xs text-slate-500">Computed</dt>
+          <dt className="shrink-0 text-xs text-text-muted">Computed</dt>
           <dd
             className={`break-all font-mono text-xs ${
               result.valid ? "text-emerald-800" : "text-red-700"
@@ -115,7 +115,7 @@ export function ReceiptVerificationPanel({
           </dd>
         </div>
         <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
-          <dt className="shrink-0 text-xs text-slate-500">Claimed</dt>
+          <dt className="shrink-0 text-xs text-text-muted">Claimed</dt>
           <dd
             className={`break-all font-mono text-xs ${
               result.valid ? "text-emerald-800" : "text-red-700"
@@ -161,28 +161,28 @@ export function AnchorReceiptCard({
   return (
     <div className="card mt-4 p-5">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-slate-700">{heading}</div>
+        <div className="text-sm font-semibold text-text-primary">{heading}</div>
         <StatusBadge summary={receipt.summary} />
       </div>
 
       <div className="mt-4 space-y-3">
         <Row label="Receipt ID">
-          <span className="font-mono text-sm text-slate-800" data-selectable>
+          <span className="font-mono text-sm text-text-primary" data-selectable>
             {shortHash(receipt.receiptId, 8, 4)}
           </span>
         </Row>
         <Row label="Issued at">
-          <span className="text-sm text-slate-700">
+          <span className="text-sm text-text-primary">
             {new Date(receipt.issuedAt).toLocaleString()}
           </span>
         </Row>
         <Row label="Asset class">
-          <span className="text-sm text-slate-700">
+          <span className="text-sm text-text-primary">
             {descriptorFor(receipt.assetClass).icon} {descriptorFor(receipt.assetClass).displayName}
           </span>
         </Row>
         <Row label="Documents registered">
-          <span className="text-sm text-slate-700">
+          <span className="text-sm text-text-primary">
             {receipt.summary.verifiedCount} of {receipt.summary.totalCount}
           </span>
         </Row>
@@ -190,7 +190,7 @@ export function AnchorReceiptCard({
           <AnchorTxLink hash={first?.onChainTx} />
         </Row>
         <Row label="Receipt hash">
-          <span className="font-mono text-sm text-slate-800" data-selectable>
+          <span className="font-mono text-sm text-text-primary" data-selectable>
             {shortHash(receipt.receiptHash, 12, 8)}
           </span>
         </Row>
@@ -208,7 +208,7 @@ export function AnchorReceiptCard({
 
       <ReceiptVerificationPanel result={verification} />
 
-      <p className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-400">
+      <p className="mt-4 border-t border-app-border pt-3 text-xs text-text-muted">
         {receipt.assertionText}
       </p>
     </div>

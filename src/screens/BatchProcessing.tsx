@@ -31,16 +31,16 @@ function EntryModeToggle({ item }: { item: BatchItem }) {
   const setItemEntryMode = useBatch((s) => s.setItemEntryMode);
   const locked = item.status === "ready" || item.status === "flagged" || item.status === "settled";
   if (locked) {
-    return <span className="text-[11px] text-slate-500">{item.entryMode === "manual" ? "manual" : "AI"}</span>;
+    return <span className="text-[11px] text-text-muted">{item.entryMode === "manual" ? "manual" : "AI"}</span>;
   }
   return (
-    <div className="inline-flex overflow-hidden rounded-md border border-slate-200 text-[11px]">
+    <div className="inline-flex overflow-hidden rounded-md border border-app-border text-[11px]">
       {(["ai", "manual"] as const).map((m) => (
         <button
           key={m}
           onClick={() => setItemEntryMode(item.id, m)}
           className={`px-2 py-0.5 ${
-            item.entryMode === m ? "bg-brand-600 text-white" : "bg-[#1A2435] text-slate-400 hover:bg-[#22304A]"
+            item.entryMode === m ? "bg-brand text-white" : "bg-app-input text-text-muted hover:bg-white/10"
           }`}
         >
           {m === "ai" ? "AI" : "Manual"}
@@ -67,13 +67,13 @@ function ClassCell({ item }: { item: BatchItem }) {
         title={d.displayName}
         className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium ${
           editable
-            ? "border-[#2D3A4A] bg-[#1A2435] text-slate-200 hover:bg-[#22304A]"
-            : "border-transparent text-slate-600"
+            ? "border-app-border bg-app-input text-text-primary hover:bg-white/10"
+            : "border-transparent text-text-muted"
         }`}
       >
         <span aria-hidden>{d.icon}</span>
         <span>{d.abbrev}</span>
-        {editable && <span className="text-slate-500">▾</span>}
+        {editable && <span className="text-text-muted">▾</span>}
       </button>
 
       {open && editable && (
@@ -83,7 +83,7 @@ function ClassCell({ item }: { item: BatchItem }) {
             className="fixed inset-0 z-10 cursor-default"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute z-20 mt-1 w-48 rounded-lg border border-[#2D3A4A] bg-[#111827] p-1 shadow-lg shadow-black/40">
+          <div className="absolute z-20 mt-1 w-48 rounded-lg border border-app-border bg-app-card p-1 shadow-lg shadow-black/40">
             {ASSET_CLASS_LIST.map((cls) => {
               const cd = ASSET_CLASSES[cls];
               return (
@@ -95,7 +95,7 @@ function ClassCell({ item }: { item: BatchItem }) {
                     setOpen(false);
                   }}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${
-                    cls === item.assetClass ? "bg-brand-600 text-white" : "text-slate-200 hover:bg-[#22304A]"
+                    cls === item.assetClass ? "bg-brand text-white" : "text-text-primary hover:bg-white/10"
                   }`}
                 >
                   <span aria-hidden>{cd.icon}</span>
@@ -119,13 +119,13 @@ function ClassCell({ item }: { item: BatchItem }) {
  *  the file name when nothing has been parsed. */
 function PartiesCell({ item }: { item: BatchItem }) {
   if (!item.payload) {
-    return <div className="text-slate-400">{item.fileName}</div>;
+    return <div className="text-text-muted">{item.fileName}</div>;
   }
   if (item.assetClass === "legal") {
     return (
       <div>
-        <div className="font-medium text-slate-800">{item.clientName}</div>
-        <div className="text-xs text-slate-400">{item.barNumber !== "—" ? `Bar #${item.barNumber}` : "—"}</div>
+        <div className="font-medium text-text-primary">{item.clientName}</div>
+        <div className="text-xs text-text-muted">{item.barNumber !== "—" ? `Bar #${item.barNumber}` : "—"}</div>
       </div>
     );
   }
@@ -133,8 +133,8 @@ function PartiesCell({ item }: { item: BatchItem }) {
   const secondary = item.barNumber && item.barNumber !== "—" ? item.barNumber : "";
   return (
     <div>
-      <div className="font-medium text-slate-800">{primary}</div>
-      {secondary && <div className="text-xs text-slate-400">{secondary}</div>}
+      <div className="font-medium text-text-primary">{primary}</div>
+      {secondary && <div className="text-xs text-text-muted">{secondary}</div>}
     </div>
   );
 }
@@ -144,13 +144,13 @@ function RowAction({ item, onEnter }: { item: BatchItem; onEnter: (id: string) =
 
   if (item.status === "queued" && item.entryMode === "manual") {
     return (
-      <button className="btn btn-secondary px-3 py-1 text-xs" onClick={() => onEnter(item.id)}>
+      <button className="btn btn-secondary btn-sm" onClick={() => onEnter(item.id)}>
         Enter
       </button>
     );
   }
   if (item.status === "queued" || item.status === "parsing") {
-    return <span className="text-xs text-slate-400">…</span>;
+    return <span className="text-xs text-text-muted">…</span>;
   }
   if (item.status === "failed") {
     return (
@@ -169,7 +169,7 @@ function RowAction({ item, onEnter }: { item: BatchItem; onEnter: (id: string) =
   // ready or flagged → Review
   return (
     <button
-      className={`px-3 py-1 text-xs ${item.status === "flagged" ? "btn btn-primary" : "btn btn-secondary"}`}
+      className={`btn-sm ${item.status === "flagged" ? "btn btn-primary" : "btn btn-secondary"}`}
       onClick={() => reviewItem(item.id)}
     >
       Review
@@ -216,11 +216,11 @@ export function BatchProcessing() {
   const manualItem = items.find((i) => i.id === manualItemId) ?? null;
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <div className="w-full">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">Batch processing — 360°</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-xl font-semibold text-text-primary">Batch processing — 360°</h1>
+          <p className="mt-1 text-sm text-text-muted">
             Every active transaction across all seven asset classes. Up to 3 parse at once; LexGuard
             validates each.
           </p>
@@ -239,27 +239,27 @@ export function BatchProcessing() {
       {/* Summary bar */}
       <div className="card mt-5 flex items-center justify-between px-5 py-3">
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="font-semibold text-slate-800">{usdWhole(totalEscrow)} in escrow</span>
-          <span className="text-slate-300">|</span>
+          <span className="font-semibold text-text-primary">{usdWhole(totalEscrow)} in escrow</span>
+          <span className="text-white/20">|</span>
           <span className="text-emerald-700">{ready} ready</span>
-          <span className="text-slate-300">|</span>
+          <span className="text-white/20">|</span>
           <span className="text-amber-700">{flagged} flagged</span>
-          <span className="text-slate-300">|</span>
-          <span className="text-slate-500">{pending} pending</span>
+          <span className="text-white/20">|</span>
+          <span className="text-text-muted">{pending} pending</span>
           {settled > 0 && (
             <>
-              <span className="text-slate-300">|</span>
-              <span className="text-brand-700">{settled} settled</span>
+              <span className="text-white/20">|</span>
+              <span className="text-brand-fg">{settled} settled</span>
             </>
           )}
-          {running && <span className="text-xs text-slate-400">processing…</span>}
+          {running && <span className="text-xs text-text-muted">processing…</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn btn-secondary px-3 py-1 text-xs" disabled={!items.length} onClick={downloadCsv}>
+          <button className="btn btn-secondary btn-sm" disabled={!items.length} onClick={downloadCsv}>
             Export CSV
           </button>
           {items.length > 0 && (
-            <button className="btn btn-secondary px-3 py-1 text-xs" onClick={() => reset()}>
+            <button className="btn btn-secondary btn-sm" onClick={() => reset()}>
               Clear
             </button>
           )}
@@ -270,7 +270,7 @@ export function BatchProcessing() {
       <div className="card mt-4">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-100 bg-slate-50/60 text-left text-xs uppercase tracking-wide text-slate-400">
+            <tr className="border-b border-app-border bg-app-input text-left text-xs uppercase tracking-wide text-text-muted">
               <th className="px-4 py-2.5 font-medium">Class</th>
               <th className="px-4 py-2.5 font-medium">Parties</th>
               <th className="px-4 py-2.5 font-medium">Documents</th>
@@ -279,10 +279,10 @@ export function BatchProcessing() {
               <th className="px-4 py-2.5 text-right font-medium">Action</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-app-border">
             {items.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">
+                <td colSpan={6} className="px-4 py-10 text-center text-sm text-text-muted">
                   No documents loaded. Use <span className="font-medium">Load Folder</span> or{" "}
                   <span className="font-medium">Load samples</span> to begin.
                 </td>
@@ -291,7 +291,7 @@ export function BatchProcessing() {
               items.map((item) => {
                 const meta = STATUS_META[item.status];
                 return (
-                  <tr key={item.id} className="hover:bg-slate-50/50">
+                  <tr key={item.id} className="hover:bg-white/5">
                     <td className="px-4 py-2.5 align-top">
                       <ClassCell item={item} />
                     </td>
@@ -300,11 +300,11 @@ export function BatchProcessing() {
                     </td>
                     <td className="px-4 py-2.5 align-top">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-slate-700">{item.fileName}</span>
+                        <span className="text-text-primary">{item.fileName}</span>
                         <span aria-hidden>{meta.icon}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 align-top font-mono text-slate-700">
+                    <td className="px-4 py-2.5 align-top font-mono text-text-primary">
                       {item.totalCents != null ? formatUsd(item.totalCents) : "—"}
                     </td>
                     <td className="px-4 py-2.5 align-top">
@@ -323,10 +323,10 @@ export function BatchProcessing() {
         </table>
       </div>
 
-      <p className="mt-3 text-xs text-slate-400">
+      <p className="mt-3 text-xs text-text-muted">
         Batch uses the same credential vault for the AI provider across all documents (falling back to the
         local parser when none is configured). No AI provider?{" "}
-        <button className="underline" onClick={() => openConfig()}>
+        <button className="text-brand-fg underline" onClick={() => openConfig()}>
           Configure one
         </button>{" "}
         or switch a row to Manual.
@@ -336,7 +336,7 @@ export function BatchProcessing() {
       {manualItem && (
         <div className="fixed inset-0 z-20 flex items-start justify-center overflow-y-auto bg-black/60 p-6">
           <div className="mt-8 w-full max-w-2xl">
-            <div className="mb-2 flex items-center justify-between text-white">
+            <div className="mb-2 flex items-center justify-between text-text-primary">
               <span className="text-sm font-medium">Manual entry — {manualItem.fileName}</span>
               <button className="text-sm underline" onClick={() => setManualItemId(null)}>
                 Close

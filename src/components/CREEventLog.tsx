@@ -102,14 +102,14 @@ export function CREEventLog({ sessionId, maxEvents = 10 }: CREEventLogProps) {
   return (
     <div className="card mt-4 p-5">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-slate-700">CRE event log</div>
-        <span className="text-[11px] text-slate-400">
+        <div className="text-sm font-semibold text-text-primary">CRE event log</div>
+        <span className="text-[11px] text-text-muted">
           {events.length === 0 ? "no events yet" : `last ${events.length}`}
         </span>
       </div>
 
       {events.length === 0 ? (
-        <p className="mt-3 text-xs text-slate-400">
+        <p className="mt-3 text-xs text-text-muted">
           Registrations, verifications and settlement actions appear here as they happen.
         </p>
       ) : (
@@ -117,19 +117,19 @@ export function CREEventLog({ sessionId, maxEvents = 10 }: CREEventLogProps) {
           {events.map((e) => {
             const open = expanded === e.logId;
             return (
-              <li key={e.logId} className="rounded-lg border border-[#2D3A4A] bg-[#1A2435]">
+              <li key={e.logId} className="rounded-lg border border-app-border bg-app-input">
                 <button
                   className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
                   onClick={() => setExpanded(open ? null : e.logId)}
                   aria-expanded={open}
                 >
-                  <span className="truncate text-xs text-slate-700">{eventLabel(e.eventType)}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-slate-500">
+                  <span className="truncate text-xs text-text-primary">{eventLabel(e.eventType)}</span>
+                  <span className="shrink-0 font-mono text-[11px] text-text-muted">
                     {timeOf(e.blockTimestamp)}
                   </span>
                 </button>
                 {open && (
-                  <pre className="overflow-x-auto border-t border-[#2D3A4A] px-3 py-2 font-mono text-[11px] text-slate-500">
+                  <pre className="overflow-x-auto border-t border-app-border px-3 py-2 font-mono text-[11px] text-text-muted">
                     {formatPayload(e.payloadJson)}
                   </pre>
                 )}

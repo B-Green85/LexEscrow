@@ -63,13 +63,13 @@ function Step({
               done
                 ? "bg-emerald-100 text-emerald-700"
                 : active
-                  ? "bg-brand-500 text-white"
-                  : "bg-slate-200 text-slate-500"
+                  ? "bg-brand text-white"
+                  : "bg-app-input text-text-muted"
             }`}
           >
             {done ? "✓" : index}
           </span>
-          <span className="text-sm font-semibold text-slate-700">{title}</span>
+          <span className="text-sm font-semibold text-text-primary">{title}</span>
         </div>
       </div>
       <div className="mt-4">{children}</div>
@@ -79,8 +79,8 @@ function Step({
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-t border-slate-100 pt-2.5 first:border-0 first:pt-0">
-      <span className="shrink-0 text-sm text-slate-500">{label}</span>
+    <div className="flex items-baseline justify-between gap-4 border-t border-app-border pt-2.5 first:border-0 first:pt-0">
+      <span className="shrink-0 text-sm text-text-muted">{label}</span>
       <span className="min-w-0 break-all text-right">{children}</span>
     </div>
   );
@@ -139,11 +139,11 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
   const registered = Boolean(receipt);
 
   return (
-    <div className="mx-auto w-full max-w-2xl">
+    <div className="w-full">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">AnchorReceipt Console</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-xl font-semibold text-text-primary">AnchorReceipt Console</h1>
+          <p className="mt-1 text-sm text-text-muted">
             Standalone document integrity registration — fingerprint, seal, register, and verify
             documents outside of an escrow workflow.
           </p>
@@ -157,7 +157,7 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
       <Step index={1} title="Load Document" done={hashed} active>
         <div
           onClick={() => inputRef.current?.click()}
-          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:border-brand-400 hover:bg-brand-50/40"
+          className="flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-app-border bg-app-input px-4 py-8 text-center transition-colors hover:border-brand hover:bg-brand/10"
         >
           <input
             ref={inputRef}
@@ -169,15 +169,15 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
           />
           {file ? (
             <div>
-              <div className="text-sm font-semibold text-slate-800">{file.name}</div>
-              <div className="mt-0.5 text-xs text-slate-500">
+              <div className="text-sm font-semibold text-text-primary">{file.name}</div>
+              <div className="mt-0.5 text-xs text-text-muted">
                 {bytesLabel(file.size)} · click to replace
               </div>
             </div>
           ) : (
             <div>
-              <div className="text-sm font-medium text-slate-600">Click to select a document</div>
-              <div className="mt-0.5 text-xs text-slate-400">.pdf, .docx, .txt, .md</div>
+              <div className="text-sm font-medium text-text-muted">Click to select a document</div>
+              <div className="mt-0.5 text-xs text-text-muted">.pdf, .docx, .txt, .md</div>
             </div>
           )}
         </div>
@@ -185,13 +185,13 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
         {artifact && (
           <div className="mt-4 space-y-2.5">
             <Row label="Filename">
-              <span className="text-sm text-slate-700">{artifact.filename}</span>
+              <span className="text-sm text-text-primary">{artifact.filename}</span>
             </Row>
             <Row label="Size">
-              <span className="text-sm text-slate-700">{bytesLabel(artifact.size)}</span>
+              <span className="text-sm text-text-primary">{bytesLabel(artifact.size)}</span>
             </Row>
             <Row label="SHA-256">
-              <span className="font-mono text-xs text-slate-800" data-selectable>
+              <span className="font-mono text-xs text-text-primary" data-selectable>
                 {artifact.hash}
               </span>
             </Row>
@@ -205,14 +205,14 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
       {/* ── Step 2 — HMAC Seal ── */}
       {hashed && (
         <Step index={2} title="HMAC Seal" done={sealed} active={!sealed}>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-text-muted">
             The HMAC seal proves this system attested this exact fingerprint. The raw hash proves
             bytes are unchanged; the seal proves LexEscrow attested it.
           </p>
           {hmac ? (
             <div className="mt-4 space-y-2.5">
               <Row label="Seal (HMAC-SHA256)">
-                <span className="font-mono text-xs text-slate-800" data-selectable>
+                <span className="font-mono text-xs text-text-primary" data-selectable>
                   {shortHash(hmac, 16, 8)}
                 </span>
               </Row>
@@ -238,7 +238,7 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
           {registered ? (
             <div className="space-y-2.5">
               <Row label="Asset class">
-                <span className="text-sm text-slate-700">
+                <span className="text-sm text-text-primary">
                   {ASSET_CLASSES[assetClass].icon} {ASSET_CLASSES[assetClass].displayName}
                 </span>
               </Row>
@@ -246,7 +246,7 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
                 <AnchorTxLink hash={receipt?.items[0]?.onChainTx} />
               </Row>
               <Row label="Registered at">
-                <span className="text-sm text-slate-700">
+                <span className="text-sm text-text-primary">
                   {registeredAt ? new Date(registeredAt).toLocaleString() : "—"}
                 </span>
               </Row>
@@ -261,12 +261,11 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
               </label>
               <select
                 id="anchor-asset-class"
-                className="input"
                 value={assetClass}
                 onChange={(e) => props.onSetAssetClass(e.target.value as AssetClass)}
               >
                 {ASSET_CLASS_LIST.map((cls) => (
-                  <option key={cls} value={cls} className="bg-[#1A2435] text-[#F8FAFC]">
+                  <option key={cls} value={cls} className="bg-app-input text-text-primary">
                     {ASSET_CLASSES[cls].icon} {ASSET_CLASSES[cls].displayName}
                   </option>
                 ))}
@@ -303,15 +302,15 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
 
       {/* ── Step 5 — Verify (independent, always visible) ── */}
       <div className="card mt-8 p-5">
-        <div className="text-sm font-semibold text-slate-700">Verify an Existing Receipt</div>
-        <p className="mt-1 text-xs text-slate-500">
+        <div className="text-sm font-semibold text-text-primary">Verify an Existing Receipt</div>
+        <p className="mt-1 text-xs text-text-muted">
           Recomputes the receipt hash from the file's own contents. No database lookup, no network
           call — a counterparty can run this check with nothing but the JSON.
         </p>
 
         <div
           onClick={() => verifyInputRef.current?.click()}
-          className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center transition-colors hover:border-brand-400 hover:bg-brand-50/40"
+          className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-app-border bg-app-input px-4 py-6 text-center transition-colors hover:border-brand hover:bg-brand/10"
         >
           <input
             ref={verifyInputRef}
@@ -322,11 +321,11 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
             onChange={(e) => props.onSelectVerifyFile(e.target.files?.[0] ?? null)}
           />
           {verifyFile ? (
-            <div className="text-sm font-semibold text-slate-800">{verifyFile.name}</div>
+            <div className="text-sm font-semibold text-text-primary">{verifyFile.name}</div>
           ) : (
             <div>
-              <div className="text-sm font-medium text-slate-600">Select a receipt JSON file</div>
-              <div className="mt-0.5 text-xs text-slate-400">anchor-receipt-….json</div>
+              <div className="text-sm font-medium text-text-muted">Select a receipt JSON file</div>
+              <div className="mt-0.5 text-xs text-text-muted">anchor-receipt-….json</div>
             </div>
           )}
         </div>
@@ -342,21 +341,21 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
         <ReceiptVerificationPanel result={verifyResult} error={verifyError} />
 
         {verifyResult && (
-          <div className="mt-4 space-y-2.5 border-t border-slate-100 pt-4">
+          <div className="mt-4 space-y-2.5 border-t border-app-border pt-4">
             <Row label="Receipt ID">
-              <span className="font-mono text-sm text-slate-800" data-selectable>
+              <span className="font-mono text-sm text-text-primary" data-selectable>
                 {shortHash(verifyResult.receipt.receiptId, 8, 4)}
               </span>
             </Row>
             <Row label="Issued at">
-              <span className="text-sm text-slate-700">
+              <span className="text-sm text-text-primary">
                 {verifyResult.receipt.issuedAt
                   ? new Date(verifyResult.receipt.issuedAt).toLocaleString()
                   : "—"}
               </span>
             </Row>
             <Row label="Asset class">
-              <span className="text-sm text-slate-700">
+              <span className="text-sm text-text-primary">
                 {ASSET_CLASSES[verifyResult.receipt.assetClass]
                   ? `${ASSET_CLASSES[verifyResult.receipt.assetClass].icon} ${
                       ASSET_CLASSES[verifyResult.receipt.assetClass].displayName
@@ -365,7 +364,7 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
               </span>
             </Row>
             <Row label="Documents verified">
-              <span className="text-sm text-slate-700">
+              <span className="text-sm text-text-primary">
                 {verifyResult.receipt.summary?.verifiedCount ?? 0} of{" "}
                 {verifyResult.receipt.summary?.totalCount ?? 0}
               </span>

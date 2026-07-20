@@ -47,16 +47,16 @@ function CheckRow({ check }: { check: CannaVerifyCheck }) {
   return (
     <div className="px-5 py-3.5">
       <div className="flex items-start justify-between gap-3">
-        <span className="text-sm font-medium text-slate-200">{CHECK_LABELS[check.checkType]}</span>
+        <span className="text-sm font-medium text-text-primary">{CHECK_LABELS[check.checkType]}</span>
         <span className={badge.cls}>{badge.text}</span>
       </div>
-      <p className="mt-1 text-xs leading-relaxed text-slate-400">{check.detail}</p>
+      <p className="mt-1 text-xs leading-relaxed text-text-muted">{check.detail}</p>
       {check.onChainTx && (
         <a
           href={txUrl(check.onChainTx)}
           target="_blank"
           rel="noreferrer"
-          className="mt-1.5 inline-block font-mono text-[11px] text-[#93C5FD] hover:underline"
+          className="mt-1.5 inline-block font-mono text-[11px] text-brand-fg hover:underline"
         >
           {shortTx(check.onChainTx)}
         </a>
@@ -68,26 +68,26 @@ function CheckRow({ check }: { check: CannaVerifyCheck }) {
 export function CannaVerifyConditions({ conditions, running, onRun }: Props) {
   return (
     <div className="card mt-5">
-      <div className="flex items-center justify-between border-b border-[#2D3A4A] px-5 py-3.5">
+      <div className="flex items-center justify-between border-b border-app-border px-5 py-3.5">
         <div>
-          <div className="text-sm font-semibold text-slate-200">🌿 CannaVerify conditions</div>
-          <div className="mt-0.5 text-xs text-slate-500">
+          <div className="text-sm font-semibold text-text-primary">🌿 CannaVerify conditions</div>
+          <div className="mt-0.5 text-xs text-text-muted">
             Metrc &amp; state regulatory verification via Chainlink Functions
           </div>
         </div>
         {conditions && (
-          <span className="font-mono text-[11px] text-slate-500">{conditions.stateLicenseNum}</span>
+          <span className="font-mono text-[11px] text-text-muted">{conditions.stateLicenseNum}</span>
         )}
       </div>
 
       {/* Running — no results yet. */}
       {running && !conditions && (
         <div className="flex items-center gap-3 px-5 py-6">
-          <svg className="h-4 w-4 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
+          <svg className="h-4 w-4 animate-spin text-brand-fg" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
           </svg>
-          <span className="text-sm text-slate-300">
+          <span className="text-sm text-text-muted">
             🔍 CannaVerify running Metrc and state regulatory checks...
           </span>
         </div>
@@ -96,7 +96,7 @@ export function CannaVerifyConditions({ conditions, running, onRun }: Props) {
       {/* Not yet run. */}
       {!running && !conditions && (
         <div className="px-5 py-6">
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-text-muted">
             Cannabis transactions require verified state licensure before any funds are released.
             Run CannaVerify to check license status, compliance holds, inventory, transfer manifest
             and entity standing.
@@ -110,7 +110,7 @@ export function CannaVerifyConditions({ conditions, running, onRun }: Props) {
       {/* Results. */}
       {conditions && (
         <>
-          <div className="divide-y divide-[#2D3A4A]">
+          <div className="divide-y divide-app-border">
             {conditions.checks.map((c) => (
               <CheckRow key={c.checkType} check={c} />
             ))}

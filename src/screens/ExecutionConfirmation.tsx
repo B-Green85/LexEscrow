@@ -59,10 +59,10 @@ function shortRef(hash: string | null): string {
 
 /** Truncated, monospace tx reference linking out to Etherscan. */
 function TxLink({ hash }: { hash: string | null }) {
-  if (!hash) return <span className="font-mono text-sm text-slate-500">—</span>;
+  if (!hash) return <span className="font-mono text-sm text-text-muted">—</span>;
   return (
     <a
-      className="font-mono text-sm text-brand-500 underline-offset-2 hover:underline"
+      className="font-mono text-sm text-brand-fg underline-offset-2 hover:underline"
       href={txUrl(hash)}
       target="_blank"
       rel="noreferrer"
@@ -98,8 +98,8 @@ function AuditCard({
   return (
     <div className="card mt-4 flex items-center justify-between gap-4 p-5">
       <div>
-        <div className="text-sm font-semibold text-slate-700">Tamper-evident audit trail</div>
-        <div className="mt-0.5 text-xs text-slate-500">
+        <div className="text-sm font-semibold text-text-primary">Tamper-evident audit trail</div>
+        <div className="mt-0.5 text-xs text-text-muted">
           {chain
             ? chain.valid
               ? `${chain.entries} entries · hash chain intact`
@@ -148,11 +148,11 @@ function NotificationCard({ execution }: { execution: ExecutionState }) {
   if (execution.notifications.length === 0) return null;
   return (
     <div className="card mt-4 p-5">
-      <div className="text-sm font-semibold text-slate-700">Client notification</div>
+      <div className="text-sm font-semibold text-text-primary">Client notification</div>
       <div className="mt-2 space-y-2">
         {execution.notifications.map((n, i) => (
           <div key={i} className="flex items-center justify-between text-sm">
-            <span className="text-slate-500">
+            <span className="text-text-muted">
               {n.channel === "email" ? "Email" : "SMS"} · {n.target || "—"}
             </span>
             <span
@@ -196,14 +196,14 @@ function DirectSettlementView({
   return (
     <>
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">
+        <h1 className="text-xl font-bold tracking-tight text-text-primary">
           {done ? "Settlement complete" : "Executing settlement"}
         </h1>
         <span className="badge badge-brand">Path A — Direct Settlement</span>
       </div>
 
       {/* CRE progress */}
-      <div className="card mt-5 divide-y divide-slate-100">
+      <div className="card mt-5 divide-y divide-app-border">
         {PHASES.map((p, i) => {
           const status = i < currentIndex ? "done" : i === currentIndex ? "active" : "pending";
           return (
@@ -215,14 +215,14 @@ function DirectSettlementView({
                   </svg>
                 </div>
               ) : status === "active" ? (
-                <svg className="h-4 w-4 animate-spin text-brand-600" viewBox="0 0 24 24" fill="none">
+                <svg className="h-4 w-4 animate-spin text-brand-fg" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
                 </svg>
               ) : (
-                <div className="h-5 w-5 rounded-full border-2 border-slate-200" />
+                <div className="h-5 w-5 rounded-full border-2 border-app-border" />
               )}
-              <span className={`text-sm ${status === "pending" ? "text-slate-400" : "text-slate-700"}`}>
+              <span className={`text-sm ${status === "pending" ? "text-text-muted" : "text-text-primary"}`}>
                 {p.label}
               </span>
             </div>
@@ -242,16 +242,16 @@ function DirectSettlementView({
                   {formatUsd(execution.clientCents)} USDC
                 </div>
               </div>
-              <div className="rounded-lg bg-slate-50 p-4">
-                <div className="text-xs font-medium text-slate-600">Released to firm</div>
-                <div className="mt-1 font-mono text-lg font-bold text-slate-800">
+              <div className="rounded-lg bg-app-input p-4">
+                <div className="text-xs font-medium text-text-muted">Released to firm</div>
+                <div className="mt-1 font-mono text-lg font-bold text-text-primary">
                   {formatUsd(execution.firmCents)} USDC
                 </div>
               </div>
             </div>
-            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
-              <span className="text-sm text-slate-500">Settlement reference</span>
-              <span className="font-mono text-sm text-slate-800" data-selectable>
+            <div className="mt-4 flex items-center justify-between border-t border-app-border pt-4">
+              <span className="text-sm text-text-muted">Settlement reference</span>
+              <span className="font-mono text-sm text-text-primary" data-selectable>
                 {shortRef(execution.txHash)}
               </span>
             </div>
@@ -282,7 +282,7 @@ function SignatureRow({
 }) {
   return (
     <div className="flex items-center justify-between px-5 py-3.5">
-      <span className="flex items-center gap-2 text-sm text-slate-700">
+      <span className="flex items-center gap-2 text-sm text-text-primary">
         <span aria-hidden>{signed ? "✅" : "⬜"}</span>
         {label}
       </span>
@@ -323,7 +323,7 @@ function ArbitrationView({
   onPrintReport: () => void;
 }) {
   if (!arbitrationState) {
-    return <div className="card p-6 text-sm text-slate-500">Locking escrow into arbitration…</div>;
+    return <div className="card p-6 text-sm text-text-muted">Locking escrow into arbitration…</div>;
   }
 
   const { party1Signed, party2Signed, arbiterSigned, threshold, resolvedAt, resolutionTxHash } =
@@ -334,7 +334,7 @@ function ArbitrationView({
   return (
     <>
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">
+        <h1 className="text-xl font-bold tracking-tight text-text-primary">
           ⚖️ Arbitration Escrow — {resolved ? "Resolved" : "Funds Locked"}
         </h1>
         <span className="badge badge-amber">Path B — Arbitration Escrow</span>
@@ -347,7 +347,7 @@ function ArbitrationView({
             <TxLink hash={resolutionTxHash ?? null} />
           </div>
           {arbitrationState.resolutionNotes && (
-            <div className="mt-1 text-xs text-slate-500">{arbitrationState.resolutionNotes}</div>
+            <div className="mt-1 text-xs text-text-muted">{arbitrationState.resolutionNotes}</div>
           )}
         </div>
       )}
@@ -355,20 +355,20 @@ function ArbitrationView({
       {/* Lock state */}
       <div className="card mt-5 p-5">
         <div className="flex items-center justify-between">
-          <span className="text-sm text-slate-500">Lock transaction</span>
+          <span className="text-sm text-text-muted">Lock transaction</span>
           <TxLink hash={arbitrationState.lockTxHash ?? execution.txHash} />
         </div>
         {arbitrationState.arbiterAddress && (
-          <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
-            <span className="text-sm text-slate-500">Arbiter</span>
-            <span className="font-mono text-sm text-slate-700" data-selectable>
+          <div className="mt-3 flex items-center justify-between border-t border-app-border pt-3">
+            <span className="text-sm text-text-muted">Arbiter</span>
+            <span className="font-mono text-sm text-text-primary" data-selectable>
               {arbitrationState.arbiterAddress}
             </span>
           </div>
         )}
-        <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
-          <span className="text-sm text-slate-500">Locked in escrow</span>
-          <span className="font-mono text-sm font-bold text-slate-800">
+        <div className="mt-3 flex items-center justify-between border-t border-app-border pt-3">
+          <span className="text-sm text-text-muted">Locked in escrow</span>
+          <span className="font-mono text-sm font-bold text-text-primary">
             {formatUsd(execution.clientCents)} USDC
           </span>
         </div>
@@ -376,13 +376,13 @@ function ArbitrationView({
 
       {/* Multi-sig panel */}
       <div className="card mt-4">
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-          <span className="text-sm font-semibold text-slate-700">Multi-signature resolution</span>
+        <div className="flex items-center justify-between border-b border-app-border px-5 py-3">
+          <span className="text-sm font-semibold text-text-primary">Multi-signature resolution</span>
           <span className={signed >= threshold ? "badge badge-emerald" : "badge badge-amber"}>
             {signed}/{threshold} required signatures
           </span>
         </div>
-        <div className="divide-y divide-slate-100">
+        <div className="divide-y divide-app-border">
           <SignatureRow
             label="Party 1"
             signed={party1Signed}
@@ -488,10 +488,10 @@ function MilestoneDefinitionForm({
   return (
     <>
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Define Release Milestones</h1>
+        <h1 className="text-xl font-bold tracking-tight text-text-primary">Define Release Milestones</h1>
         <span className="badge badge-brand">Path C — Staged Release</span>
       </div>
-      <p className="mt-2 text-sm text-slate-500">
+      <p className="mt-2 text-sm text-text-muted">
         Partial release at each milestone. Every stage requires independent verification and human
         authorization before funds move — milestone amounts must exhaust the{" "}
         <span className="font-mono">{formatUsd(totalCents)}</span> escrow exactly.
@@ -501,7 +501,7 @@ function MilestoneDefinitionForm({
         {drafts.map((d, i) => (
           <div key={i} className="card p-5">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-slate-700">Milestone {i + 1}</span>
+              <span className="text-sm font-semibold text-text-primary">Milestone {i + 1}</span>
               {drafts.length > 1 && (
                 <button
                   className="btn btn-secondary"
@@ -594,7 +594,7 @@ function MilestoneDefinitionForm({
         >
           Add Milestone
         </button>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-text-muted">
           {drafts.length}/{MAX_MILESTONES} milestones
         </span>
       </div>
@@ -602,13 +602,13 @@ function MilestoneDefinitionForm({
       {/* Running allocation total */}
       <div className="card mt-4 p-5">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-500">Allocated</span>
-          <span className="font-mono font-bold text-slate-800">
+          <span className="text-text-muted">Allocated</span>
+          <span className="font-mono font-bold text-text-primary">
             {formatUsd(allocated)} / {formatUsd(totalCents)}
           </span>
         </div>
         <div className="mt-2 flex items-center justify-between text-sm">
-          <span className="text-slate-500">Unallocated</span>
+          <span className="text-text-muted">Unallocated</span>
           <span className={`font-mono font-bold ${balanced ? "text-emerald-600" : "text-amber-600"}`}>
             {formatUsd(remaining)}
           </span>
@@ -670,13 +670,13 @@ function MilestoneCard({
     <div className={`card p-5 ${active ? "" : "opacity-60"}`}>
       <div className="flex items-start justify-between">
         <div>
-          <div className="text-sm font-semibold text-slate-700">
+          <div className="text-sm font-semibold text-text-primary">
             {index + 1}. {milestone.label}
           </div>
-          <div className="mt-0.5 text-xs text-slate-500">{milestone.description}</div>
+          <div className="mt-0.5 text-xs text-text-muted">{milestone.description}</div>
         </div>
         <div className="text-right">
-          <div className="font-mono text-sm font-bold text-slate-800">
+          <div className="font-mono text-sm font-bold text-text-primary">
             {formatUsd(milestone.amountCents)}
           </div>
           <span className={`${badge.className} mt-1`}>
@@ -685,7 +685,7 @@ function MilestoneCard({
         </div>
       </div>
 
-      <div className="mt-3 flex items-center gap-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+      <div className="mt-3 flex items-center gap-3 border-t border-app-border pt-3 text-xs text-text-muted">
         <span>Condition: {milestone.conditionType}</span>
         {milestone.releaseDate && <span>· Not before {milestone.releaseDate}</span>}
         {milestone.evidenceRequired && <span>· Evidence: {milestone.evidenceRequired}</span>}
@@ -713,7 +713,7 @@ function MilestoneCard({
 
       {active && milestone.status === "submitted" && (
         <div className="mt-3 flex items-center justify-between">
-          <span className="font-mono text-xs text-slate-500" data-selectable>
+          <span className="font-mono text-xs text-text-muted" data-selectable>
             {milestone.evidenceHash ?? "—"}
           </span>
           <button className="btn btn-primary" disabled={busy} onClick={() => onApprove(milestone.id)}>
@@ -746,8 +746,8 @@ function MilestoneCard({
       )}
 
       {milestone.status === "released" && (
-        <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
-          <span className="text-xs text-slate-500">
+        <div className="mt-3 flex items-center justify-between border-t border-app-border pt-3">
+          <span className="text-xs text-text-muted">
             Released {milestone.releasedAt ? new Date(milestone.releasedAt).toLocaleString() : "—"}
           </span>
           <TxLink hash={milestone.txHash ?? null} />
@@ -755,7 +755,7 @@ function MilestoneCard({
       )}
 
       {milestone.status === "disputed" && (
-        <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-red-500">
+        <div className="mt-3 border-t border-app-border pt-3 text-xs text-red-500">
           ⚠️ Disputed — resolution required before this stage can release.
         </div>
       )}
@@ -816,7 +816,7 @@ function StagedReleaseView({
   return (
     <>
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">
+        <h1 className="text-xl font-bold tracking-tight text-text-primary">
           {complete ? "Staged release complete" : "Staged release in progress"}
         </h1>
         <span className={complete ? "badge badge-emerald" : "badge badge-brand"}>
@@ -827,12 +827,12 @@ function StagedReleaseView({
       {/* Progress */}
       <div className="card mt-5 p-5">
         <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-500">Released</span>
-          <span className="font-mono font-bold text-slate-800">
+          <span className="text-text-muted">Released</span>
+          <span className="font-mono font-bold text-text-primary">
             {formatUsd(releasedCents)} of {formatUsd(totalCents)}
           </span>
         </div>
-        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200/20">
+        <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-app-input">
           <div
             className="h-full rounded-full bg-emerald-500 transition-all"
             style={{ width: `${percent}%` }}
@@ -842,7 +842,7 @@ function StagedReleaseView({
             aria-valuemax={100}
           />
         </div>
-        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+        <div className="mt-2 flex items-center justify-between text-xs text-text-muted">
           <span>
             {milestones.filter((m) => m.status === "released").length}/{milestones.length} milestones
           </span>

@@ -120,8 +120,8 @@ function ConditionCard({
     <div className="card p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-sm font-semibold text-slate-800">{title}</div>
-          <div className="mt-0.5 text-xs text-slate-400">{subtitle}</div>
+          <div className="text-sm font-semibold text-text-primary">{title}</div>
+          <div className="mt-0.5 text-xs text-text-muted">{subtitle}</div>
         </div>
         <span className={status.cls}>{status.text}</span>
       </div>
@@ -133,9 +133,9 @@ function ConditionCard({
 function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 py-1.5">
-      <span className="text-sm text-slate-500">{label}</span>
+      <span className="text-sm text-text-muted">{label}</span>
       <span
-        className={`truncate text-sm text-slate-800 ${mono ? "font-mono text-xs" : ""}`}
+        className={`truncate text-sm text-text-primary ${mono ? "font-mono text-xs" : ""}`}
         title={value}
       >
         {value}
@@ -181,8 +181,8 @@ function SignerRow({
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 py-1 text-sm">
       <span className="min-w-0">
-        <span className="text-slate-800">{signer.name}</span>{" "}
-        <span className="truncate text-xs text-slate-500" title={signer.email}>
+        <span className="text-text-primary">{signer.name}</span>{" "}
+        <span className="truncate text-xs text-text-muted" title={signer.email}>
           · {signer.role} · {signer.email}
         </span>
       </span>
@@ -218,48 +218,48 @@ function SignerRow({
 function EnvelopeRow({ envelope }: { envelope: ESignEnvelope }) {
   const chip = STATUS_CHIP[envelope.status];
   return (
-    <div className="rounded-lg border border-[#2D3A4A] bg-[#1A2435] px-3.5 py-3">
+    <div className="rounded-lg border border-app-border bg-app-input px-3.5 py-3">
       <div className="flex items-center justify-between gap-3">
-        <span className="truncate text-sm font-medium text-slate-800" title={envelope.documentLabel}>
+        <span className="truncate text-sm font-medium text-text-primary" title={envelope.documentLabel}>
           {envelope.documentLabel}
         </span>
         <span className={chip.cls}>{chip.text}</span>
       </div>
-      <div className="mt-1 font-mono text-[11px] text-slate-500">{envelope.envelopeId}</div>
+      <div className="mt-1 font-mono text-[11px] text-text-muted">{envelope.envelopeId}</div>
 
       <ul className="mt-2 space-y-0.5">
         {envelope.signers.map((s) => (
-          <li key={s.email} className="text-xs text-slate-500">
-            {s.name} <span className="text-slate-400">· {s.role} · {s.email}</span>
+          <li key={s.email} className="text-xs text-text-muted">
+            {s.name} <span className="text-text-muted">· {s.role} · {s.email}</span>
           </li>
         ))}
       </ul>
 
       {envelope.status === "completed" && (
-        <div className="mt-2.5 space-y-1 border-t border-[#2D3A4A] pt-2.5">
+        <div className="mt-2.5 space-y-1 border-t border-app-border pt-2.5">
           {envelope.certificateHash && (
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-slate-500">Certificate hash</span>
-              <span className="font-mono text-[11px] text-slate-700" title={envelope.certificateHash}>
+              <span className="text-xs text-text-muted">Certificate hash</span>
+              <span className="font-mono text-[11px] text-text-primary" title={envelope.certificateHash}>
                 {shortHash(envelope.certificateHash)}
               </span>
             </div>
           )}
           {envelope.onChainTx && (
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-slate-500">AnchorReceipt</span>
+              <span className="text-xs text-text-muted">AnchorReceipt</span>
               <a
                 href={txUrl(envelope.onChainTx)}
                 target="_blank"
                 rel="noreferrer"
-                className="font-mono text-[11px] text-[#93C5FD] hover:underline"
+                className="font-mono text-[11px] text-brand-fg hover:underline"
               >
                 {envelope.onChainTx}
               </a>
             </div>
           )}
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-slate-500">Signer identity match</span>
+            <span className="text-xs text-text-muted">Signer identity match</span>
             <span
               className={`text-[11px] font-medium ${
                 envelope.anchorMatch ? "text-emerald-600" : "text-amber-600"
@@ -309,7 +309,7 @@ function EventConditions({
             : { cls: "badge badge-slate", text: "⏳ Not run" }
         }
       >
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-text-muted">
           {barActive
             ? "Attorney bar number verified active with the California State Bar during processing."
             : "Attorney standing has not been verified for this session."}
@@ -324,10 +324,10 @@ function EventConditions({
       subtitle={`${descriptorFor(assetClass).displayName} regulatory verification`}
       status={{ cls: "badge badge-slate", text: "⏳ V2" }}
     >
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-text-muted">
         Condition verification via CRE adapter — V2 feature.
       </p>
-      <ul className="mt-2 list-inside list-disc text-xs text-slate-400">
+      <ul className="mt-2 list-inside list-disc text-xs text-text-muted">
         {descriptorFor(assetClass).releaseConditions.map((c) => (
           <li key={c}>{c}</li>
         ))}
@@ -503,13 +503,13 @@ export function ConditionDefinitionView({
   return (
     <div className="mx-auto w-full max-w-2xl">
       <div className="flex items-center justify-between">
-        <h1 className="flex items-center gap-2.5 text-xl font-bold tracking-tight text-slate-900">
+        <h1 className="flex items-center gap-2.5 text-xl font-semibold text-text-primary">
           <span aria-hidden>{descriptor.icon}</span>
           Condition Definition
         </h1>
         <span className="badge badge-brand">{descriptor.displayName}</span>
       </div>
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="mt-1 text-sm text-text-muted">
         Review the release conditions extracted from the document, collect any signatures required,
         and confirm before the escrow is funded.
       </p>
@@ -526,13 +526,13 @@ export function ConditionDefinitionView({
           }
         >
           {artifact ? (
-            <div className="divide-y divide-slate-100">
+            <div className="divide-y divide-app-border">
               <Field label="Document" value={artifact.filename} />
               <Field label="AnchorReceipt hash" value={shortHash(artifact.hash)} mono />
               <Field label="Size" value={`${artifact.size.toLocaleString()} bytes`} />
             </div>
           ) : (
-            <p className="text-sm text-slate-500">No document has been registered for this session.</p>
+            <p className="text-sm text-text-muted">No document has been registered for this session.</p>
           )}
         </ConditionCard>
 
@@ -571,19 +571,19 @@ export function ConditionDefinitionView({
           }
         >
           {signers.length === 0 ? (
-            <p className="text-sm text-slate-500">
+            <p className="text-sm text-text-muted">
               No signer contact details were captured in the trust anchors for this session.
             </p>
           ) : (
             <>
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                 Required signers
               </div>
-              <p className="mt-0.5 text-[11px] text-slate-500">
+              <p className="mt-0.5 text-[11px] text-text-muted">
                 Send Email for external parties · Sign Here for internal parties, signed in
                 LexEscrow with no email sent.
               </p>
-              <ul className="mt-1.5 divide-y divide-[#2D3A4A]">
+              <ul className="mt-1.5 divide-y divide-app-border">
                 {signers.map((s) => (
                   <SignerRow
                     key={s.email}
@@ -615,7 +615,7 @@ export function ConditionDefinitionView({
                   Send for Signature
                 </button>
               ) : (
-                <div className="mt-4 space-y-3 rounded-lg border border-[#2D3A4A] bg-[#1A2435] p-4">
+                <div className="mt-4 space-y-3 rounded-lg border border-app-border bg-app-input p-4">
                   <div>
                     <label className="label" htmlFor="esign-subject">
                       Email subject
@@ -658,11 +658,11 @@ export function ConditionDefinitionView({
           {eSignEnvelopes.length > 0 && (
             <div className="mt-4 space-y-2">
               <div className="flex items-center justify-between">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                   Envelopes
                 </div>
                 {eSignPolling && (
-                  <span className="text-[11px] text-slate-500">Polling every 30s…</span>
+                  <span className="text-[11px] text-text-muted">Polling every 30s…</span>
                 )}
               </div>
               {eSignEnvelopes.map((e) => (
@@ -689,7 +689,7 @@ export function ConditionDefinitionView({
       )}
 
       <div className="mt-6 flex items-center justify-between">
-        <p className="max-w-sm text-xs text-slate-400">
+        <p className="max-w-sm text-xs text-text-muted">
           Confirming moves this escrow to the monitor, where each condition is tracked live and
           settlement stays blocked until every one is met or waived.
         </p>

@@ -71,7 +71,7 @@ function ExternalLink({ href, children }: { href: string; children: string }) {
     <button
       type="button"
       onClick={() => void openExternal(href)}
-      className="mt-1 cursor-pointer text-xs font-medium text-[#60A5FA] hover:underline"
+      className="mt-1 cursor-pointer text-xs font-medium text-brand-fg hover:underline"
     >
       {children}
     </button>
@@ -86,12 +86,12 @@ function GuideStep({ n, title, body, children }: {
 }) {
   return (
     <li className="flex gap-3">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#B45309] text-xs font-bold text-white">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gold text-xs font-bold text-white">
         {n}
       </span>
       <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-200">{title}</p>
-        <p className="mt-0.5 text-xs leading-relaxed text-slate-400">{body}</p>
+        <p className="text-sm font-medium text-text-primary">{title}</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-text-muted">{body}</p>
         {children}
       </div>
     </li>
@@ -108,11 +108,11 @@ function GuideStep({ n, title, body, children }: {
 export function WalletSetupGuide() {
   return (
     <details className="group">
-      <summary className="cursor-pointer list-none text-sm font-medium text-[#60A5FA] hover:underline">
+      <summary className="cursor-pointer select-none list-none text-sm font-medium text-brand-fg transition-colors hover:text-brand-fg/80">
         🔑 Don't have a wallet yet? — Setup guide
       </summary>
 
-      <ol className="mt-2 space-y-4 rounded-lg border border-[#1A2435] bg-[#0A0F1A] p-4">
+      <ol className="mt-2 space-y-4 rounded-lg border border-app-border bg-app-bg p-4">
         <GuideStep
           n={1}
           title="Get a wallet"
@@ -166,7 +166,7 @@ const RULES = [
 export function PrivateKeyWarning({ expanded }: { expanded: boolean }) {
   if (!expanded) {
     return (
-      <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-400">
+      <div className="rounded-lg border border-amber-500/40 bg-amber-950/50 p-3 text-xs leading-relaxed text-amber-400">
         ⚠️ Your deployer private key controls fund movement on-chain. Never share it. It is the
         most sensitive credential in LexEscrow — encrypted in your vault and never transmitted
         anywhere.
@@ -175,9 +175,13 @@ export function PrivateKeyWarning({ expanded }: { expanded: boolean }) {
   }
 
   return (
+    // `text-red-400` is load-bearing, not decorative: red-100 in this project's
+    // inverted ramp is a near-black red, which on a red-950 panel came out at
+    // roughly 1:1 contrast — the safety rules were effectively invisible. 400
+    // sits outside the override range, so it stays a legible light red.
     <div
       role="alert"
-      className="rounded-md border border-red-800 bg-red-950 px-3 py-2.5 text-xs leading-relaxed text-red-100"
+      className="rounded-lg border border-red-500/40 bg-red-950/50 p-3 text-xs leading-relaxed text-red-400"
     >
       <p className="font-semibold">🔴 Private Key Safety Rules</p>
       <ul className="mt-1.5 space-y-1">

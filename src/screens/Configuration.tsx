@@ -52,7 +52,7 @@ export function SecretInput({
       <button
         type="button"
         onClick={() => setShow((s) => !s)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1.5 py-0.5 text-xs font-medium text-slate-500 hover:bg-slate-100"
+        className="btn btn-ghost btn-sm absolute right-2 top-1/2 -translate-y-1/2 text-xs"
       >
         {show ? "Hide" : "Show"}
       </button>
@@ -70,10 +70,10 @@ function CardShell({
   children: ReactNode;
 }) {
   return (
-    <div className="card p-5">
-      <div className="mb-3">
-        <div className="text-sm font-semibold text-slate-800">{title}</div>
-        <div className="text-xs text-slate-400">{subtitle}</div>
+    <div className="card p-6">
+      <div className="mb-4">
+        <div className="text-base font-semibold text-text-primary">{title}</div>
+        <div className="mt-1 text-sm text-text-muted">{subtitle}</div>
       </div>
       {children}
     </div>
@@ -135,7 +135,7 @@ function AiCard({ data, refresh }: { data: AiPublic | null; refresh: () => void 
               <Row k="API key" v={data.hasApiKey ? "•••••••• stored" : "not set"} />
             </dl>
           ) : (
-            <p className="text-sm text-slate-400">No AI provider configured — the local heuristic parser is used.</p>
+            <p className="text-sm text-text-muted">No AI provider configured — the local heuristic parser is used.</p>
           )}
           <div className="mt-3 flex gap-2">
             <button className="btn btn-secondary" onClick={openEdit}>
@@ -256,7 +256,7 @@ function SmtpCard({ data, refresh }: { data: SmtpPublic | null; refresh: () => v
               <Row k="Password" v={data.hasPassword ? "•••••••• stored" : "not set"} />
             </dl>
           ) : (
-            <p className="text-sm text-slate-400">No SMTP configured — email falls back to environment / skipped.</p>
+            <p className="text-sm text-text-muted">No SMTP configured — email falls back to environment / skipped.</p>
           )}
           <div className="mt-3 flex gap-2">
             <button className="btn btn-secondary" onClick={openEdit}>
@@ -354,7 +354,7 @@ function TwilioCard({ data, refresh }: { data: TwilioPublic | null; refresh: () 
               <Row k="Auth token" v={data.hasAuthToken ? "•••••••• stored" : "not set"} />
             </dl>
           ) : (
-            <p className="text-sm text-slate-400">No Twilio configured — SMS is skipped.</p>
+            <p className="text-sm text-text-muted">No Twilio configured — SMS is skipped.</p>
           )}
           <div className="mt-3 flex gap-2">
             <button className="btn btn-secondary" onClick={openEdit}>
@@ -437,7 +437,7 @@ export function SecretTextarea({
       <button
         type="button"
         onClick={() => setShow((s) => !s)}
-        className="absolute right-2 top-2 rounded bg-[#111827] px-1.5 py-0.5 text-xs font-medium text-slate-500 hover:bg-slate-100"
+        className="btn btn-ghost btn-sm absolute right-2 top-2 bg-app-card text-xs"
       >
         {show ? "Hide" : "Show"}
       </button>
@@ -523,7 +523,7 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
               <Row k="Account ID" v={`…${data?.accountIdHint ?? ""}`} mono />
             </dl>
           ) : (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-text-muted">
               No DocuSign credentials — Send for Signature runs against the demo provider.
             </p>
           )}
@@ -541,7 +541,7 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
             )}
           </div>
           {testResult && (
-            <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
+            <div className="mt-2 rounded-md bg-app-input px-2.5 py-1.5 text-xs text-text-primary">
               {testResult}
             </div>
           )}
@@ -733,7 +733,7 @@ function WebhookCard({
               <Row k="API key" v={data?.hasApiKey ? "•••••••• stored" : "not set"} />
             </dl>
           ) : (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-text-muted">
               No webhook configured — escrow events are not forwarded.
             </p>
           )}
@@ -751,7 +751,7 @@ function WebhookCard({
             )}
           </div>
           {testResult && (
-            <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
+            <div className="mt-2 rounded-md bg-app-input px-2.5 py-1.5 text-xs text-text-primary">
               {testResult}
             </div>
           )}
@@ -797,7 +797,7 @@ function WebhookCard({
             </button>
           </div>
           {testResult && (
-            <div className="rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
+            <div className="rounded-md bg-app-input px-2.5 py-1.5 text-xs text-text-primary">
               {testResult}
             </div>
           )}
@@ -909,7 +909,7 @@ function TipLabel({
 }) {
   return (
     <div className="mb-1.5 flex items-center">
-      <label className="block text-sm font-medium text-slate-300" htmlFor={htmlFor}>
+      <label className="block text-sm font-medium text-text-muted" htmlFor={htmlFor}>
         {children}
       </label>
       {tooltip && <InfoTooltip {...tooltip} />}
@@ -1024,7 +1024,7 @@ export function BlockchainCard({
               <Row k="Private key" v={data?.hasPrivateKey ? "•••••••• stored" : "not set"} />
             </dl>
           ) : (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-text-muted">
               No blockchain configured — settlement is disabled. Parsing, LexGuard and the condition
               engine are unaffected.
             </p>
@@ -1088,7 +1088,7 @@ export function BlockchainCard({
                 data?.rpcUrlHint ? "leave blank to keep existing" : "https://eth-sepolia.g.alchemy.com/v2/…"
               }
             />
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-[11px] text-text-muted">
               Treated as a secret — provider API keys ride in the URL path.
             </p>
           </div>
@@ -1161,7 +1161,7 @@ export function BlockchainCard({
               onChange={setPassword}
               placeholder="confirm to save"
             />
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-[11px] text-text-muted">
               Re-entered because this is the one credential here that cannot be revoked after it
               leaks.
             </p>
@@ -1191,8 +1191,8 @@ export function BlockchainCard({
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <dt className="text-slate-500">{k}</dt>
-      <dd className={`truncate text-slate-800 ${mono ? "font-mono text-xs" : ""}`} title={v}>
+      <dt className="text-text-muted">{k}</dt>
+      <dd className={`truncate text-text-primary ${mono ? "font-mono text-xs" : ""}`} title={v}>
         {v}
       </dd>
     </div>
@@ -1332,22 +1332,22 @@ export function Configuration() {
   return (
     <div className="mx-auto w-full max-w-2xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Configuration</h1>
+        <h1 className="text-xl font-bold tracking-tight text-text-primary">Configuration</h1>
         <button className="btn btn-secondary" onClick={() => closeConfig()}>
           Done
         </button>
       </div>
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="mt-1 text-sm text-text-muted">
         Credentials are held in an AES-256-GCM encrypted vault. Secrets never leave the backend — this
         screen only ever shows public metadata.
       </p>
 
       {!unlocked ? (
         <div className="card mx-auto mt-8 max-w-md p-6">
-          <div className="text-sm font-semibold text-slate-800">
+          <div className="text-base font-semibold text-text-primary">
             {exists ? "Unlock the vault" : "Create a vault"}
           </div>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-sm text-text-muted">
             {exists
               ? "Enter your vault password to manage credentials."
               : "Set a password. It derives the encryption key — there is no recovery if lost."}
@@ -1378,10 +1378,10 @@ export function Configuration() {
           <DocuSignCard data={docusign} refresh={refresh} />
 
           <div className="pt-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
               Settlement
             </div>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-sm text-text-muted">
               Where funds actually move. Held in the vault rather than in `contracts/.env` — the
               deployer key never reaches this screen, and never crosses IPC.
             </p>
@@ -1389,10 +1389,10 @@ export function Configuration() {
           <BlockchainCard data={blockchain} refresh={refresh} />
 
           <div className="pt-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
               Integrations
             </div>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-sm text-text-muted">
               Escrow lifecycle events are forwarded to your practice-management system. Delivery is
               best-effort — a failed webhook never blocks a settlement.
             </p>
@@ -1407,9 +1407,9 @@ export function Configuration() {
       {/* Outside the unlocked branch on purpose: the wizard creates the vault
           itself, so it has to be reachable from the locked screen too — which
           is exactly where an operator who abandoned onboarding ends up. */}
-      <div className="mt-10 border-t border-[#1A2435] pt-4 text-center">
+      <div className="mt-10 border-t border-app-border pt-4 text-center">
         <button
-          className="text-xs text-slate-500 underline underline-offset-2 hover:text-slate-300"
+          className="text-xs text-text-muted underline underline-offset-2 hover:text-text-primary"
           onClick={() => openWizard()}
         >
           Re-run setup wizard

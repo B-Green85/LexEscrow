@@ -3,17 +3,30 @@
 /* ============================================================================
    LexEscrow — dark theme.
 
-   The app reads like the logo: near-black backgrounds, gold + blue accents.
-   Rather than touch every component, the Tailwind color scales are remapped so
-   the utilities already used across the screens resolve to dark values —
-   low shades (50–200) become dark surfaces/borders, high shades (400–900)
-   become light text. `white` is left as white (button/brand text stays crisp).
+   ── Depth ────────────────────────────────────────────────────────────────
+   Three layers, darkest to lightest, and nothing else. Every surface in the
+   app is one of them, which is what keeps the chrome legible without a single
+   heavy border:
 
-   Palette (from the brand brief):
-     app bg #0A0F1A · panel #111827 · surface #1A2435 · border #2D3A4A
-     primary text #F8FAFC · secondary #94A3B8
-     accent blue #2563EB (hover #1D4ED8) · accent gold #B45309
-     success #16A34A · warning #D97706 · error #DC2626
+     app-bg     the canvas the window paints
+     app-card   anything that floats on the canvas
+     app-input  anything you can type into or open
+
+   Borders are a hairline of white at 8% rather than a grey, so they read as a
+   lit edge on all three layers instead of only tuning for one.
+
+   ── Accents ──────────────────────────────────────────────────────────────
+   Brand blue carries navigation and the primary action. Gold is rationed
+   deliberately: the vault password, LexGuard's correction highlights, warning
+   banners, and the wordmark. Gold means "a human is on the hook for this",
+   so spending it on ordinary buttons would spend the signal.
+
+   ── Semantic ramps ───────────────────────────────────────────────────────
+   amber / emerald / red below are *inverted* against stock Tailwind: the low
+   shades (50–200) are dark surfaces and the high shades (400–900) are light
+   text. That is deliberate and load-bearing — it lets `bg-amber-50
+   text-amber-700` mean "warning" on a dark canvas with no per-use overrides.
+   Do not "fix" these to stock values; ~100 call sites read them this way.
    ========================================================================== */
 @theme {
   --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica,
@@ -21,34 +34,30 @@
   --font-mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas,
     monospace;
 
-  /* Accent gold (logo scales-of-justice). */
+  /* ── Surfaces: the three-layer depth system ── */
+  --color-app-bg: #0b0f19; /* primary canvas — darkest layer */
+  --color-app-card: #161b26; /* elevated card surface */
+  --color-app-input: #1f2633; /* text inputs, dropdowns, inert chips */
+  --color-app-border: rgba(255, 255, 255, 0.08); /* ultra-thin borders */
+
+  /* ── Type ── */
+  --color-text-primary: #f3f4f6; /* titles, active input text */
+  --color-text-muted: #9ca3af; /* labels, descriptions, footnotes */
+
+  /* ── Brand blue: navigation, primary action, focus ──
+     `brand` is a *fill*: solid buttons and active markers, always under white
+     text (6.9:1). It is too dark to be text itself — on app-card it lands at
+     2.56:1, well under AA — so anything that is blue *type* (links, active
+     rail labels, hovered icons) uses `brand-fg`, which clears 6.8:1 on all
+     three surface layers. Same hue, two jobs. */
+  --color-brand: #1e6091;
+  --color-brand-fg: #5fa8d8;
+  --color-brand-glow: rgba(30, 96, 145, 0.45);
+
+  /* ── Gold: reserved for operator-accountable moments ── */
   --color-gold: #b45309;
-  --color-gold-bright: #d97706;
-
-  /* Structural chrome — slate remapped to a dark ramp.
-     bg/border use 50–300; text uses 400–900. */
-  --color-slate-50: #1a2435; /* secondary surface */
-  --color-slate-100: #1a2435; /* secondary surface / subtle divider */
-  --color-slate-200: #2d3a4a; /* borders / "pending" surfaces */
-  --color-slate-300: #3a4759; /* input borders / dim rule */
-  --color-slate-400: #64748b; /* faint text */
-  --color-slate-500: #94a3b8; /* secondary text */
-  --color-slate-600: #94a3b8; /* secondary text */
-  --color-slate-700: #cbd5e1; /* strong secondary text */
-  --color-slate-800: #e2e8f0; /* near-primary text */
-  --color-slate-900: #f8fafc; /* primary text */
-
-  /* Accent blue (replaces the old indigo "brand"). */
-  --color-brand-50: #172554; /* deep blue surface (badge bg) */
-  --color-brand-100: #1e3a8a;
-  --color-brand-200: #1e40af;
-  --color-brand-300: #2563eb; /* rail line */
-  --color-brand-400: #3b82f6; /* rail connector */
-  --color-brand-500: #3b82f6; /* focus ring */
-  --color-brand-600: #2563eb; /* primary / step active */
-  --color-brand-700: #1d4ed8; /* hover */
-  --color-brand-800: #1e40af; /* active */
-  --color-brand-900: #1e3a8a;
+  --color-gold-light: #d97706;
+  --color-gold-glow: rgba(180, 83, 9, 0.4);
 
   /* Warning / flagged (amber) — light text on deep amber surfaces. */
   --color-amber-50: #2a1e05;
@@ -93,7 +102,22 @@
   }
 
   body {
-    @apply bg-[#0A0F1A] font-sans text-[#F8FAFC] antialiased;
+    @apply bg-app-bg font-sans text-text-primary antialiased;
+  }
+
+  /* Text-entry controls get the token treatment globally so a screen never has
+     to restate it. Checkboxes, radios and range sliders are excluded on
+     purpose — they are box-sized by the UA, and the padding below would
+     inflate them into unclickable slabs. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not(
+      [type="file"]
+    ),
+  select,
+  textarea {
+    @apply w-full rounded-lg border border-app-border bg-app-input px-4 py-2.5
+      text-sm text-text-primary transition-all duration-150
+      placeholder:text-text-muted focus:border-brand focus:outline-none
+      focus:ring-2 focus:ring-brand/20 disabled:opacity-60;
   }
 
   * {
@@ -114,15 +138,15 @@
     height: 10px;
   }
   ::-webkit-scrollbar-track {
-    background: #0a0f1a;
+    background: var(--color-app-bg);
   }
   ::-webkit-scrollbar-thumb {
-    background: #2d3a4a;
+    background: #2f3846;
     border-radius: 6px;
-    border: 2px solid #0a0f1a;
+    border: 2px solid var(--color-app-bg);
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #3a4759;
+    background: #3f4a5c;
   }
 }
 
@@ -131,24 +155,39 @@
    ========================================================================== */
 @layer components {
   .card {
-    @apply rounded-xl border border-[#2D3A4A] bg-[#111827] shadow-lg shadow-black/30;
+    @apply rounded-xl border border-app-border bg-app-card shadow-2xl shadow-black/40;
   }
 
   .btn {
-    @apply inline-flex select-none items-center justify-center gap-2 rounded-lg
-      px-4 py-2.5 text-sm font-semibold transition-colors
-      focus-visible:outline-none focus-visible:ring-2
-      focus-visible:ring-brand-500 disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex cursor-pointer select-none items-center justify-center
+      gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all
+      duration-150 focus-visible:outline-none focus-visible:ring-2
+      focus-visible:ring-brand/40 active:scale-[0.98]
+      disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none;
   }
 
-  /* Compose in markup with the base, e.g. `btn btn-primary`. */
+  /* Compose in markup with the base, e.g. `btn btn-primary`. The glow is what
+     separates the one committing action on a screen from everything else —
+     it is why the primary button needs no extra size to be found. */
   .btn-primary {
-    @apply bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800;
+    @apply bg-brand text-white shadow-[0_4px_20px_var(--color-brand-glow)]
+      hover:bg-brand/90 hover:shadow-[0_4px_24px_var(--color-brand-glow)];
+  }
+
+  /* Gold is the operator-accountable action (vault creation). Distinct from
+     primary on purpose — see the accent note at the top of this file. */
+  .btn-gold {
+    @apply bg-gold text-white shadow-[0_4px_20px_var(--color-gold-glow)]
+      hover:bg-gold-light hover:shadow-[0_4px_24px_var(--color-gold-glow)];
   }
 
   .btn-secondary {
-    @apply border border-[#2D3A4A] bg-[#1A2435] text-[#E2E8F0]
-      hover:bg-[#22304A] active:bg-[#2D3A4A];
+    @apply border border-app-border bg-app-input text-text-muted
+      hover:border-white/20 hover:text-text-primary;
+  }
+
+  .btn-ghost {
+    @apply text-text-muted hover:bg-app-card hover:text-text-primary;
   }
 
   .btn-danger {
@@ -156,7 +195,7 @@
   }
 
   .btn-lg {
-    @apply px-6 py-3 text-base;
+    @apply px-8 py-3 text-base;
   }
 
   /* Inline actions that sit inside a list row rather than terminating a card. */
@@ -165,14 +204,16 @@
   }
 
   .label {
-    @apply mb-1.5 block text-sm font-medium text-slate-300;
+    @apply mb-1.5 block text-xs font-medium text-text-muted;
   }
 
+  /* Matches the global input rule so an explicit `.input` and a bare <input>
+     are indistinguishable. Kept as a class for <div>s that fake a field. */
   .input {
-    @apply w-full rounded-lg border border-[#2D3A4A] bg-[#1A2435] px-3.5 py-2.5
-      text-sm text-[#F8FAFC] placeholder:text-slate-500
-      focus:border-brand-500 focus:outline-none focus:ring-2
-      focus:ring-brand-500/30 disabled:opacity-60;
+    @apply w-full rounded-lg border border-app-border bg-app-input px-4 py-2.5
+      text-sm text-text-primary transition-all duration-150
+      placeholder:text-text-muted focus:border-brand focus:outline-none
+      focus:ring-2 focus:ring-brand/20 disabled:opacity-60;
   }
 
   .badge {
@@ -190,10 +231,10 @@
     @apply bg-red-50 text-red-700 ring-1 ring-red-500/25;
   }
   .badge-slate {
-    @apply bg-slate-100 text-slate-400 ring-1 ring-slate-300/30;
+    @apply bg-app-input text-text-muted ring-1 ring-app-border;
   }
   .badge-brand {
-    @apply bg-brand-50 text-[#93C5FD] ring-1 ring-brand-500/30;
+    @apply bg-brand/15 text-brand-fg ring-1 ring-brand/40;
   }
 }
 

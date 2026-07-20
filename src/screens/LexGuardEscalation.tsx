@@ -60,8 +60,8 @@ function AttemptRow({
   const missing = value === undefined || value === null || value === "";
   return (
     <div className="flex items-baseline justify-between gap-4 py-1">
-      <span className="text-xs text-slate-400">{label}</span>
-      <span className={`font-mono text-sm ${missing ? "text-slate-500" : "font-medium text-red-400"}`}>
+      <span className="text-xs text-text-muted">{label}</span>
+      <span className={`font-mono text-sm ${missing ? "text-text-muted" : "font-medium text-red-400"}`}>
         {missing ? "—" : formatFieldValue(field, value)}
       </span>
     </div>
@@ -139,19 +139,19 @@ export function LexGuardEscalationView({
             return (
               <div
                 key={`${finding.field}-${i}`}
-                className="rounded-lg border border-[#2D3A4A] bg-[#1A2435] p-4"
+                className="rounded-lg border border-app-border bg-app-input p-4"
                 data-testid={`escalation-field-${i}`}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-[#E2E8F0]">
+                  <div className="text-sm font-semibold text-text-primary">
                     Field {i + 1} of {findings.length}: <span className="font-mono">{finding.field}</span>
                   </div>
                   <span className="badge badge-slate">{finding.module}</span>
                 </div>
 
-                <div className="mt-3 divide-y divide-[#2D3A4A]/60">
+                <div className="mt-3 divide-y divide-app-border">
                   <div className="flex items-baseline justify-between gap-4 py-1">
-                    <span className="text-xs text-slate-400">Document says</span>
+                    <span className="text-xs text-text-muted">Document says</span>
                     <span
                       className="font-mono text-sm font-semibold text-emerald-400"
                       data-selectable
@@ -182,14 +182,14 @@ export function LexGuardEscalationView({
                     />
                     <span
                       aria-hidden="true"
-                      className={`w-4 text-lg ${answered ? "text-emerald-400" : "text-slate-600"}`}
+                      className={`w-4 text-lg ${answered ? "text-emerald-400" : "text-text-muted"}`}
                       data-testid={`field-check-${i}`}
                     >
                       {answered ? "✓" : ""}
                     </span>
                   </div>
                   {isMoneyField(finding.field) && (
-                    <p className="mt-1 text-xs text-slate-500">Enter a dollar amount, e.g. 18500.00</p>
+                    <p className="mt-1 text-xs text-text-muted">Enter a dollar amount, e.g. 18500.00</p>
                   )}
                 </div>
               </div>
@@ -199,7 +199,7 @@ export function LexGuardEscalationView({
           <label className="flex cursor-pointer items-start gap-3 rounded-lg bg-amber-50 px-3 py-3">
             <input
               type="checkbox"
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+              className="mt-0.5 h-4 w-4 rounded border-app-border accent-brand focus:ring-2 focus:ring-brand/40"
               checked={attested}
               onChange={(e) => setAttested(e.target.checked)}
             />
@@ -222,7 +222,7 @@ export function LexGuardEscalationView({
             </button>
           </div>
 
-          <div className="border-t border-[#2D3A4A] pt-3">
+          <div className="border-t border-app-border pt-3">
             <button
               type="button"
               className="btn btn-secondary w-full"
@@ -231,7 +231,7 @@ export function LexGuardEscalationView({
             >
               Review Document
             </button>
-            <p className="mt-3 text-center text-xs text-slate-500">
+            <p className="mt-3 text-center text-xs text-text-muted">
               Corrections are logged as HUMAN_CORRECTION with your identity, all AI attempts, and a
               timestamp.
             </p>

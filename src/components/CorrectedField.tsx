@@ -46,7 +46,7 @@ export function CorrectedField({
         <span className="text-sm text-amber-800">{label ?? fieldName}</span>
 
         <span className="flex items-center gap-2">
-          <span className="font-mono text-sm text-slate-400 line-through" data-testid="original-value">
+          <span className="font-mono text-sm text-text-muted line-through" data-testid="original-value">
             {formatFieldValue(fieldName, originalAiValue)}
           </span>
           <span className="font-mono text-sm font-bold text-amber-700" data-testid="corrected-value">
@@ -57,7 +57,7 @@ export function CorrectedField({
             onClick={() => setOpen((v) => !v)}
             className="rounded border border-amber-300 px-2 py-0.5 text-xs font-semibold text-amber-800
               opacity-0 transition-opacity hover:bg-amber-100 focus:opacity-100
-              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 group-hover:opacity-100"
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand group-hover:opacity-100"
           >
             Override
           </button>

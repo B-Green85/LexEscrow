@@ -55,10 +55,10 @@ export function SourceDocumentViewer({ text, onClose }: SourceDocumentViewerProp
       data-testid="source-document-viewer"
     >
       <div className="card flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b border-[#2D3A4A] bg-[#1A2435] px-5 py-3">
+        <div className="flex items-center justify-between border-b border-app-border bg-app-input px-5 py-3">
           <div>
-            <div className="text-sm font-bold text-[#E2E8F0]">Source Document</div>
-            <div className="text-xs text-slate-400">
+            <div className="text-sm font-bold text-text-primary">Source Document</div>
+            <div className="text-xs text-text-muted">
               Normalized text as hashed by ArtifactGuard — dollar amounts highlighted.
             </div>
           </div>
@@ -66,15 +66,15 @@ export function SourceDocumentViewer({ text, onClose }: SourceDocumentViewerProp
             type="button"
             onClick={onClose}
             aria-label="Close source document"
-            className="rounded-lg px-2 py-1 text-xl leading-none text-slate-400 transition-colors
-              hover:bg-[#22304A] hover:text-slate-200"
+            className="rounded-lg px-2 py-1 text-xl leading-none text-text-muted transition-colors
+              hover:bg-white/5 hover:text-text-primary"
           >
             ×
           </button>
         </div>
 
         <div className="overflow-y-auto px-5 py-4" data-selectable>
-          <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-slate-300">
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-text-muted">
             {highlightAmounts(text)}
           </pre>
         </div>

@@ -92,16 +92,16 @@ export function StepProgress({ step }: { step: number }) {
               data-state={state}
               className={`h-2.5 w-2.5 rounded-full border transition-colors ${
                 state === "done"
-                  ? "border-[#B45309] bg-[#B45309]"
+                  ? "border-gold bg-gold"
                   : state === "current"
-                    ? "border-[#B45309] bg-white"
-                    : "border-[#2D3A4A] bg-[#1A2435]"
+                    ? "border-gold bg-white"
+                    : "border-app-border bg-app-input"
               }`}
             />
           );
         })}
       </div>
-      <span className="text-xs font-medium text-slate-400">
+      <span className="text-xs font-medium text-text-muted">
         {step >= TOTAL_STEPS ? "Complete ✅" : `Step ${step} of ${TOTAL_STEPS}`}
       </span>
     </div>
@@ -123,17 +123,19 @@ function Shell({
   footer: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-[#0A0F1A]" role="dialog" aria-modal="true">
-      <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-6 py-10">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-app-bg"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="mx-4 flex max-h-[90vh] w-full max-w-2xl flex-col overflow-y-auto rounded-2xl border border-app-border bg-app-card p-8 shadow-2xl">
         {step >= 3 && <StepProgress step={step} />}
         {title && (
-          <h1
-            className={`text-2xl font-bold tracking-tight text-[#F8FAFC] ${step >= 3 ? "mt-6" : ""}`}
-          >
+          <h1 className={`text-xl font-semibold text-text-primary ${step >= 3 ? "mt-6" : ""}`}>
             {title}
           </h1>
         )}
-        {subtitle && <div className="mt-2 text-sm leading-relaxed text-slate-400">{subtitle}</div>}
+        {subtitle && <div className="mt-2 text-sm leading-relaxed text-text-muted">{subtitle}</div>}
         <div className="mt-6 flex-1">{children}</div>
         <div className="mt-8 flex flex-wrap items-center gap-3">{footer}</div>
       </div>
@@ -143,7 +145,7 @@ function Shell({
 
 /** The rationale under a Skip button — why skipping is survivable, and what it costs. */
 function SkipNote({ children }: { children: ReactNode }) {
-  return <p className="mt-3 w-full text-xs text-slate-500">{children}</p>;
+  return <p className="mt-3 w-full text-xs text-text-muted">{children}</p>;
 }
 
 function Err({ msg }: { msg: string | null }) {
@@ -176,13 +178,13 @@ function Field({
           not what a screen reader should announce, nor what a test asking for
           the field by its label should have to match. */}
       <div className="mb-1.5 flex items-center">
-        <label className="block text-sm font-medium text-slate-300" htmlFor={id}>
+        <label className="block text-sm font-medium text-text-muted" htmlFor={id}>
           {label}
         </label>
         {tooltip && <InfoTooltip {...tooltip} />}
       </div>
       {children}
-      {hint && <p className="mt-1 text-[11px] text-slate-500">{hint}</p>}
+      {hint && <p className="mt-1 text-[11px] text-text-muted">{hint}</p>}
     </div>
   );
 }
@@ -396,7 +398,7 @@ export function SetupWizard() {
   };
 
   const backButton = (
-    <button className="btn btn-secondary" onClick={back} disabled={busy}>
+    <button className="btn btn-ghost text-sm" onClick={back} disabled={busy}>
       ← Back
     </button>
   );
@@ -408,7 +410,7 @@ export function SetupWizard() {
       <Shell
         step={1}
         footer={
-          <button className="btn btn-lg mx-auto bg-[#B45309] text-white hover:bg-[#92400E]" onClick={() => advance()}>
+          <button className="btn btn-primary btn-lg mx-auto" onClick={() => advance()}>
             Get Started →
           </button>
         }
@@ -422,13 +424,13 @@ export function SetupWizard() {
             className="mx-auto h-48 w-48 select-none"
             draggable={false}
           />
-          <h1 className="mt-2 text-4xl font-bold tracking-tight text-[#F8FAFC]">
+          <h1 className="mt-2 text-4xl font-bold tracking-tight text-text-primary">
             Welcome to LexEscrow
           </h1>
-          <p className="mt-2 text-sm font-medium uppercase tracking-[0.2em] text-[#B45309]">
+          <p className="mt-2 text-sm font-medium uppercase tracking-[0.2em] text-gold">
             360° AI-Governed Escrow Platform
           </p>
-          <p className="mx-auto mt-6 max-w-lg text-sm leading-relaxed text-slate-400">
+          <p className="mx-auto mt-6 max-w-lg text-sm leading-relaxed text-text-muted">
             Before you begin, let's set up your secure credential vault. Your vault encrypts all API
             keys, blockchain credentials, and signing certificates with AES-256-GCM encryption.
             Nothing leaves your machine.
@@ -451,8 +453,8 @@ export function SetupWizard() {
           ].map((f) => (
             <div key={f.title} className="card p-4 text-center">
               <div className="text-2xl">{f.icon}</div>
-              <div className="mt-1.5 text-sm font-semibold text-[#F8FAFC]">{f.title}</div>
-              <div className="mt-1 text-xs leading-relaxed text-slate-400">{f.body}</div>
+              <div className="mt-1.5 text-sm font-semibold text-text-primary">{f.title}</div>
+              <div className="mt-1 text-xs leading-relaxed text-text-muted">{f.body}</div>
             </div>
           ))}
         </div>
@@ -484,7 +486,7 @@ export function SetupWizard() {
               <div className="text-sm font-semibold text-emerald-400">
                 {vaultExists ? "✅ Vault unlocked" : "✅ Vault created"}
               </div>
-              <div className="text-xs text-slate-400">
+              <div className="text-xs text-text-muted">
                 AES-256-GCM, keyed from the password you just entered.
               </div>
             </div>
@@ -504,7 +506,7 @@ export function SetupWizard() {
         }
         footer={
           <button
-            className="btn btn-primary btn-lg"
+            className="btn btn-gold btn-lg"
             disabled={busy || !canCreateVault}
             onClick={createVault}
           >
@@ -525,7 +527,7 @@ export function SetupWizard() {
             <>
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-400">Strength</span>
+                  <span className="text-xs font-medium text-text-muted">Strength</span>
                   <span
                     className={`text-xs font-semibold ${STRENGTH_UI[strength].text}`}
                     data-testid="strength-label"
@@ -533,7 +535,7 @@ export function SetupWizard() {
                     {STRENGTH_UI[strength].label}
                   </span>
                 </div>
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#1A2435]">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-app-input">
                   <div
                     data-testid="strength-bar"
                     data-strength={strength}
@@ -574,7 +576,7 @@ export function SetupWizard() {
             <button className="btn btn-primary" disabled={busy || !endpoint} onClick={saveAi}>
               Save &amp; Continue →
             </button>
-            <button className="btn btn-secondary" disabled={busy} onClick={() => skip("ai")}>
+            <button className="btn btn-ghost text-sm" disabled={busy} onClick={() => skip("ai")}>
               Skip — Use Manual Entry →
             </button>
             <SkipNote>
@@ -587,7 +589,6 @@ export function SetupWizard() {
           <Field id="wz-ai-provider" label="Provider name">
             <input
               id="wz-ai-provider"
-              className="input"
               list="wz-ai-providers"
               value={providerName}
               onChange={(e) => setProviderName(e.target.value)}
@@ -602,7 +603,6 @@ export function SetupWizard() {
           <Field id="wz-ai-endpoint" label="Endpoint URL">
             <input
               id="wz-ai-endpoint"
-              className="input"
               value={endpoint}
               onChange={(e) => setEndpoint(e.target.value)}
               placeholder={connectionType === "websocket" ? "wss://…" : "https://…"}
@@ -610,7 +610,7 @@ export function SetupWizard() {
           </Field>
           <div>
             <span className="label">Connection type</span>
-            <div className="flex gap-4 text-sm text-slate-300">
+            <div className="flex gap-4 text-sm text-text-muted">
               {(["http", "websocket"] as const).map((ct) => (
                 <label key={ct} className="flex items-center gap-1.5">
                   <input
@@ -651,7 +651,11 @@ export function SetupWizard() {
             >
               Save &amp; Continue →
             </button>
-            <button className="btn btn-secondary" disabled={busy} onClick={() => skip("blockchain")}>
+            <button
+              className="btn btn-ghost text-sm"
+              disabled={busy}
+              onClick={() => skip("blockchain")}
+            >
               Use Demo Mode →
             </button>
             <SkipNote>
@@ -679,7 +683,6 @@ export function SetupWizard() {
               >
                 <input
                   id="wz-bc-network"
-                  className="input"
                   value={networkName}
                   onChange={(e) => setNetworkName(e.target.value)}
                 />
@@ -688,7 +691,6 @@ export function SetupWizard() {
             <Field id="wz-bc-chain" label="Chain ID" tooltip={BLOCKCHAIN_TOOLTIPS.chainId}>
               <input
                 id="wz-bc-chain"
-                className="input"
                 type="number"
                 value={chainId}
                 onChange={(e) => setChainId(parseInt(e.target.value, 10) || 0)}
@@ -715,7 +717,7 @@ export function SetupWizard() {
           >
             <input
               id="wz-bc-contract"
-              className="input font-mono text-xs"
+              className="font-mono text-xs"
               value={contractAddress}
               onChange={(e) => setContractAddress(e.target.value)}
               placeholder="0x…"
@@ -728,7 +730,7 @@ export function SetupWizard() {
           >
             <input
               id="wz-bc-deployer"
-              className="input font-mono text-xs"
+              className="font-mono text-xs"
               value={deployerAddress}
               onChange={(e) => setDeployerAddress(e.target.value)}
               placeholder="0x…"
@@ -751,7 +753,7 @@ export function SetupWizard() {
           <Field id="wz-bc-usdc" label="USDC address" tooltip={BLOCKCHAIN_TOOLTIPS.usdcAddress}>
             <input
               id="wz-bc-usdc"
-              className="input font-mono text-xs"
+              className="font-mono text-xs"
               value={usdcAddress}
               onChange={(e) => setUsdcAddress(e.target.value)}
               placeholder="0x…"
@@ -764,7 +766,7 @@ export function SetupWizard() {
           >
             <input
               id="wz-bc-forwarder"
-              className="input font-mono text-xs"
+              className="font-mono text-xs"
               value={forwarderAddress}
               onChange={(e) => setForwarderAddress(e.target.value)}
               placeholder="0x…"
@@ -794,7 +796,7 @@ export function SetupWizard() {
             >
               Save &amp; Continue →
             </button>
-            <button className="btn btn-secondary" disabled={busy} onClick={() => skip("docusign")}>
+            <button className="btn btn-ghost text-sm" disabled={busy} onClick={() => skip("docusign")}>
               Skip →
             </button>
             <SkipNote>
@@ -815,7 +817,6 @@ export function SetupWizard() {
           <Field id="wz-ds-user" label="User ID">
             <input
               id="wz-ds-user"
-              className="input"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               placeholder="impersonation subject GUID"
@@ -824,7 +825,6 @@ export function SetupWizard() {
           <Field id="wz-ds-account" label="Account ID">
             <input
               id="wz-ds-account"
-              className="input"
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
               placeholder="DocuSign account GUID"
@@ -833,7 +833,6 @@ export function SetupWizard() {
           <Field id="wz-ds-uri" label="Base URI">
             <input
               id="wz-ds-uri"
-              className="input"
               value={baseUri}
               onChange={(e) => setBaseUri(e.target.value)}
               placeholder={DEFAULT_BASE_URI}
@@ -850,7 +849,6 @@ export function SetupWizard() {
           <Field id="wz-ds-env" label="Environment">
             <select
               id="wz-ds-env"
-              className="input"
               value={environment}
               onChange={(e) => setEnvironment(e.target.value)}
             >
@@ -858,7 +856,7 @@ export function SetupWizard() {
               <option value="production">Production</option>
             </select>
           </Field>
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-text-muted">
             Don't have DocuSign credentials yet? Create a free developer sandbox account at
             developers.docusign.com
           </p>
@@ -887,7 +885,7 @@ export function SetupWizard() {
               Save &amp; Continue →
             </button>
             <button
-              className="btn btn-secondary"
+              className="btn btn-ghost text-sm"
               disabled={busy}
               onClick={() => skip("notifications")}
             >
@@ -899,13 +897,12 @@ export function SetupWizard() {
       >
         <div className="space-y-4">
           <div className="card space-y-4 p-5">
-            <div className="text-sm font-semibold text-[#F8FAFC]">Email (SMTP)</div>
+            <div className="text-sm font-semibold text-text-primary">Email (SMTP)</div>
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
                 <Field id="wz-smtp-host" label="Host">
                   <input
                     id="wz-smtp-host"
-                    className="input"
                     value={smtpHost}
                     onChange={(e) => setSmtpHost(e.target.value)}
                     placeholder="smtp.example.com"
@@ -915,7 +912,6 @@ export function SetupWizard() {
               <Field id="wz-smtp-port" label="Port">
                 <input
                   id="wz-smtp-port"
-                  className="input"
                   type="number"
                   value={smtpPort}
                   onChange={(e) => setSmtpPort(parseInt(e.target.value, 10) || 0)}
@@ -925,7 +921,6 @@ export function SetupWizard() {
             <Field id="wz-smtp-user" label="Username">
               <input
                 id="wz-smtp-user"
-                className="input"
                 value={smtpUsername}
                 onChange={(e) => setSmtpUsername(e.target.value)}
               />
@@ -937,8 +932,8 @@ export function SetupWizard() {
 
           <div className="card space-y-4 p-5">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-[#F8FAFC]">SMS — Twilio (optional)</div>
-              <label className="flex items-center gap-1.5 text-xs text-slate-400">
+              <div className="text-sm font-semibold text-text-primary">SMS — Twilio (optional)</div>
+              <label className="flex items-center gap-1.5 text-xs text-text-muted">
                 <input
                   type="checkbox"
                   checked={skipSms}
@@ -952,7 +947,6 @@ export function SetupWizard() {
                 <Field id="wz-tw-sid" label="Account SID">
                   <input
                     id="wz-tw-sid"
-                    className="input"
                     value={twilioSid}
                     onChange={(e) => setTwilioSid(e.target.value)}
                     placeholder="AC…"
@@ -961,7 +955,6 @@ export function SetupWizard() {
                 <Field id="wz-tw-from" label="From number">
                   <input
                     id="wz-tw-from"
-                    className="input"
                     value={twilioFrom}
                     onChange={(e) => setTwilioFrom(e.target.value)}
                     placeholder="+15550000000"
@@ -1008,19 +1001,19 @@ export function SetupWizard() {
       subtitle="You can update any of these settings at any time from the Configuration screen (⚙️ icon in the header)."
       footer={
         <button
-          className="btn btn-lg mx-auto bg-[#B45309] text-white hover:bg-[#92400E]"
+          className="btn btn-primary btn-lg mx-auto"
           onClick={() => completeWizard()}
         >
           Start Using LexEscrow →
         </button>
       }
     >
-      <div className="card divide-y divide-[#2D3A4A]">
+      <div className="card divide-y divide-app-border">
         {rows.map((r) => {
           const wasSkipped = skipped.has(r.key);
           return (
             <div key={r.key} className="flex items-center justify-between gap-4 px-5 py-3">
-              <div className="flex items-center gap-2.5 text-sm text-slate-300">
+              <div className="flex items-center gap-2.5 text-sm text-text-muted">
                 <span>{r.icon}</span>
                 <span>{r.label}</span>
               </div>
@@ -1032,7 +1025,7 @@ export function SetupWizard() {
                   {wasSkipped ? `⚠️ ${r.skippedLabel}` : `✅ ${r.done}`}
                 </div>
                 {wasSkipped && (
-                  <div className="text-[11px] text-slate-500">Configure anytime in Settings ⚙️</div>
+                  <div className="text-[11px] text-text-muted">Configure anytime in Settings ⚙️</div>
                 )}
               </div>
             </div>

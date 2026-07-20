@@ -27,7 +27,7 @@ function SignatureRow({
 }) {
   return (
     <div className="flex items-center justify-between px-5 py-3.5">
-      <span className="flex items-center gap-2 text-sm text-slate-700">
+      <span className="flex items-center gap-2 text-sm text-text-primary">
         <span aria-hidden>{signed ? "✅" : "⬜"}</span>
         {label}
       </span>
@@ -57,10 +57,10 @@ export function ArbitrationPanel({ arbitrationState, busy, onSign }: Arbitration
 
   return (
     <div className="card mt-4">
-      <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+      <div className="flex items-center justify-between border-b border-app-border px-5 py-3">
         <div>
-          <div className="text-sm font-semibold text-slate-700">⚖️ Multi-signature resolution</div>
-          <div className="mt-0.5 text-xs text-slate-400">
+          <div className="text-sm font-semibold text-text-primary">⚖️ Multi-signature resolution</div>
+          <div className="mt-0.5 text-xs text-text-muted">
             Funds stay locked until the signature threshold is met.
           </div>
         </div>
@@ -68,7 +68,7 @@ export function ArbitrationPanel({ arbitrationState, busy, onSign }: Arbitration
           {signed}/{threshold} required signatures
         </span>
       </div>
-      <div className="divide-y divide-slate-100">
+      <div className="divide-y divide-app-border">
         <SignatureRow
           label="Party 1"
           signed={party1Signed}
