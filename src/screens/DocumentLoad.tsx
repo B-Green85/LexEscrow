@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useSession } from "../store/session";
 import { samplesForClass, sampleToFile } from "../lib/samples";
+import { mergeSuggestions, suggestAnchors } from "../lib/suggest-anchors";
 import {
   ASSET_CLASSES,
   US_STATES,
@@ -140,24 +141,71 @@ export function DocumentLoad() {
     return empty;
   });
 
+  // Fields pre-filled from the document rather than typed by the officer. They
+  // carry an amber dot until confirmed; editing one clears its dot.
+  const [suggested, setSuggested] = useState<Set<string>>(new Set());
+  // Fields the officer has typed into. Suggestion never overwrites these, and
+  // the check has to survive the await in `loadFile`, hence the ref.
+  const touchedRef = useRef<Set<string>>(new Set());
+  const rawRef = useRef(raw);
+
   const descriptor = descriptorFor(assetClass);
 
-  const selectClass = (cls: AssetClass) => {
-    if (cls === assetClass) return;
-    const empty = emptyAnchorsFor(cls);
-    setAssetClass(cls);
-    setRaw(empty);
-    setAnchor(anchorsToTrustAnchors(cls, empty));
-    setRawAnchors(empty);
-  };
-
-  const setValue = (key: string, v: string) => {
-    const next = { ...raw, [key]: v };
+  /** Push an anchor record to local state and both store projections. */
+  const commit = (cls: AssetClass, next: Record<string, string>) => {
+    rawRef.current = next;
     setRaw(next);
-    setAnchor(anchorsToTrustAnchors(assetClass, next));
+    setAnchor(anchorsToTrustAnchors(cls, next));
     // The raw record too — TrustAnchors drops the class-specific fields that
     // CannaVerify needs (Metrc facility ID, license type).
     setRawAnchors(next);
+  };
+
+  const selectClass = (cls: AssetClass) => {
+    if (cls === assetClass) return;
+    setAssetClass(cls);
+    touchedRef.current = new Set();
+    setSuggested(new Set());
+    commit(cls, emptyAnchorsFor(cls));
+  };
+
+  const setValue = (key: string, v: string) => {
+    touchedRef.current.add(key);
+    // Typed over — it is the officer's value now, so drop the suggestion mark.
+    setSuggested((prev) => {
+      if (!prev.has(key)) return prev;
+      const n = new Set(prev);
+      n.delete(key);
+      return n;
+    });
+    commit(assetClass, { ...rawRef.current, [key]: v });
+  };
+
+  /**
+   * Take a file and pre-fill whatever trust anchors its text confidently
+   * yields. Suggestions are advisory — LexGuard still matches the confirmed
+   * anchors against the parsed document — so an unreadable file (a real PDF or
+   * DOCX, which is binary) just leaves the form as it was.
+   */
+  const loadFile = async (f: File | null) => {
+    setFile(f);
+    if (!f) return;
+    let text: string;
+    try {
+      text = await f.text();
+    } catch {
+      return;
+    }
+    const { next, filled } = mergeSuggestions(
+      assetClass,
+      rawRef.current,
+      emptyAnchorsFor(assetClass),
+      suggestAnchors(text, assetClass),
+      touchedRef.current,
+    );
+    if (filled.length === 0) return;
+    commit(assetClass, next);
+    setSuggested(new Set(filled));
   };
 
   const canContinue = !!file && anchorsComplete(assetClass, raw) && !busy;
@@ -206,6 +254,11 @@ export function DocumentLoad() {
         <label className="label mt-6">{descriptor.uploadLabel}</label>
         <div
           onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            void loadFile(e.dataTransfer.files?.[0] ?? null);
+          }}
           className="group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/[0.15] bg-white/[0.16] p-8 backdrop-blur-md transition-all hover:border-[#3B82F6]/50"
         >
           <input
@@ -213,7 +266,7 @@ export function DocumentLoad() {
             type="file"
             accept=".txt,.pdf,.docx,.md,text/plain"
             className="hidden"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => void loadFile(e.target.files?.[0] ?? null)}
           />
           <div className="flex flex-col items-center justify-center text-center">
             <span className="text-text-muted transition-colors group-hover:text-brand-fg">
@@ -248,7 +301,7 @@ export function DocumentLoad() {
                 key={s.key}
                 type="button"
                 className="cursor-pointer rounded-full border border-app-border bg-app-bg px-3 py-1 text-xs text-text-muted transition-colors hover:border-brand/50 hover:text-brand-fg"
-                onClick={() => setFile(sampleToFile(s))}
+                onClick={() => void loadFile(sampleToFile(s))}
               >
                 {s.label}
               </button>
@@ -263,9 +316,16 @@ export function DocumentLoad() {
             const span = f.full ? "md:col-span-2" : "";
             return (
               <div key={f.key} className={span}>
-                <label className="label">
+                <label className="label flex items-center gap-1.5">
                   {f.label}
                   {!f.required && <span className="font-normal text-text-muted"> (optional)</span>}
+                  {suggested.has(f.key) && (
+                    <span
+                      title="Suggested from document — please verify"
+                      aria-label="Suggested from document — please verify"
+                      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+                    />
+                  )}
                 </label>
                 {f.type === "select" ? (
                   <DarkSelect value={value} options={f.options ?? []} onChange={(v) => setValue(f.key, v)} />
