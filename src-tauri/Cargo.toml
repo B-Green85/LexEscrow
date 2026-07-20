@@ -82,6 +82,16 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = [
 ] }
 futures-util = "0.3"
 
+# Document text extraction (field suggestion at Document Load).
+# Excel reading
+calamine = { version = "0.24", features = ["dates"] }
+# Zip for DOCX extraction
+zip = "0.6"
+# PDF content streams are almost always FlateDecode-compressed. Poppler's
+# `pdftotext` is preferred when installed; this is what lets the built-in
+# fallback read real PDFs rather than only their object structure.
+flate2 = "1"
+
 [profile.dev]
 # Faster incremental builds during the hackathon.
 incremental = true

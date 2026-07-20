@@ -330,6 +330,50 @@ export async function loadArtifact(filename: string, bytes: Uint8Array): Promise
 }
 
 /**
+ * Plain text of a document, for trust-anchor suggestion at Document Load.
+ *
+ * Never throws and never rejects. Suggestion is advisory — the officer confirms
+ * every anchor before Continue, and LexGuard validates against the confirmed
+ * values — so a format the backend cannot read must degrade to "no suggestions"
+ * rather than an error the officer has to dismiss to get on with the workflow.
+ *
+ * In a plain browser there is no extractor, so only the formats the WebView can
+ * decode itself are handled: `.txt` and `.md` are read directly, and everything
+ * binary returns "". PDF/DOCX/XLSX suggestion is a desktop-only capability.
+ */
+export async function extractDocumentText(fileName: string, bytes: Uint8Array): Promise<string> {
+  try {
+    if (isTauri()) {
+      return await invoke<string>("extract_document_text_bytes", {
+        fileName,
+        fileBytes: Array.from(bytes),
+      });
+    }
+    return /\.(txt|md)$/i.test(fileName) ? new TextDecoder().decode(bytes) : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Plain text of a document already on disk, addressed by absolute path.
+ *
+ * The byte-oriented call above is what the UI uses — browser `File` objects
+ * expose no filesystem path. This variant serves callers that do hold one (a
+ * future Tauri drag-drop payload or folder walk), and is the only entry point
+ * that surfaces an error, since a caller supplying a path can act on the file
+ * being missing.
+ */
+export async function extractDocumentTextAtPath(filePath: string): Promise<string> {
+  try {
+    if (isTauri()) return await invoke<string>("extract_document_text", { filePath });
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Hash arbitrary bytes through ArtifactGuard, returning `sha256:<hex>`.
  *
  * A second call path into the same registry as `loadArtifact`, for artifacts

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useSession } from "../store/session";
+import * as backend from "../lib/backend";
 import { samplesForClass, sampleToFile } from "../lib/samples";
 import { mergeSuggestions, suggestAnchors } from "../lib/suggest-anchors";
 import {
@@ -183,19 +184,28 @@ export function DocumentLoad() {
 
   /**
    * Take a file and pre-fill whatever trust anchors its text confidently
-   * yields. Suggestions are advisory — LexGuard still matches the confirmed
-   * anchors against the parsed document — so an unreadable file (a real PDF or
-   * DOCX, which is binary) just leaves the form as it was.
+   * yields.
+   *
+   * Text comes from the Rust extractor rather than `File.text()`, which only
+   * ever produced usable output for `.txt`/`.md` — on a PDF or DOCX it returns
+   * the raw binary, from which nothing matches. The bytes are sent rather than a
+   * path because a browser `File` exposes no filesystem path, the same reason
+   * `loadArtifact` is byte-oriented.
+   *
+   * Suggestions are advisory — LexGuard still matches the confirmed anchors
+   * against the parsed document — so extraction failing for any reason leaves
+   * the form exactly as it was and never surfaces an error.
    */
   const loadFile = async (f: File | null) => {
     setFile(f);
     if (!f) return;
     let text: string;
     try {
-      text = await f.text();
+      text = await backend.extractDocumentText(f.name, new Uint8Array(await f.arrayBuffer()));
     } catch {
       return;
     }
+    if (!text.trim()) return;
     const { next, filled } = mergeSuggestions(
       assetClass,
       rawRef.current,
