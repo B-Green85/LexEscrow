@@ -20,7 +20,7 @@
  *   POST  http://localhost:3003/v2.1/accounts/:accountId/oauth/token
  *   POST  http://localhost:3003/reset
  */
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 
 const DEFAULT_PORT = 3003;
 
@@ -46,6 +46,18 @@ function log(message: string): void {
   console.log(`[docusign-mock] ${new Date().toISOString()} ${message}`);
 }
 
+/**
+ * Let the Vite dev server / demo webview call this mock from another origin.
+ * Set via `setHeader` so the values survive each `writeHead(status, headers)`
+ * below (Node merges the two header sets). Wildcard origin is fine — this
+ * server only returns local demo fixtures.
+ */
+function applyCors(res: ServerResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
 /** Age-derived status — the mock's whole lifecycle model. */
 function statusFor(createdAt: number, now: number): string {
   const age = now - createdAt;
@@ -59,6 +71,14 @@ export function startDocuSignAdapter(port: number = DEFAULT_PORT): Server {
   let seq = 0;
 
   const server = createServer((req, res) => {
+    applyCors(res);
+    if (req.method === "OPTIONS") {
+      // CORS preflight — no body, headers already applied above.
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
     const method = req.method ?? "GET";
 

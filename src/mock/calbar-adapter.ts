@@ -21,9 +21,21 @@
  * none may be added — a demo fixture that names a real licensee makes a claim
  * about a real person's standing that this server is in no position to make.
  */
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 
 const PORT = 3001;
+
+/**
+ * Let the Vite dev server / demo webview call this mock from another origin.
+ * Set via `setHeader` so the values survive each handler's later
+ * `writeHead(status, { content-type })` (Node merges the two header sets).
+ * A wildcard origin is fine: this server only ever returns local demo fixtures.
+ */
+function applyCors(res: ServerResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
 
 /**
  * The `/verify` fixture — a wholly fictional attorney.
@@ -49,6 +61,14 @@ function isKnownBarNumber(barNumber: string): boolean {
 }
 
 const server = createServer((req, res) => {
+  applyCors(res);
+  if (req.method === "OPTIONS") {
+    // CORS preflight — no body, headers already applied above.
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const match = url.pathname.match(/^\/calbar\/([^/]+)\/?$/);
 

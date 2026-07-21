@@ -15,7 +15,7 @@
  *   POST  http://localhost:3002/v2/transfers
  *   GET   http://localhost:3002/v2/entity/:licenseNumber
  */
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 
 /** The one license number the demo treats as active and hold-free. */
 export const DEMO_LICENSE = "C10-0001234-LIC";
@@ -31,11 +31,31 @@ function log(message: string): void {
 }
 
 /**
+ * Let the Vite dev server / demo webview call this mock from another origin.
+ * Set via `setHeader` so the values survive each `writeHead(status, headers)`
+ * below (Node merges the two header sets). Wildcard origin is fine — this
+ * server only returns local demo fixtures.
+ */
+function applyCors(res: ServerResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+/**
  * Start the mock Metrc adapter. Returns the server so callers can close it
  * (tests, or a demo runner shutting both adapters down together).
  */
 export function startMetrcAdapter(port: number = DEFAULT_PORT): Server {
   const server = createServer((req, res) => {
+    applyCors(res);
+    if (req.method === "OPTIONS") {
+      // CORS preflight — no body, headers already applied above.
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
     const method = req.method ?? "GET";
 
