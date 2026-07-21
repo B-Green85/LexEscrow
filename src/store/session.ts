@@ -750,30 +750,43 @@ export const useSession = create<SessionState>((set, get) => {
     setEntryMode: (mode) => set({ entryMode: mode }),
     setAssetClass: (cls) => set({ assetClass: cls }),
     openConfig: () =>
-      set((s) =>
-        s.screen === "config" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "config" },
-      ),
+      set((s) => {
+        if (s.screen === "config") {
+          // Navigate back — but if prevScreen is also "config" (a prior open
+          // that never recorded a real origin), fall back to "load" so the
+          // toggle can't loop or stall on the same screen.
+          return { screen: s.prevScreen !== "config" ? s.prevScreen : "load" };
+        }
+        return { prevScreen: s.screen, screen: "config" };
+      }),
     closeConfig: () => set((s) => ({ screen: s.prevScreen })),
     openBatch: () =>
-      set((s) =>
-        s.screen === "batch" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "batch" },
-      ),
+      set((s) => {
+        if (s.screen === "batch") {
+          return { screen: s.prevScreen !== "batch" ? s.prevScreen : "load" };
+        }
+        return { prevScreen: s.screen, screen: "batch" };
+      }),
 
     /** Screen 8 — standalone fingerprinting, outside any escrow workflow.
      *  Remembers where the officer came from so closing returns them there. */
     openAnchorReceiptConsole: () =>
-      set((s) =>
-        s.screen === "anchor-receipt"
-          ? { screen: s.prevScreen }
-          : { prevScreen: s.screen, screen: "anchor-receipt" },
-      ),
+      set((s) => {
+        if (s.screen === "anchor-receipt") {
+          return { screen: s.prevScreen !== "anchor-receipt" ? s.prevScreen : "load" };
+        }
+        return { prevScreen: s.screen, screen: "anchor-receipt" };
+      }),
 
     /** Screen 9 — the session history, reached from the File menu (Cmd+R).
      *  Toggles, so the same menu item that opens it closes it again. */
     openRecent: () =>
-      set((s) =>
-        s.screen === "recent" ? { screen: s.prevScreen } : { prevScreen: s.screen, screen: "recent" },
-      ),
+      set((s) => {
+        if (s.screen === "recent") {
+          return { screen: s.prevScreen !== "recent" ? s.prevScreen : "load" };
+        }
+        return { prevScreen: s.screen, screen: "recent" };
+      }),
 
     /**
      * First-run detection (spec §12 Screen 0).
