@@ -21,14 +21,32 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::vault::VaultState;
 
+/// Map the stored model string to a currently-valid Anthropic model ID.
+///
+/// The vault stores a provider *label* ("Claude") rather than a model ID, and
+/// older IDs (`claude-3-*`, `claude-instant`) are retired. Anything not on the
+/// current allow-list falls back to `claude-sonnet-4-6`, so the request can
+/// never 404 on the model string alone.
+fn normalize_model(model: &str) -> &'static str {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "claude-opus-4-6" => "claude-opus-4-6",
+        "claude-sonnet-4-6" => "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001" => "claude-haiku-4-5-20251001",
+        _ => "claude-sonnet-4-6",
+    }
+}
+
+/// The Anthropic Messages API body: exactly `model`, `max_tokens`, top-level
+/// `system`, and a `messages` array (user turn only). No other fields —
+/// Anthropic rejects unknown keys with "Extra inputs are not permitted", and
+/// a `system`-role entry inside `messages` is invalid (roles must be
+/// user/assistant). The system prompt lives only in the top-level `system`.
 fn request_body(model: &str, system: &str, user: &str) -> String {
     json!({
-        "model": model,
+        "model": normalize_model(model),
         "max_tokens": 4096,
         "system": system,
-        "user": user,
         "messages": [
-            { "role": "system", "content": system },
             { "role": "user", "content": user },
         ],
     })
@@ -48,11 +66,17 @@ pub async fn ai_request_http(
     }
     let body = request_body(&ai.provider_name, &system, &user);
 
+    // Path-identification log (Issue #4) — confirms the HTTP call executes in
+    // the Rust backend, not the WebView. Left in place for the next test run.
+    eprintln!(
+        "[ai] HTTP request executing in Rust backend (ai_request_http) -> {}",
+        ai.endpoint
+    );
+
     let client = reqwest::Client::new();
     let resp = client
         .post(&ai.endpoint)
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {}", ai.api_key))
         .header("x-api-key", &ai.api_key)
         .header("anthropic-version", "2023-06-01")
         .body(body)
@@ -85,10 +109,8 @@ pub async fn ai_request_ws(
         .as_str()
         .into_client_request()
         .map_err(|e| e.to_string())?;
+    // Anthropic authenticates via x-api-key, never Authorization: Bearer.
     let headers = request.headers_mut();
-    if let Ok(v) = format!("Bearer {}", ai.api_key).parse() {
-        headers.insert("authorization", v);
-    }
     if let Ok(v) = ai.api_key.parse() {
         headers.insert("x-api-key", v);
     }

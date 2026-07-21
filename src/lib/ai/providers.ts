@@ -179,6 +179,14 @@ export class HTTPProvider implements AIParserProvider {
     this.label = `${providerName} (HTTP)`;
   }
   parse(documentText: string, _schema: RetainerSchema): Promise<ParsedRetainerPayload> {
+    // Path-identification log (Issue #4) — marks that the request originates in
+    // the TypeScript provider layer. Paired with the eprintln! in ai.rs, the
+    // next test run shows whether the actual HTTP executed in Rust (this line
+    // AND the Rust line appear) or in the browser fetch fallback (only this
+    // line appears). Left in place for review.
+    console.log(
+      "[ai] HTTP request initiated from TypeScript provider layer (providers.ts -> backend.aiRequestHttp)",
+    );
     return parseWithTransport(backend.aiRequestHttp, documentText);
   }
   correct(field: string, current: number, sentinel: number): Promise<number | null> {

@@ -1067,16 +1067,36 @@ export async function aiRequestWs(system: string, user: string): Promise<string>
   return browserAiWs(system, user);
 }
 
+/**
+ * Map a stored model label / legacy id to a currently-valid Anthropic model id.
+ * Mirrors `normalize_model()` in src-tauri/src/ai.rs — anything off the current
+ * allow-list defaults to `claude-sonnet-4-6`, so the request can never 404 on
+ * the model string alone.
+ */
+function normalizeModel(model: string): string {
+  switch (model.trim().toLowerCase()) {
+    case "claude-opus-4-6":
+      return "claude-opus-4-6";
+    case "claude-sonnet-4-6":
+      return "claude-sonnet-4-6";
+    case "claude-haiku-4-5-20251001":
+      return "claude-haiku-4-5-20251001";
+    default:
+      return "claude-sonnet-4-6";
+  }
+}
+
+/**
+ * The Anthropic Messages API body: exactly `model`, `max_tokens`, top-level
+ * `system`, and a `messages` array (user turn only). No other fields — a
+ * top-level `user` field or a `system`-role message would be rejected.
+ */
 function aiBody(providerName: string, system: string, user: string): string {
   return JSON.stringify({
-    model: providerName,
+    model: normalizeModel(providerName),
     max_tokens: 4096,
     system,
-    user,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
+    messages: [{ role: "user", content: user }],
   });
 }
 
@@ -1087,7 +1107,6 @@ async function browserAiHttp(system: string, user: string): Promise<string> {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${ai.apiKey}`,
       "x-api-key": ai.apiKey,
       "anthropic-version": "2023-06-01",
     },
