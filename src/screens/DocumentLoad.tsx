@@ -2,9 +2,15 @@ import { useRef, useState } from "react";
 import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
 import { samplesForClass, sampleToFile } from "../lib/samples";
-import { mergeSuggestions, suggestAnchors } from "../lib/suggest-anchors";
+import {
+  mergeSuggestions,
+  suggestAnchors,
+  suggestionsToFields,
+  type AnchorSuggestions,
+} from "../lib/suggest-anchors";
 import {
   ASSET_CLASSES,
+  ASSET_CLASS_LIST,
   US_STATES,
   anchorsComplete,
   anchorsToTrustAnchors,
@@ -118,18 +124,29 @@ function DarkSelect({
   );
 }
 
+/** Empty per-class map, one entry for each asset class. */
+function byClass<T>(make: (cls: AssetClass) => T): Record<AssetClass, T> {
+  return Object.fromEntries(ASSET_CLASS_LIST.map((c) => [c, make(c)])) as Record<AssetClass, T>;
+}
+
 export function DocumentLoad() {
-  const { anchors, setAnchor, setRawAnchors, file, setFile, goToProcessing, error, busy, assetClass, setAssetClass } =
+  const { anchors, setAnchor, setRawAnchors, setFile, goToProcessing, error, busy, assetClass, setAssetClass } =
     useSession();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Raw per-class anchor record. Legal seeds from the store so its values
-  // survive a remount exactly as before; other classes start empty. On every
-  // change the record is projected onto the pipeline's TrustAnchors in the
-  // store — for Legal that projection is the identity, so nothing changes.
-  const [raw, setRaw] = useState<Record<string, string>>(() => {
-    const empty = emptyAnchorsFor(assetClass);
-    if (assetClass === "legal") {
+  // The screen holds every asset class's work in parallel, keyed by class:
+  // its uploaded file, its anchor-field values, the raw suggestion extraction,
+  // and the amber-dot / officer-touched bookkeeping. Switching class swaps which
+  // slot is shown and pushes it to the store; it never clears the others, so
+  // returning to a class restores exactly what was there with no re-extraction.
+  //
+  // Legal's field values seed from the store so a remount preserves them as
+  // before, and the active class seeds its file slot from the store for the
+  // same reason. The store always mirrors the *active* class — it is what the
+  // pipeline reads on Continue.
+  const seedRaw = (cls: AssetClass): Record<string, string> => {
+    const empty = emptyAnchorsFor(cls);
+    if (cls === "legal") {
       return {
         ...empty,
         attorneyBarNumber: anchors.attorneyBarNumber ?? "",
@@ -140,51 +157,81 @@ export function DocumentLoad() {
       };
     }
     return empty;
-  });
+  };
 
-  // Fields pre-filled from the document rather than typed by the officer. They
-  // carry an amber dot until confirmed; editing one clears its dot.
-  const [suggested, setSuggested] = useState<Set<string>>(new Set());
-  // Fields the officer has typed into. Suggestion never overwrites these, and
-  // the check has to survive the await in `loadFile`, hence the ref.
-  const touchedRef = useRef<Set<string>>(new Set());
-  const rawRef = useRef(raw);
+  const [filesByClass, setFilesByClass] = useState<Record<AssetClass, File | null>>(() =>
+    byClass((c) => (c === assetClass ? useSession.getState().file : null)),
+  );
+  const [rawByClass, setRawByClass] = useState<Record<AssetClass, Record<string, string>>>(() =>
+    byClass(seedRaw),
+  );
+  const [suggestionsByClass, setSuggestionsByClass] = useState<
+    Record<AssetClass, AnchorSuggestions | null>
+  >(() => byClass(() => null));
+  // Which fields carry an amber dot (suggested, not yet confirmed) per class.
+  const [suggestedByClass, setSuggestedByClass] = useState<Record<AssetClass, Set<string>>>(() =>
+    byClass(() => new Set<string>()),
+  );
+
+  // Refs mirror the maps the async loader mutates, so an extraction that resolves
+  // after a class switch still reads and writes the right slots without stale
+  // closures. `touchedRef` is ref-only — it never needs to trigger a render.
+  const filesRef = useRef(filesByClass);
+  const rawRef = useRef(rawByClass);
+  const touchedRef = useRef<Record<AssetClass, Set<string>>>(byClass(() => new Set<string>()));
 
   const descriptor = descriptorFor(assetClass);
+  const raw = rawByClass[assetClass];
+  const file = filesByClass[assetClass];
+  const suggested = suggestedByClass[assetClass];
+  // The raw extraction for this class, projected back to field keys, so an
+  // amber dot can name the value it proposed rather than just flag one exists.
+  const activeSuggestions = suggestionsByClass[assetClass];
+  const suggestedValues = activeSuggestions ? suggestionsToFields(assetClass, activeSuggestions) : {};
 
-  /** Push an anchor record to local state and both store projections. */
-  const commit = (cls: AssetClass, next: Record<string, string>) => {
-    rawRef.current = next;
-    setRaw(next);
-    setAnchor(anchorsToTrustAnchors(cls, next));
+  /** Point the store — what the pipeline reads on Continue — at a class's slot. */
+  const syncStore = (cls: AssetClass, rawForCls: Record<string, string>, fileForCls: File | null) => {
+    setAnchor(anchorsToTrustAnchors(cls, rawForCls));
     // The raw record too — TrustAnchors drops the class-specific fields that
     // CannaVerify needs (Metrc facility ID, license type).
-    setRawAnchors(next);
+    setRawAnchors(rawForCls);
+    setFile(fileForCls);
+  };
+
+  const writeFile = (cls: AssetClass, f: File | null) => {
+    filesRef.current = { ...filesRef.current, [cls]: f };
+    setFilesByClass(filesRef.current);
+  };
+  const writeRaw = (cls: AssetClass, next: Record<string, string>) => {
+    rawRef.current = { ...rawRef.current, [cls]: next };
+    setRawByClass(rawRef.current);
   };
 
   const selectClass = (cls: AssetClass) => {
     if (cls === assetClass) return;
     setAssetClass(cls);
-    touchedRef.current = new Set();
-    setSuggested(new Set());
-    commit(cls, emptyAnchorsFor(cls));
+    // Reveal that class's existing slot; every other class is left untouched.
+    syncStore(cls, rawRef.current[cls], filesRef.current[cls]);
   };
 
   const setValue = (key: string, v: string) => {
-    touchedRef.current.add(key);
+    const cls = assetClass;
+    touchedRef.current[cls].add(key);
     // Typed over — it is the officer's value now, so drop the suggestion mark.
-    setSuggested((prev) => {
-      if (!prev.has(key)) return prev;
-      const n = new Set(prev);
+    setSuggestedByClass((prev) => {
+      if (!prev[cls].has(key)) return prev;
+      const n = new Set(prev[cls]);
       n.delete(key);
-      return n;
+      return { ...prev, [cls]: n };
     });
-    commit(assetClass, { ...rawRef.current, [key]: v });
+    const next = { ...rawRef.current[cls], [key]: v };
+    writeRaw(cls, next);
+    syncStore(cls, next, filesRef.current[cls]);
   };
 
   /**
-   * Take a file and pre-fill whatever trust anchors its text confidently
-   * yields.
+   * Take a file for `cls` and pre-fill whatever trust anchors its text
+   * confidently yields — for that class's slot only, never any other.
    *
    * Text comes from the Rust extractor rather than `File.text()`, which only
    * ever produced usable output for `.txt`/`.md` — on a PDF or DOCX it returns
@@ -194,11 +241,15 @@ export function DocumentLoad() {
    *
    * Suggestions are advisory — LexGuard still matches the confirmed anchors
    * against the parsed document — so extraction failing for any reason leaves
-   * the form exactly as it was and never surfaces an error.
+   * the form exactly as it was and never surfaces an error. The store is only
+   * touched while `cls` is still the class on screen, so a slow extraction the
+   * officer has already navigated away from cannot overwrite the active class.
    */
-  const loadFile = async (f: File | null) => {
-    setFile(f);
+  const loadFile = async (f: File | null, cls: AssetClass) => {
+    writeFile(cls, f);
+    if (useSession.getState().assetClass === cls) setFile(f);
     if (!f) return;
+
     let text: string;
     try {
       text = await backend.extractDocumentText(f.name, new Uint8Array(await f.arrayBuffer()));
@@ -206,16 +257,21 @@ export function DocumentLoad() {
       return;
     }
     if (!text.trim()) return;
+
+    const suggestions = suggestAnchors(text, cls);
+    setSuggestionsByClass((prev) => ({ ...prev, [cls]: suggestions }));
+
     const { next, filled } = mergeSuggestions(
-      assetClass,
-      rawRef.current,
-      emptyAnchorsFor(assetClass),
-      suggestAnchors(text, assetClass),
-      touchedRef.current,
+      cls,
+      rawRef.current[cls],
+      emptyAnchorsFor(cls),
+      suggestions,
+      touchedRef.current[cls],
     );
     if (filled.length === 0) return;
-    commit(assetClass, next);
-    setSuggested(new Set(filled));
+    writeRaw(cls, next);
+    setSuggestedByClass((prev) => ({ ...prev, [cls]: new Set(filled) }));
+    if (useSession.getState().assetClass === cls) syncStore(cls, next, f);
   };
 
   const canContinue = !!file && anchorsComplete(assetClass, raw) && !busy;
@@ -267,7 +323,7 @@ export function DocumentLoad() {
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
-            void loadFile(e.dataTransfer.files?.[0] ?? null);
+            void loadFile(e.dataTransfer.files?.[0] ?? null, assetClass);
           }}
           className="group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-white/[0.15] bg-white/[0.16] p-8 backdrop-blur-md transition-all hover:border-[#3B82F6]/50"
         >
@@ -276,7 +332,7 @@ export function DocumentLoad() {
             type="file"
             accept=".txt,.pdf,.docx,.md,text/plain"
             className="hidden"
-            onChange={(e) => void loadFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => void loadFile(e.target.files?.[0] ?? null, assetClass)}
           />
           <div className="flex flex-col items-center justify-center text-center">
             <span className="text-text-muted transition-colors group-hover:text-brand-fg">
@@ -311,7 +367,7 @@ export function DocumentLoad() {
                 key={s.key}
                 type="button"
                 className="cursor-pointer rounded-full border border-app-border bg-app-bg px-3 py-1 text-xs text-text-muted transition-colors hover:border-brand/50 hover:text-brand-fg"
-                onClick={() => void loadFile(sampleToFile(s))}
+                onClick={() => void loadFile(sampleToFile(s), assetClass)}
               >
                 {s.label}
               </button>
@@ -329,13 +385,19 @@ export function DocumentLoad() {
                 <label className="label flex items-center gap-1.5">
                   {f.label}
                   {!f.required && <span className="font-normal text-text-muted"> (optional)</span>}
-                  {suggested.has(f.key) && (
-                    <span
-                      title="Suggested from document — please verify"
-                      aria-label="Suggested from document — please verify"
-                      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
-                    />
-                  )}
+                  {suggested.has(f.key) &&
+                    (() => {
+                      const hint = suggestedValues[f.key]
+                        ? `Suggested from document: “${suggestedValues[f.key]}” — please verify`
+                        : "Suggested from document — please verify";
+                      return (
+                        <span
+                          title={hint}
+                          aria-label={hint}
+                          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+                        />
+                      );
+                    })()}
                 </label>
                 {f.type === "select" ? (
                   <DarkSelect value={value} options={f.options ?? []} onChange={(v) => setValue(f.key, v)} />
