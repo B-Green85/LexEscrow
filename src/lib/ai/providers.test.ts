@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { extractJson, validateAndConvert } from "./providers";
+import { extractJson, parseWithTransport, validateAndConvert } from "./providers";
+import { systemPromptFor } from "./assetSchemas";
 import { ExecutionPath } from "../../lexguard/types";
 
 describe("extractJson", () => {
@@ -78,5 +79,49 @@ describe("validateAndConvert (Zod + cents→dollars)", () => {
 
   it("fails on a completely empty / junk object", () => {
     expect(validateAndConvert({}).success).toBe(false);
+  });
+});
+
+describe("parseWithTransport (document text + per-class prompt wiring)", () => {
+  const validJson = JSON.stringify(validCents);
+
+  it("passes the non-empty document text to the transport as the user message", async () => {
+    const calls: Array<{ system: string; user: string }> = [];
+    const transport = async (system: string, user: string) => {
+      calls.push({ system, user });
+      return validJson;
+    };
+
+    const docText = "RETAINER TERMINATION AGREEMENT — total held $5,000.00 ...";
+    const payload = await parseWithTransport(transport, docText, "legal");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].user).toBe(docText);
+    expect(calls[0].user.length).toBeGreaterThan(0);
+    expect(payload.totalHeld).toBe(5000);
+  });
+
+  it("selects the system prompt for the given asset class", async () => {
+    let seenSystem = "";
+    const transport = async (system: string, _user: string) => {
+      seenSystem = system;
+      return validJson;
+    };
+
+    await parseWithTransport(transport, "PURCHASE AGREEMENT for parcel ...", "real_estate");
+    expect(seenSystem).toBe(systemPromptFor("real_estate"));
+    expect(seenSystem).toContain("parcelNumber");
+  });
+
+  it("throws before calling the transport when the document text is empty", async () => {
+    let called = false;
+    const transport = async () => {
+      called = true;
+      return validJson;
+    };
+
+    await expect(parseWithTransport(transport, "", "legal")).rejects.toThrow(/nothing for the AI to parse/i);
+    await expect(parseWithTransport(transport, "   \n\t ", "legal")).rejects.toThrow();
+    expect(called).toBe(false);
   });
 });

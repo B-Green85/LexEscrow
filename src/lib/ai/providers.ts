@@ -21,7 +21,9 @@ import {
 } from "../../lexguard/types";
 import { parseRetainerDocument } from "../aiParse";
 import * as backend from "../backend";
-import { type RetainerSchema } from "./schema";
+import { type AssetClass } from "../assetClasses";
+import { systemPromptFor } from "./assetSchemas";
+import { type ExtractionSchema, type RetainerSchema } from "./schema";
 
 export interface AIParserProvider {
   readonly label: string;
@@ -42,24 +44,16 @@ export class ProviderUnavailableError extends Error {
   }
 }
 
-export const SYSTEM_PROMPT = `You are a legal document parser. Extract structured data from the provided retainer agreement text. Return ONLY a JSON object matching this exact schema — no preamble, no markdown, no explanation:
-
-{
-  clientId: string,
-  lawFirmWallet: string,
-  clientWallet: string,
-  totalHeld: number (integer cents),
-  earnedFees: number (integer cents),
-  unearnedBalance: number (integer cents),
-  disputedHours: number,
-  disputedAmount: number (integer cents),
-  signaturesVerified: boolean,
-  recommendedPath: 'DirectSettlement' | 'ArbitrationEscrow',
-  anomaliesFlagged: string[],
-  anomaliesSuppressed: boolean
+/**
+ * The asset class carried by an extraction schema. `schemaFor(cls)` tags every
+ * non-legal schema with `id = cls`; the legal path reuses `RETAINER_SCHEMA`,
+ * which has no `id`, so it falls back to `"legal"`. This is how the asset class
+ * chosen in the session store reaches the system-prompt selection here without
+ * changing the `parse()` signature.
+ */
+function assetClassOf(schema: RetainerSchema): AssetClass {
+  return ((schema as ExtractionSchema).id as AssetClass | undefined) ?? "legal";
 }
-
-All monetary values must be integer cents. If billing is disputed or hours are contested, set recommendedPath to ArbitrationEscrow. Flag any inconsistencies, missing signatures, or suspicious values in anomaliesFlagged.`;
 
 // ── Response handling ────────────────────────────────────────────────────────
 
@@ -154,12 +148,30 @@ function parseCorrectedCents(raw: string, field: string): number | null {
 
 type Transport = (system: string, user: string) => Promise<string>;
 
-async function parseWithTransport(transport: Transport, documentText: string): Promise<ParsedRetainerPayload> {
-  const first = validateAndConvert(extractJson(await transport(SYSTEM_PROMPT, documentText)));
+export async function parseWithTransport(
+  transport: Transport,
+  documentText: string,
+  assetClass: AssetClass,
+): Promise<ParsedRetainerPayload> {
+  // Guard: an empty document means the extractor produced nothing (unsupported
+  // format, failed OCR, a blank file). Sending an empty user message just makes
+  // the model invent zeros, so fail here — before the request — with a message
+  // that points at the real cause rather than a downstream validation error.
+  if (documentText.trim().length === 0) {
+    throw new Error(
+      "No text was extracted from the document, so there is nothing for the AI to parse. Execution was not started.",
+    );
+  }
+
+  const systemPrompt = systemPromptFor(assetClass);
+  // The document text IS the user message (transport → messages: [{ role: 'user',
+  // content: documentText }] in ai.rs / the browser fetch). Without it the model
+  // has nothing to read, which is the guard above.
+  const first = validateAndConvert(extractJson(await transport(systemPrompt, documentText)));
   if (first.success) return first.payload;
 
   // Retry once with a correction system prompt.
-  const retrySystem = `${SYSTEM_PROMPT}\n\nYour previous response was invalid (${first.error}). Return ONLY the JSON object described above — no preamble, no markdown, no explanation.`;
+  const retrySystem = `${systemPrompt}\n\nYour previous response was invalid (${first.error}). Return ONLY the JSON object described above — no preamble, no markdown, no explanation.`;
   const second = validateAndConvert(extractJson(await transport(retrySystem, documentText)));
   if (second.success) return second.payload;
 
@@ -191,7 +203,7 @@ export class HTTPProvider implements AIParserProvider {
   constructor(providerName: string) {
     this.label = `${providerName} (HTTP)`;
   }
-  parse(documentText: string, _schema: RetainerSchema): Promise<ParsedRetainerPayload> {
+  parse(documentText: string, schema: RetainerSchema): Promise<ParsedRetainerPayload> {
     // Path-identification log (Issue #4) — marks that the request originates in
     // the TypeScript provider layer. Paired with the eprintln! in ai.rs, the
     // next test run shows whether the actual HTTP executed in Rust (this line
@@ -200,7 +212,7 @@ export class HTTPProvider implements AIParserProvider {
     console.log(
       "[ai] HTTP request initiated from TypeScript provider layer (providers.ts -> backend.aiRequestHttp)",
     );
-    return parseWithTransport(backend.aiRequestHttp, documentText);
+    return parseWithTransport(backend.aiRequestHttp, documentText, assetClassOf(schema));
   }
   correct(field: string, current: number, sentinel: number): Promise<number | null> {
     return correctWithTransport(backend.aiRequestHttp, field, current, sentinel);
@@ -213,8 +225,8 @@ export class WebSocketProvider implements AIParserProvider {
   constructor(providerName: string) {
     this.label = `${providerName} (WebSocket)`;
   }
-  parse(documentText: string, _schema: RetainerSchema): Promise<ParsedRetainerPayload> {
-    return parseWithTransport(backend.aiRequestWs, documentText);
+  parse(documentText: string, schema: RetainerSchema): Promise<ParsedRetainerPayload> {
+    return parseWithTransport(backend.aiRequestWs, documentText, assetClassOf(schema));
   }
   correct(field: string, current: number, sentinel: number): Promise<number | null> {
     return correctWithTransport(backend.aiRequestWs, field, current, sentinel);
