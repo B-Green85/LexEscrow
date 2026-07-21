@@ -43,7 +43,20 @@ fn extract_plain(bytes: &[u8]) -> String {
 /// `None` distinguishes "poppler is not installed" from "poppler ran and found
 /// no text", so only the former falls through to the salvage scan below.
 fn pdftotext(path: &Path) -> Option<String> {
-    let out = Command::new("pdftotext")
+    // Try full Homebrew paths first, fall back to PATH — the Tauri process does
+    // not inherit Homebrew's bin directory in its PATH, so a bare command name
+    // fails to resolve even when poppler is installed.
+    let pdftotext = [
+        "/opt/homebrew/bin/pdftotext", // Apple Silicon
+        "/usr/local/bin/pdftotext",    // Intel Mac
+        "/usr/bin/pdftotext",          // Linux
+        "pdftotext",                   // PATH fallback
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .unwrap_or(&"pdftotext");
+
+    let out = Command::new(pdftotext)
         .args([path.to_str()?, "-"])
         .output()
         .ok()?;
