@@ -53,6 +53,7 @@ pub async fn ai_request_http(
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {}", ai.api_key))
         .header("x-api-key", &ai.api_key)
+        .header("anthropic-version", "2023-06-01")
         .body(body)
         .send()
         .await

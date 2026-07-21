@@ -1084,7 +1084,12 @@ async function browserAiHttp(system: string, user: string): Promise<string> {
   if (!ai || !ai.apiKey) throw new Error("No AI provider configured (unlock the vault).");
   const resp = await fetch(ai.endpoint, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${ai.apiKey}`, "x-api-key": ai.apiKey },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${ai.apiKey}`,
+      "x-api-key": ai.apiKey,
+      "anthropic-version": "2023-06-01",
+    },
     body: aiBody(ai.providerName, system, user),
   });
   const text = await resp.text();
