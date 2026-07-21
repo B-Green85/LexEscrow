@@ -63,9 +63,22 @@ All monetary values must be integer cents. If billing is disputed or hours are c
 
 // ── Response handling ────────────────────────────────────────────────────────
 
+/**
+ * Strip a leading ```json / ``` fence and a trailing ``` from a model response.
+ * Claude frequently wraps its JSON in a markdown code block despite being told
+ * not to; the fence makes JSON.parse fail, so remove it before parsing. A string
+ * with no fence is returned unchanged (aside from trimming).
+ */
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+}
+
 function tryParse(s: string): Record<string, unknown> | null {
   try {
-    const v = JSON.parse(s);
+    const v = JSON.parse(stripMarkdown(s));
     return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
   } catch {
     return null;
