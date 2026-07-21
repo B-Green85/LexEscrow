@@ -99,7 +99,7 @@ export function InfoTooltip({ title, explanation, learnMore }: InfoTooltipProps)
         <div
           role="dialog"
           aria-label={title}
-          className={`absolute left-0 z-50 max-w-xs rounded-lg border border-app-border
+          className={`absolute left-0 z-50 w-72 rounded-lg border border-app-border
             bg-app-card p-3 shadow-2xl shadow-black/50 ${
               placement === "top" ? "bottom-full mb-2" : "top-full mt-2"
             }`}
