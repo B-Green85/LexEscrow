@@ -24,6 +24,7 @@ use crate::vault::VaultState;
 fn request_body(model: &str, system: &str, user: &str) -> String {
     json!({
         "model": model,
+        "max_tokens": 4096,
         "system": system,
         "user": user,
         "messages": [

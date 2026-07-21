@@ -1070,6 +1070,7 @@ export async function aiRequestWs(system: string, user: string): Promise<string>
 function aiBody(providerName: string, system: string, user: string): string {
   return JSON.stringify({
     model: providerName,
+    max_tokens: 4096,
     system,
     user,
     messages: [
