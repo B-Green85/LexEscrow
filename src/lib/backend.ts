@@ -315,6 +315,35 @@ async function memAppendAudit(
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/**
+ * CA State Bar verification lookup — the raw JSON body from the adapter.
+ *
+ * Under Tauri this is issued by the Rust backend, where no browser origin
+ * policy applies; the lookup is a cross-origin GET and the WebView would
+ * otherwise be blocked by CORS. In a plain browser (`npm run dev`, tests) there
+ * is no backend, so the same request goes out as a direct `fetch` — the dev
+ * server reaches the mock adapter on port 3001 without a preflight.
+ *
+ * Rejects on a transport failure or non-2xx status; the BarVerify router
+ * (`lib/adapters/bar-verify`) turns a rejection into a `status: "error"`
+ * result, which is the safe value at a settlement gate.
+ */
+export async function verifyBarNumber(
+  barNumber: string,
+  state: string,
+  adapterUrl: string,
+): Promise<unknown> {
+  if (isTauri()) {
+    return invoke<unknown>("verify_bar_number", { barNumber, state, adapterUrl });
+  }
+  const url = `${adapterUrl.replace(/\/$/, "")}/verify/${encodeURIComponent(barNumber)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`${state} State Bar lookup failed with HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function loadArtifact(filename: string, bytes: Uint8Array): Promise<LoadedArtifact> {
   if (isTauri()) {
     return invoke<LoadedArtifact>("load_artifact", { filename, bytes: Array.from(bytes) });

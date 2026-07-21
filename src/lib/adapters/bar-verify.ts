@@ -20,6 +20,8 @@
  * result into a boolean that gates money.
  */
 
+import * as backend from "../backend";
+
 /** Every outcome a bar lookup can produce. */
 export interface BarVerifyResult {
   barNumber: string;
@@ -147,6 +149,11 @@ interface CalBarResponse {
  *
  * Under CRE this is a Chainlink Functions call whose result is written on-chain
  * by BFT consensus; locally it hits the mock CA Bar adapter on port 3001.
+ *
+ * The HTTP call is delegated to the backend (`backend.verifyBarNumber`), not
+ * issued from here: under Tauri it must run in Rust, where no browser origin
+ * policy blocks the cross-origin GET. The interpretation of the body — the
+ * safety-critical part — stays in this module.
  */
 async function verifyBarForState_CA(
   barNumber: string,
@@ -155,40 +162,36 @@ async function verifyBarForState_CA(
 ): Promise<BarVerifyResult> {
   const base: BarVerifyResult = { barNumber, state, status: "error", detail: "" };
 
+  let data: CalBarResponse;
   try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/verify/${encodeURIComponent(barNumber)}`);
-    if (!res.ok) {
-      return {
-        ...base,
-        detail: `California State Bar lookup failed with HTTP ${res.status}.`,
-      };
-    }
-
-    const data = (await res.json()) as CalBarResponse;
-    const status = (data.status ?? "").toLowerCase();
-
-    // An unrecognized status is an error, not a pass. The registry adding a
-    // value we have never seen must not resolve to "active" by default.
-    if (!KNOWN_STATUSES.has(status)) {
-      return {
-        ...base,
-        detail: `California State Bar returned an unrecognized status: ${data.status ?? "(none)"}.`,
-      };
-    }
-
-    return {
-      barNumber: data.barNumber ?? barNumber,
-      state,
-      status: status as BarVerifyResult["status"],
-      ...(data.attorneyName && { attorneyName: data.attorneyName }),
-      ...(data.admissionDate && { admissionDate: data.admissionDate }),
-      ...(data.firmName && { firmName: data.firmName }),
-      detail: data.detail ?? `California State Bar reports status: ${status}.`,
-    };
+    data = (await backend.verifyBarNumber(barNumber, state, baseUrl)) as CalBarResponse;
   } catch (e) {
+    // Transport failure or non-2xx status — both surface as a rejection and
+    // both mean the same thing to the gate: not verified.
     const message = e instanceof Error ? e.message : String(e);
     return { ...base, detail: `Could not reach the California State Bar adapter: ${message}` };
   }
+
+  const status = (data.status ?? "").toLowerCase();
+
+  // An unrecognized status is an error, not a pass. The registry adding a
+  // value we have never seen must not resolve to "active" by default.
+  if (!KNOWN_STATUSES.has(status)) {
+    return {
+      ...base,
+      detail: `California State Bar returned an unrecognized status: ${data.status ?? "(none)"}.`,
+    };
+  }
+
+  return {
+    barNumber: data.barNumber ?? barNumber,
+    state,
+    status: status as BarVerifyResult["status"],
+    ...(data.attorneyName && { attorneyName: data.attorneyName }),
+    ...(data.admissionDate && { admissionDate: data.admissionDate }),
+    ...(data.firmName && { firmName: data.firmName }),
+    detail: data.detail ?? `California State Bar reports status: ${status}.`,
+  };
 }
 
 /**

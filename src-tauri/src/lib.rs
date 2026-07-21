@@ -5,6 +5,7 @@
 //!   * `ArtifactGuardState` — session-scoped SHA-256 registry (Phase 2).
 //!   * `Db`                  — SQLite pool + hash-chained audit trail (Phase 3).
 
+mod adapters;
 mod ai;
 mod artifact_guard;
 mod cre;
@@ -109,6 +110,8 @@ pub fn run() {
             vault::vault_set_practice_panther,
             vault::vault_get_practice_panther_public,
             integrations::integration_send_webhook,
+            // External adapter HTTP calls (backend-issued, no WebView CORS)
+            adapters::verify_bar_number,
             // Document text extraction (field suggestion at Document Load)
             extractor::extract_document_text,
             extractor::extract_document_text_bytes,
