@@ -122,11 +122,34 @@ function extractionToPayload(x: AiExtraction): ParsedRetainerPayload {
   };
 }
 
+/**
+ * Drop top-level keys whose value is `null` so Zod `.default()` applies.
+ *
+ * The per-class system prompts tell the model to return `null` for a string
+ * field it cannot find (e.g. a retainer has no on-chain wallet addresses). But
+ * `AiExtractionSchema` types those as `z.string().default(ZERO_ADDRESS)`, and a
+ * Zod default only fills `undefined` — an explicit `null` is rejected with
+ * "expected string, received null", failing the whole parse and burning the
+ * retry. Removing null-valued keys turns "the model said not-found" into
+ * "absent", so the schema default (ZERO_ADDRESS for wallets, "C-UNKNOWN" for
+ * clientId, [] / false / 0 elsewhere) applies. The schema is flat, so a
+ * top-level pass is sufficient; a legitimately-required field that came back
+ * null still surfaces as "Required" rather than being masked.
+ */
+function dropNullValues(obj: unknown): unknown {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return obj;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== null) out[k] = v;
+  }
+  return out;
+}
+
 /** Validate a raw extraction object against the Zod schema and convert to a payload. */
 export function validateAndConvert(
   obj: unknown,
 ): { success: true; payload: ParsedRetainerPayload } | { success: false; error: string } {
-  const r = AiExtractionSchema.safeParse(obj);
+  const r = AiExtractionSchema.safeParse(dropNullValues(obj));
   if (!r.success) {
     const error = r.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
     return { success: false, error };

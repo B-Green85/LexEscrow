@@ -80,6 +80,52 @@ describe("validateAndConvert (Zod + cents→dollars)", () => {
   it("fails on a completely empty / junk object", () => {
     expect(validateAndConvert({}).success).toBe(false);
   });
+
+  it("coerces null string fields (model 'not found') to their schema defaults", () => {
+    const r = validateAndConvert({
+      ...validCents,
+      clientId: null,
+      lawFirmWallet: null,
+      clientWallet: null,
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.payload.clientId).toBe("C-UNKNOWN"); // schema default
+      expect(typeof r.payload.lawFirmWallet).toBe("string");
+      expect(r.payload.lawFirmWallet.length).toBeGreaterThan(0); // ZERO_ADDRESS default
+      expect(typeof r.payload.clientWallet).toBe("string");
+      expect(r.payload.clientWallet.length).toBeGreaterThan(0);
+    }
+  });
+
+  // Regression for the PDF-extraction fix: the real retainer that Claude
+  // returns has null wallet fields (no on-chain addresses in the document).
+  // This is the exact extraction object observed in the ai.rs debug logs.
+  it("validates the real retainer extraction with null wallets", () => {
+    const extracted = {
+      clientId: "HW-2026-0847",
+      lawFirmWallet: null,
+      clientWallet: null,
+      totalHeld: 1850000,
+      earnedFees: 620000,
+      unearnedBalance: 1230000,
+      disputedHours: 0,
+      disputedAmount: 0,
+      signaturesVerified: false,
+      recommendedPath: "DirectSettlement",
+      anomaliesFlagged: ["No law firm wallet address found in document"],
+      anomaliesSuppressed: false,
+    };
+    const r = validateAndConvert(extracted);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.payload.clientId).toBe("HW-2026-0847");
+      expect(r.payload.totalHeld).toBe(18500);
+      expect(r.payload.earnedFees).toBe(6200);
+      expect(r.payload.unearnedBalance).toBe(12300);
+      expect(r.payload.recommendedPath).toBe(ExecutionPath.DirectSettlement);
+    }
+  });
 });
 
 describe("parseWithTransport (document text + per-class prompt wiring)", () => {

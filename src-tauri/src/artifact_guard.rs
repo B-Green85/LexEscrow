@@ -200,7 +200,14 @@ pub fn load_artifact(
     filename: String,
     bytes: Vec<u8>,
 ) -> Result<LoadedArtifact, String> {
-    let normalized_text = normalize_artifact_text(&String::from_utf8_lossy(&bytes));
+    // The document text handed downstream (VDB / AI / LexGuard) must be the
+    // *extracted* text — pdftotext for PDF, the docx/xlsx readers for those,
+    // plain read for txt/md — not the raw file bytes reinterpreted as UTF-8.
+    // `from_utf8_lossy` on a PDF yields binary garbage (%PDF, object streams),
+    // which is what previously reached Claude as the user message. Hashing still
+    // runs over the raw bytes below, so integrity is unchanged.
+    let normalized_text =
+        normalize_artifact_text(&crate::extractor::extract_from_bytes(&filename, &bytes));
     let size = bytes.len();
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     let hash = guard.register(&filename, &bytes);
