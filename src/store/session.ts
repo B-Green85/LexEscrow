@@ -19,7 +19,7 @@ import {
   type LexGuardCorrection,
   type Escalation,
 } from "../lexguard/pipeline";
-import { auditValueFor, constraintFor, escalationFindings } from "../lib/corrections";
+import { auditValueFor, constraintFor, escalationFindings, type AnomalyDisposition } from "../lib/corrections";
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import { primeVDB, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
@@ -59,6 +59,13 @@ export type { LexGuardCorrection, Escalation, EscalationDiscrepancy } from "../l
 export interface HumanCorrectionInput {
   field: string;
   value: number | string;
+  /**
+   * `anomaliesSuppressed` only: the officer's per-anomaly dispositions. Each is
+   * logged as its own HUMAN_CORRECTION entry, and reaching `applyHumanCorrections`
+   * with these means every anomaly was Acknowledged (a Blocking disposition
+   * routes through `escalateAnomaliesFurther` instead).
+   */
+  dispositions?: AnomalyDisposition[];
 }
 
 /** One Stage 4 override of a LexGuard correction (spec §30). */
@@ -519,6 +526,8 @@ export interface SessionState {
   resolveEscalation: (choice: "review" | "ai" | "lexguard") => Promise<void>;
   resolveEscalationWithCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
   applyHumanCorrections: (corrections: HumanCorrectionInput[]) => Promise<void>;
+  /** Route a blocking-anomaly escalation to arbitration instead of settling. */
+  escalateAnomaliesFurther: (dispositions: AnomalyDisposition[]) => Promise<void>;
   applyHumanOverride: (override: HumanOverrideInput) => Promise<void>;
   buildAuditReport: () => Promise<string>;
   /** Printable audit report (spec §14 V1) — opens the browser print dialog. */
@@ -595,6 +604,28 @@ export const useSession = create<SessionState>((set, get) => {
       ai_attempt_2: auditValueFor(finding.field, finding.aiAttempt2),
       ai_attempt_3: auditValueFor(finding.field, finding.aiAttempt3),
       officer_corrected_value: auditValueFor(finding.field, officerValue),
+      officer_identity: get().operator,
+      attestation: true,
+      block_timestamp: new Date().toISOString(),
+    });
+  };
+
+  /**
+   * HUMAN_CORRECTION for one anomaly disposition (spec §32).
+   *
+   * The `anomaliesSuppressed` finding is not a value the officer restates — each
+   * flagged anomaly is dispositioned Acknowledged or Blocking, and each
+   * disposition is its own audit entry carrying the anomaly's description and the
+   * officer's choice. The description stands in for a field value, so the
+   * money-in-cents conversion the field logger applies does not apply here.
+   */
+  const logAnomalyDisposition = async (description: string, disposition: string) => {
+    await log("HUMAN_CORRECTION", {
+      field: "anomaliesSuppressed",
+      lexguard_module: "anomaly-watcher",
+      constraint: constraintFor("anomaly-watcher", "anomaliesSuppressed"),
+      anomaly_description: description,
+      officer_corrected_value: disposition,
       officer_identity: get().operator,
       attestation: true,
       block_timestamp: new Date().toISOString(),
@@ -2238,6 +2269,21 @@ export const useSession = create<SessionState>((set, get) => {
 
       for (const correction of corrections) {
         const finding = findings.find((f) => f.field === correction.field);
+
+        // anomaliesSuppressed: log each disposition on its own, then clear the
+        // flagged anomalies so the now-dispositioned finding does not re-trigger
+        // anomaly-watcher on re-validation. Reaching here means every anomaly was
+        // Acknowledged — a Blocking disposition goes through
+        // `escalateAnomaliesFurther`, never this path.
+        if (correction.dispositions) {
+          for (const d of correction.dispositions) {
+            await logAnomalyDisposition(d.description, d.disposition);
+          }
+          next.anomaliesFlagged = [];
+          next.anomaliesSuppressed = false;
+          continue;
+        }
+
         // `correctionField` names the payload field a finding writes to —
         // absent for findings that are attested to rather than restated (a
         // scope violation, a suppressed anomaly), which are logged but never
@@ -2282,6 +2328,41 @@ export const useSession = create<SessionState>((set, get) => {
       }
 
       await runPipelineAndRoute(next, vdb, sessionId, anchors, manualProvider, entryMode);
+    },
+
+    /**
+     * Blocking-anomaly path (spec §31). At least one flagged anomaly was
+     * dispositioned Blocking, so the escrow must not proceed to direct
+     * settlement. Every disposition is logged, the payload is routed to
+     * arbitration, and the session is held in an ESCALATED state — the dialog
+     * surfaces the block rather than advancing to settlement review.
+     */
+    escalateAnomaliesFurther: async (dispositions) => {
+      const { payload, sessionId } = get();
+      if (!payload || !sessionId) return;
+
+      set({ busy: true, error: null });
+      for (const d of dispositions) {
+        await logAnomalyDisposition(d.description, d.disposition);
+      }
+      const blockingCount = dispositions.filter((d) => d.disposition === "blocking").length;
+      await log("lexguard_escalation", {
+        module: "anomaly-watcher",
+        field: "anomaliesSuppressed",
+        user_decision: "blocking_escalation",
+        blocking_count: blockingCount,
+        total_anomalies: dispositions.length,
+        user: get().operator,
+      });
+
+      // Route to arbitration and hold. The anomalies stay on the payload as the
+      // record of what was flagged; the recommended path can no longer be direct
+      // settlement, and the session state reflects the deepened escalation.
+      set({
+        payload: { ...payload, recommendedPath: ExecutionPath.ArbitrationEscrow, anomaliesSuppressed: false },
+        busy: false,
+      });
+      await backend.updateSessionState(sessionId, "ESCALATED");
     },
 
     /**

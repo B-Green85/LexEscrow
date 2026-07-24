@@ -184,6 +184,72 @@ describe("HUMAN_CORRECTION", () => {
   });
 });
 
+describe("HUMAN_CORRECTION — anomaly dispositions (spec §31)", () => {
+  const anomalyEscalation: Escalation = {
+    module: "anomaly-watcher",
+    field: "anomaliesSuppressed",
+    fieldLabel: "Flagged Anomalies",
+    aiValue: "Routed to direct settlement",
+    observedValue: "2 anomaly(ies) flagged",
+    recommendation: "Route to arbitration or resolve the anomalies.",
+    documentExtractedValue: "2 anomaly(ies) flagged",
+    additionalDiscrepancies: [],
+  };
+  const anomalies = ["Retainer exceeds engagement cap", "Signature block unsigned"];
+
+  it("logs one HUMAN_CORRECTION per disposition, clears the flags, and proceeds to review", async () => {
+    const sessionId = await seedSession({
+      escalation: anomalyEscalation,
+      payload: payload({ unearnedBalance: 4200, anomaliesFlagged: anomalies }),
+    });
+
+    await useSession.getState().resolveEscalationWithCorrections([
+      {
+        field: "anomaliesSuppressed",
+        value: "2 anomaly(ies) acknowledged",
+        dispositions: anomalies.map((description) => ({
+          description,
+          disposition: "acknowledged" as const,
+        })),
+      },
+    ]);
+
+    const entries = await eventsOfType(sessionId, "HUMAN_CORRECTION");
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.anomaly_description)).toEqual(anomalies);
+    expect(entries.map((e) => e.officer_corrected_value)).toEqual(["acknowledged", "acknowledged"]);
+    expect(entries.every((e) => e.lexguard_module === "anomaly-watcher")).toBe(true);
+    expect(entries.every((e) => e.attestation === true)).toBe(true);
+
+    const state = useSession.getState();
+    // Acknowledged anomalies are cleared so re-validation does not re-escalate.
+    expect(state.payload?.anomaliesFlagged).toEqual([]);
+    expect(state.screen).toBe("review");
+  });
+
+  it("escalates blocking anomalies to arbitration without proceeding to settlement", async () => {
+    const sessionId = await seedSession({
+      escalation: anomalyEscalation,
+      payload: payload({ unearnedBalance: 4200, anomaliesFlagged: anomalies }),
+    });
+
+    await useSession.getState().escalateAnomaliesFurther([
+      { description: anomalies[0], disposition: "acknowledged" },
+      { description: anomalies[1], disposition: "blocking" },
+    ]);
+
+    const state = useSession.getState();
+    expect(state.payload?.recommendedPath).toBe(ExecutionPath.ArbitrationEscrow);
+    // Held in place — the session must not advance to settlement review.
+    expect(state.screen).toBe("escalation");
+
+    const entries = await eventsOfType(sessionId, "HUMAN_CORRECTION");
+    expect(entries).toHaveLength(2);
+    expect(entries.map((e) => e.anomaly_description)).toEqual(anomalies);
+    expect(entries.map((e) => e.officer_corrected_value)).toEqual(["acknowledged", "blocking"]);
+  });
+});
+
 describe("HUMAN_OVERRIDE", () => {
   const applied: LexGuardCorrection = {
     module: "payload-diff",

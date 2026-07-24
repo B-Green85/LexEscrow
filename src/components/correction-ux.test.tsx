@@ -252,21 +252,26 @@ const twoFields: Escalation = {
   ],
 };
 
-function escalation(esc: Escalation, normalizedText: string | null = SOURCE_TEXT) {
+function escalation(
+  esc: Escalation,
+  normalizedText: string | null = SOURCE_TEXT,
+  anomalies: string[] = [],
+) {
   const onConfirm = vi.fn();
-  const onReviewDocument = vi.fn();
+  const onEscalateFurther = vi.fn();
   render(
     <LexGuardEscalationView
       escalation={esc}
+      anomalies={anomalies}
       normalizedText={normalizedText}
       busy={false}
       onConfirm={onConfirm}
-      onReviewDocument={onReviewDocument}
+      onEscalateFurther={onEscalateFurther}
     />,
   );
   const confirm = () =>
     screen.getByRole("button", { name: /^Confirm All/ }) as HTMLButtonElement;
-  return { onConfirm, onReviewDocument, confirm };
+  return { onConfirm, onEscalateFurther, confirm };
 }
 
 describe("LexGuardEscalation — single field", () => {
@@ -348,12 +353,10 @@ describe("LexGuardEscalation — single field", () => {
     expect(onConfirm).toHaveBeenCalledWith([{ field: "totalHeld", value: 18525.5 }]);
   });
 
-  it("routes Review Document to its own handler without confirming", () => {
-    const { onConfirm, onReviewDocument } = escalation(singleField);
-    fireEvent.click(screen.getByRole("button", { name: "Review Document" }));
-
-    expect(onReviewDocument).toHaveBeenCalledTimes(1);
-    expect(onConfirm).not.toHaveBeenCalled();
+  it("has no Review Document button — View Source Document is the only document affordance", () => {
+    escalation(singleField);
+    expect(screen.queryByRole("button", { name: "Review Document" })).toBeNull();
+    expect(screen.getByRole("button", { name: "View Source Document" })).toBeTruthy();
   });
 });
 
@@ -416,6 +419,23 @@ describe("LexGuardEscalation — multi-field cascade", () => {
     type(screen.getAllByLabelText("Correct value")[1], "");
     expect(screen.getByTestId("field-check-1").textContent).toBe("");
   });
+
+  it("gates all fields behind one session-level attestation that survives field edits", () => {
+    escalation(twoFields);
+    // A single attestation checkbox for the whole escalation, not one per field.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+
+    // Editing either field must not reset the attestation — it is per-escalation,
+    // not per-field.
+    const inputs = screen.getAllByLabelText("Correct value");
+    type(inputs[0], "18000");
+    type(inputs[1], "187654");
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+  });
 });
 
 describe("LexGuardEscalation — a second escalation resets the gate", () => {
@@ -425,10 +445,11 @@ describe("LexGuardEscalation — a second escalation resets the gate", () => {
     const view = (esc: Escalation) => (
       <LexGuardEscalationView
         escalation={esc}
+        anomalies={[]}
         normalizedText={SOURCE_TEXT}
         busy={false}
         onConfirm={onConfirm}
-        onReviewDocument={vi.fn()}
+        onEscalateFurther={vi.fn()}
       />
     );
     const { rerender } = render(view(first));
@@ -505,6 +526,118 @@ describe("LexGuardEscalation — source document", () => {
     escalation(singleField, null);
     const button = screen.getByRole("button", { name: "View Source Document" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+  });
+});
+
+// ── LexGuardEscalation — anomaliesSuppressed disposition (spec §31) ─────────
+
+const anomalyEscalation: Escalation = {
+  module: "anomaly-watcher",
+  field: "anomaliesSuppressed",
+  fieldLabel: "Flagged Anomalies",
+  aiValue: "Routed to direct settlement",
+  observedValue: "2 anomaly(ies) flagged",
+  recommendation: "Route to arbitration or resolve the anomalies.",
+  documentExtractedValue: "2 anomaly(ies) flagged",
+  additionalDiscrepancies: [],
+};
+
+const ANOMALIES = [
+  "Retainer total exceeds the engagement cap by $2,000",
+  "Signature block is present but unsigned",
+];
+
+const ackAll = () =>
+  screen.getAllByRole("button", { name: "Acknowledged" }).forEach((b) => fireEvent.click(b));
+
+describe("LexGuardEscalation — anomaliesSuppressed disposition", () => {
+  it("lists each flagged anomaly with Acknowledged/Blocking controls, not a text input", () => {
+    escalation(anomalyEscalation, SOURCE_TEXT, ANOMALIES);
+
+    expect(screen.queryByLabelText("Correct value")).toBeNull();
+    expect(screen.getByText(ANOMALIES[0])).toBeTruthy();
+    expect(screen.getByText(ANOMALIES[1])).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Acknowledged" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Blocking" })).toHaveLength(2);
+  });
+
+  it("keeps Confirm All disabled until every anomaly is dispositioned", () => {
+    const { confirm } = escalation(anomalyEscalation, SOURCE_TEXT, ANOMALIES);
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(confirm().disabled).toBe(true);
+    expect(confirm().textContent).toContain("1 remaining");
+
+    const ack = screen.getAllByRole("button", { name: "Acknowledged" });
+    fireEvent.click(ack[0]);
+    expect(confirm().disabled).toBe(true); // second anomaly still undispositioned
+    fireEvent.click(ack[1]);
+    expect(confirm().disabled).toBe(false);
+    expect(confirm().textContent).toContain("0 remaining");
+  });
+
+  it("confirms with per-anomaly acknowledged dispositions when all are acknowledged", () => {
+    const { onConfirm, confirm } = escalation(anomalyEscalation, SOURCE_TEXT, ANOMALIES);
+    ackAll();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(confirm());
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    const [corrections] = onConfirm.mock.calls[0];
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0].field).toBe("anomaliesSuppressed");
+    expect(corrections[0].dispositions).toEqual([
+      { description: ANOMALIES[0], disposition: "acknowledged" },
+      { description: ANOMALIES[1], disposition: "acknowledged" },
+    ]);
+  });
+
+  it("hides the arbitration escalation until an anomaly is marked Blocking", () => {
+    escalation(anomalyEscalation, SOURCE_TEXT, ANOMALIES);
+    expect(screen.queryByRole("button", { name: "Escalate to Arbitration" })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Blocking" })[0]);
+    expect(screen.getByRole("button", { name: "Escalate to Arbitration" })).toBeTruthy();
+  });
+
+  it("blocks confirmation and routes to arbitration when any anomaly is Blocking", () => {
+    const { onConfirm, onEscalateFurther, confirm } = escalation(
+      anomalyEscalation,
+      SOURCE_TEXT,
+      ANOMALIES,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "Acknowledged" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Blocking" })[1]);
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    // A blocking anomaly cannot be confirmed, even with attestation and no
+    // remaining fields.
+    expect(confirm().disabled).toBe(true);
+
+    const escalateBtn = screen.getByRole("button", {
+      name: "Escalate to Arbitration",
+    }) as HTMLButtonElement;
+    expect(escalateBtn.disabled).toBe(false);
+    fireEvent.click(escalateBtn);
+
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onEscalateFurther).toHaveBeenCalledTimes(1);
+    expect(onEscalateFurther.mock.calls[0][0]).toEqual([
+      { description: ANOMALIES[0], disposition: "acknowledged" },
+      { description: ANOMALIES[1], disposition: "blocking" },
+    ]);
+  });
+
+  it("shows a blocked banner and disables both actions after escalating", () => {
+    const { confirm } = escalation(anomalyEscalation, SOURCE_TEXT, ANOMALIES);
+    fireEvent.click(screen.getAllByRole("button", { name: "Acknowledged" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Blocking" })[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Escalate to Arbitration" }));
+
+    expect(screen.getByTestId("escalated-further-banner")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Escalate to Arbitration" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(confirm().disabled).toBe(true);
   });
 });
 

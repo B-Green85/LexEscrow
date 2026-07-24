@@ -93,6 +93,20 @@ export function constraintFor(module: string, field: string): string {
 }
 
 /**
+ * How the officer dispositions a single flagged anomaly when the
+ * `anomaliesSuppressed` finding escalates (spec §31). `blocking` means the
+ * anomaly is real and the escrow must not direct-settle; `acknowledged` means
+ * the officer reviewed it and it does not block settlement.
+ */
+export type AnomalyChoice = "acknowledged" | "blocking";
+
+/** One anomaly plus the officer's disposition of it, carried into the audit log. */
+export interface AnomalyDisposition {
+  description: string;
+  disposition: AnomalyChoice;
+}
+
+/**
  * Flatten an escalation into the ordered list the dialog renders — the primary
  * finding first, then every additional discrepancy from the same pass (§31).
  */
