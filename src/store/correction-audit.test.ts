@@ -12,7 +12,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useSession } from "./session";
 import * as backend from "../lib/backend";
-import { primeVDB } from "../lexguard/vdb";
+import { primeVDB, queryVDB, type VDBStore } from "../lexguard/vdb";
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
 import type { Escalation, LexGuardCorrection } from "../lexguard/pipeline";
 
@@ -227,6 +227,34 @@ describe("HUMAN_CORRECTION — anomaly dispositions (spec §31)", () => {
     expect(state.screen).toBe("review");
   });
 
+  it("navigates forward without re-running the pipeline, even when a re-run would re-escalate", async () => {
+    // The default payload's arithmetic is broken (800 + 3200 ≠ 5000), so a
+    // pipeline re-run would re-escalate on it — which is exactly what remounts
+    // the escalation view and resets attestation. Acknowledging anomalies must
+    // navigate forward with the escalation cleared instead.
+    const sessionId = await seedSession({
+      escalation: anomalyEscalation,
+      payload: payload({ anomaliesFlagged: anomalies }),
+    });
+
+    await useSession.getState().resolveEscalationWithCorrections([
+      {
+        field: "anomaliesSuppressed",
+        value: "2 anomaly(ies) acknowledged",
+        dispositions: anomalies.map((description) => ({
+          description,
+          disposition: "acknowledged" as const,
+        })),
+      },
+    ]);
+
+    const state = useSession.getState();
+    expect(state.screen).toBe("review");
+    // A null escalation is the proof the view will not re-mount.
+    expect(state.escalation).toBeNull();
+    expect(await eventsOfType(sessionId, "HUMAN_CORRECTION")).toHaveLength(2);
+  });
+
   it("escalates blocking anomalies to arbitration without proceeding to settlement", async () => {
     const sessionId = await seedSession({
       escalation: anomalyEscalation,
@@ -340,6 +368,57 @@ describe("HUMAN_OVERRIDE", () => {
 
     expect(await eventsOfType(sessionId, "HUMAN_OVERRIDE")).toHaveLength(1);
     expect(await eventsOfType(sessionId, "HUMAN_CORRECTION")).toHaveLength(0);
+  });
+});
+
+describe("VDB anchor writeback (infinite re-escalation fix)", () => {
+  const unearnedEscalation: Escalation = {
+    module: "payload-diff",
+    field: "unearnedBalance",
+    fieldLabel: "Unearned Balance",
+    aiValue: "$14.00",
+    observedValue: "$14.00",
+    recommendation: "The unearned balance does not match the document.",
+    documentExtractedValue: 14,
+    correctionField: "unearnedBalance",
+    aiAttempt1: 14,
+    aiAttempt2: 14,
+    aiAttempt3: 14,
+    additionalDiscrepancies: [],
+  };
+
+  // A VDB whose only unearnedBalance anchor is the poisoned "$14" pulled from a
+  // duration clause ("...within fourteen (14) days").
+  const poisonedVdb = (): VDBStore => ({
+    sessionId: "seed",
+    artifactHash: "sha256:x",
+    primedAt: new Date("2026-07-18T12:00:00Z").toISOString(),
+    entries: [
+      { type: "numeric", value: 14, field: "unearnedBalance", section: "Termination", position: 100, confidence: 0.95 },
+    ],
+  });
+
+  it("writes the corrected value back so the poisoned anchor cannot re-escalate", async () => {
+    await seedSession({
+      escalation: unearnedEscalation,
+      vdb: poisonedVdb(),
+      payload: payload({ unearnedBalance: 14, earnedFees: 800, totalHeld: 5000 }),
+    });
+
+    await useSession.getState().resolveEscalationWithCorrections([
+      { field: "unearnedBalance", value: 4200 },
+    ]);
+
+    const state = useSession.getState();
+    // Under the old code, re-validation diffed 4200 against the stale $14 anchor
+    // and re-escalated forever. Now it compares against the written-back value.
+    expect(state.screen).toBe("review");
+    expect(state.escalation).toBeNull();
+    expect(state.payload?.unearnedBalance).toBe(4200);
+
+    const anchors = queryVDB(state.vdb as VDBStore, "numeric", "unearnedBalance").map((e) => Number(e.value));
+    expect(anchors).toContain(4200);
+    expect(anchors).not.toContain(14);
   });
 });
 

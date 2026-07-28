@@ -11,6 +11,8 @@
  * artifact changes (hash mismatch), the store is invalidated and re-primed.
  */
 
+import { isDurationNumeric } from "./anchor-matcher";
+
 export interface VDBEntry {
   type: "numeric" | "proper_noun" | "identifier" | "flag";
   value: string | number;
@@ -88,6 +90,9 @@ export async function primeVDB(
   NUMERIC.lastIndex = 0;
   while ((match = NUMERIC.exec(artifactText)) !== null) {
     if (match[0] === "" ) { NUMERIC.lastIndex++; continue; }
+    // Skip time/duration figures ("...within fourteen (14) days"). They are not
+    // dollar amounts, and anchoring them as one poisons numeric validation.
+    if (isDurationNumeric(artifactText, match.index + match[0].length)) continue;
     entries.push({
       type: "numeric",
       value: parseFloat(match[0].replace(/[$,]/g, "")),
@@ -148,6 +153,28 @@ export async function primeVDB(
 /** Query the primed store by entry type and optional inferred field. */
 export function queryVDB(store: VDBStore, type: VDBEntry["type"], field?: string): VDBEntry[] {
   return store.entries.filter((e) => e.type === type && (!field || e.field === field));
+}
+
+/**
+ * Overwrite the numeric anchor for a field with a human-confirmed value.
+ *
+ * After an officer restates a numeric field in the escalation dialog, that value
+ * is authoritative — but the VDB was primed from the original extraction, which
+ * may hold a stale or poisoned anchor for the field. Left in place, re-validation
+ * would keep diffing the corrected payload against the old anchor and re-escalate
+ * forever. This replaces every numeric entry for `field` with a single
+ * full-confidence entry carrying the confirmed value, so re-validation compares
+ * against what the human confirmed. Returns a new store; the input is untouched.
+ */
+export function setNumericAnchor(store: VDBStore, field: string, value: number): VDBStore {
+  const others = store.entries.filter((e) => !(e.type === "numeric" && e.field === field));
+  return {
+    ...store,
+    entries: [
+      ...others,
+      { type: "numeric", value, field, section: "Human correction", position: -1, confidence: 1 },
+    ],
+  };
 }
 
 /**

@@ -21,7 +21,7 @@ import {
 } from "../lexguard/pipeline";
 import { auditValueFor, constraintFor, escalationFindings, type AnomalyDisposition } from "../lib/corrections";
 import { ExecutionPath, type ParsedRetainerPayload, type TrustAnchors } from "../lexguard/types";
-import { primeVDB, type VDBStore } from "../lexguard/vdb";
+import { primeVDB, setNumericAnchor, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
 import { runCannaVerify as runCannaVerifyAdapters } from "../lib/cannaverify";
 import type { CannaVerifyConditions } from "../lib/cannaverify/types";
@@ -2266,6 +2266,22 @@ export const useSession = create<SessionState>((set, get) => {
       const findings = escalation ? escalationFindings(escalation) : [];
       const next: ParsedRetainerPayload = { ...payload };
       const writable = next as unknown as Record<string, number | string>;
+      // The officer's numeric values are written back to the VDB so re-validation
+      // compares against the human-confirmed figure, not the original extraction.
+      // Without this a poisoned anchor (e.g. "$14" pulled from "fourteen (14)
+      // days") never matches the corrected value and the field re-escalates
+      // forever.
+      let nextVdb = vdb;
+
+      // Acknowledging anomalies only *removes* a finding — unlike a restated
+      // value, it cannot introduce a new discrepancy. So a submission that is
+      // purely anomaly dispositions must navigate forward unconditionally rather
+      // than re-run the pipeline: a re-run can re-escalate, which remounts the
+      // escalation view and resets the attestation checkbox (spec §31 bug).
+      // Value corrections still re-validate below, so a bad value re-escalates
+      // (spec §29) — that path is unchanged.
+      const onlyAnomalyDispositions =
+        corrections.length > 0 && corrections.every((c) => c.dispositions !== undefined);
 
       for (const correction of corrections) {
         const finding = findings.find((f) => f.field === correction.field);
@@ -2295,6 +2311,12 @@ export const useSession = create<SessionState>((set, get) => {
           writable[correction.field] = correction.value;
         }
 
+        // Write the human-confirmed value back to the VDB anchor for the field.
+        const anchorField = target ?? correction.field;
+        if (nextVdb && typeof correction.value === "number") {
+          nextVdb = setNumericAnchor(nextVdb, anchorField, correction.value);
+        }
+
         await logHumanCorrection(
           {
             field: correction.field,
@@ -2310,12 +2332,15 @@ export const useSession = create<SessionState>((set, get) => {
         );
       }
 
-      set({ payload: next, escalation: null });
+      set({ payload: next, escalation: null, ...(nextVdb !== vdb && { vdb: nextVdb }) });
       await backend.updateSessionState(sessionId, "PARSING");
 
-      if (!vdb) {
-        // No VDB to re-validate against (a hydrated batch item, say) — the
-        // corrections still stand; send the officer to review.
+      // Navigate forward without re-running the pipeline when either there is
+      // nothing to re-validate against (a hydrated batch item with no VDB) or
+      // the corrections were purely anomaly acknowledgments (which cannot create
+      // a new discrepancy). This is the unconditional forward navigation that
+      // keeps the escalation view from re-mounting and resetting attestation.
+      if (onlyAnomalyDispositions || !nextVdb) {
         set({
           screen: "review",
           reviewOpenedAt: Date.now(),
@@ -2323,11 +2348,14 @@ export const useSession = create<SessionState>((set, get) => {
           acknowledged: false,
           busy: false,
         });
-        await log("review_screen_opened", { after_human_correction: true });
+        await log("review_screen_opened", {
+          after_human_correction: true,
+          anomaly_dispositioned: onlyAnomalyDispositions,
+        });
         return;
       }
 
-      await runPipelineAndRoute(next, vdb, sessionId, anchors, manualProvider, entryMode);
+      await runPipelineAndRoute(next, nextVdb, sessionId, anchors, manualProvider, entryMode);
     },
 
     /**

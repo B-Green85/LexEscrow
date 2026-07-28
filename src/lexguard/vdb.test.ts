@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { primeVDB, queryVDB, validateVDBIntegrity, inferFieldContext } from "./vdb";
+import { primeVDB, queryVDB, setNumericAnchor, validateVDBIntegrity, inferFieldContext } from "./vdb";
+import type { VDBStore } from "./vdb";
 
 const SAMPLE = [
   "RETAINER TERMINATION AGREEMENT",
@@ -66,5 +67,40 @@ describe("validateVDBIntegrity", () => {
   it("invalidates on hash mismatch (caller must re-prime)", async () => {
     const vdb = await primeVDB(SAMPLE, "sha256:abc", "s1");
     expect(validateVDBIntegrity(vdb, "sha256:CHANGED")).toBe(false);
+  });
+});
+
+describe("primeVDB — time/duration exclusion (poison fix)", () => {
+  const DOC = [
+    "TERMINATION",
+    "The Firm shall return all unearned fees within fourteen (14) days.",
+    "The unearned retainer balance is ($12,300.00).",
+  ].join("\n");
+
+  it("does not anchor a time/duration figure as a dollar amount", async () => {
+    const vdb = await primeVDB(DOC, "sha256:x", "s1");
+    const unearned = queryVDB(vdb, "numeric", "unearnedBalance").map((e) => Number(e.value));
+    // The real balance is anchored; the "(14) days" figure is not.
+    expect(unearned).toContain(12300);
+    expect(unearned).not.toContain(14);
+  });
+});
+
+describe("setNumericAnchor", () => {
+  it("replaces a field's numeric anchors with the human-confirmed value", async () => {
+    const vdb = await primeVDB(SAMPLE, "sha256:abc", "s1");
+    const updated = setNumericAnchor(vdb, "unearnedBalance", 4200);
+
+    expect(queryVDB(updated, "numeric", "unearnedBalance").map((e) => Number(e.value))).toEqual([4200]);
+    // Anchors for other fields are untouched.
+    expect(queryVDB(updated, "numeric", "totalHeld").map((e) => Number(e.value))).toContain(5000);
+    // The input store is not mutated.
+    expect(updated).not.toBe(vdb);
+  });
+
+  it("adds an anchor when the field had none", () => {
+    const empty: VDBStore = { sessionId: "s", artifactHash: "h", entries: [], primedAt: "t" };
+    const updated = setNumericAnchor(empty, "unearnedBalance", 999);
+    expect(queryVDB(updated, "numeric", "unearnedBalance").map((e) => Number(e.value))).toEqual([999]);
   });
 });
