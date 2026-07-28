@@ -11,6 +11,7 @@ import {
 import {
   ASSET_CLASSES,
   ASSET_CLASS_LIST,
+  EMAIL_RE,
   US_STATES,
   anchorsComplete,
   anchorsToTrustAnchors,
@@ -421,6 +422,67 @@ export function DocumentLoad() {
               </div>
             );
           })}
+        </div>
+
+        {/* Required signers — manual email per party, or an explicit in-app choice.
+            Email delivery addresses are never inferred from the document. */}
+        <div className="mt-6">
+          <label className="label">Required signers</label>
+          <p className="mt-0.5 text-xs text-text-muted">
+            For each party, enter an email to send a DocuSign request — or mark them to sign
+            in-app. A choice is required for every signer before you can continue.
+          </p>
+          <div className="mt-3 space-y-3">
+            {descriptor.signers.map((s) => {
+              const name = (raw[s.nameKey] ?? "").trim();
+              const emailValue = raw[s.emailKey] ?? "";
+              const inApp = (raw[s.modeKey] ?? "") === "in_app";
+              const emailValid = EMAIL_RE.test(emailValue.trim());
+              const statusText = inApp
+                ? "Signs in-app"
+                : emailValid
+                  ? "Emails via DocuSign"
+                  : "Choice required";
+              const statusCls = inApp || emailValid ? "text-emerald-400" : "text-amber-400";
+              return (
+                <div
+                  key={s.emailKey}
+                  className="rounded-lg border border-app-border bg-app-input p-4"
+                  data-testid={`signer-${s.emailKey}`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 truncate">
+                      <span className="text-sm font-semibold text-text-primary">{s.role}</span>
+                      <span className="ml-2 text-xs text-text-muted">{name || "— enter name above —"}</span>
+                    </div>
+                    <span className={`shrink-0 text-xs font-medium ${statusCls}`} data-testid={`signer-status-${s.emailKey}`}>
+                      {statusText}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <input
+                      className="input min-w-0 flex-1"
+                      type="email"
+                      aria-label={`${s.role} email`}
+                      placeholder={`${s.role} email address`}
+                      value={emailValue}
+                      disabled={inApp}
+                      onChange={(e) => setValue(s.emailKey, e.target.value)}
+                    />
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-text-muted">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-app-border accent-brand focus:ring-2 focus:ring-brand/40"
+                        checked={inApp}
+                        onChange={(e) => setValue(s.modeKey, e.target.checked ? "in_app" : "")}
+                      />
+                      Sign in-app (no email)
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {error && (

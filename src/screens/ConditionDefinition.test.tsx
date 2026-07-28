@@ -25,13 +25,12 @@ function filledAnchors(cls: AssetClass): Record<string, string> {
   for (const field of ASSET_CLASSES[cls].anchorFields) {
     if (raw[field.key]) continue;
     raw[field.key] =
-      field.type === "email"
-        ? `${field.key.toLowerCase()}@example.com`
-        : field.type === "money"
-          ? "100000"
-          : field.type === "state"
-            ? "California"
-            : `${field.label} Value`;
+      field.type === "money" ? "100000" : field.type === "state" ? "California" : `${field.label} Value`;
+  }
+  // Signer emails are entered per signer (no longer anchor fields) — fill them
+  // so each party routes to a DocuSign email and "Send for Signature" is offered.
+  for (const s of ASSET_CLASSES[cls].signers) {
+    raw[s.emailKey] = `${s.emailKey.toLowerCase()}@example.com`;
   }
   return raw;
 }

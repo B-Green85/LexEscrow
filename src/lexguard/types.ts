@@ -65,6 +65,13 @@ export interface TrustAnchors {
   clientFullLegalName: string;
   clientEmail: string;
   clientPhone?: string;
+  /**
+   * Primary party's signature email, entered manually on Document Load. Optional
+   * and **never populated by AI parsing** — the AI extraction schema no longer
+   * asks for emails, because the model must not determine where signature
+   * requests are delivered. Blank means that party signs in-app.
+   */
+  email?: string;
 }
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";

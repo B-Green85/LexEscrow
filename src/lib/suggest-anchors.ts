@@ -21,8 +21,6 @@ export interface AnchorSuggestions {
   // Common across classes
   primaryPartyName?: string; // buyer, client, licensee, assignee
   secondaryPartyName?: string; // seller, attorney, licensor, assignor
-  primaryEmail?: string;
-  secondaryEmail?: string;
   amountCents?: number; // largest dollar amount found
 
   // Legal
@@ -138,13 +136,6 @@ function labelledEntity(text: string, labels: string): string | undefined {
 
 // ── Common extractors ────────────────────────────────────────────────────────
 
-const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-
-/** Distinct emails in document order. A repeated address is one party, not two. */
-function emails(text: string): string[] {
-  return [...new Set(text.match(EMAIL_RE) ?? [])];
-}
-
 /**
  * Largest dollar figure in the document, in cents — the purchase price /
  * retainer total is almost always the biggest number on the page.
@@ -207,10 +198,8 @@ export function suggestAnchors(text: string, assetClass: string): AnchorSuggesti
     if (v !== undefined) out[k] = v;
   };
 
-  // Common across every class.
-  const [first, second] = emails(text);
-  put("primaryEmail", first);
-  put("secondaryEmail", second);
+  // Common across every class. Emails are intentionally never suggested — a
+  // signature address must be entered manually, never inferred from the document.
   put("amountCents", largestAmountCents(text));
   put("primaryPartyName", labelledName(text, PRIMARY_LABELS));
   put("secondaryPartyName", labelledName(text, SECONDARY_LABELS));
@@ -343,7 +332,6 @@ export function suggestionsToFields(
     case "legal":
       put("attorneyBarNumber", s.barNumber);
       put("clientFullLegalName", s.clientName ?? s.primaryPartyName);
-      put("clientEmail", s.primaryEmail);
       break;
 
     case "real_estate":
@@ -352,8 +340,6 @@ export function suggestionsToFields(
       put("state", s.state);
       put("buyerName", s.primaryPartyName);
       put("sellerName", s.secondaryPartyName);
-      put("buyerEmail", s.primaryEmail);
-      put("sellerEmail", s.secondaryEmail);
       put("purchasePrice", money);
       break;
 
@@ -362,16 +348,12 @@ export function suggestionsToFields(
       put("sellerEntityName", s.sellerEntity ?? s.secondaryPartyName);
       put("ein", s.ein);
       put("purchasePrice", money);
-      put("buyerEmail", s.primaryEmail);
-      put("sellerEmail", s.secondaryEmail);
       break;
 
     case "ip":
       put("usptoFilingNumber", s.usptoNumber);
       put("licenseeName", s.primaryPartyName);
       put("licensorName", s.secondaryPartyName);
-      put("licenseeEmail", s.primaryEmail);
-      put("licensorEmail", s.secondaryEmail);
       put("royaltyRate", s.royaltyRate);
       break;
 
@@ -381,8 +363,6 @@ export function suggestionsToFields(
       put("appraisedValue", money);
       put("buyerName", s.primaryPartyName);
       put("sellerName", s.secondaryPartyName);
-      put("buyerEmail", s.primaryEmail);
-      put("sellerEmail", s.secondaryEmail);
       break;
 
     case "natural_resources":
@@ -392,7 +372,6 @@ export function suggestionsToFields(
       put("acreage", s.acreage);
       put("buyerName", s.primaryPartyName);
       put("sellerName", s.secondaryPartyName);
-      put("buyerEmail", s.primaryEmail);
       break;
 
     case "cannabis_ind":
@@ -401,7 +380,6 @@ export function suggestionsToFields(
       put("licenseType", s.licenseType ? SELECT_LICENSE[s.licenseType] : undefined);
       put("buyerName", s.primaryPartyName);
       put("sellerName", s.secondaryPartyName);
-      put("buyerEmail", s.primaryEmail);
       break;
   }
 

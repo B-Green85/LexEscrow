@@ -18,7 +18,7 @@
 
 import { useMemo, useState } from "react";
 import { useSession } from "../store/session";
-import { descriptorFor, ASSET_CLASSES, type AssetClass } from "../lib/assetClasses";
+import { descriptorFor, ASSET_CLASSES, EMAIL_RE, type AssetClass } from "../lib/assetClasses";
 import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
 import { EmbeddedSigningPanel } from "../components/EmbeddedSigningPanel";
 import type {
@@ -37,55 +37,78 @@ export type { EmbeddedSigningTarget } from "../lib/esign";
 // ── Signer derivation ────────────────────────────────────────────────────────
 
 /**
- * Build the signer list from the trust anchors collected at Stage 1.
+ * A required signer plus its resolved delivery route. `mode` is decided on
+ * Document Load: `"email"` when the officer entered an address (DocuSign emails
+ * it), `"in_app"` when they marked the party to sign in-app. For an in-app
+ * signer, `email` is a synthetic recipient id — the DocuSign layer needs a
+ * unique email and `clientUserId`, but no message is ever delivered to it.
+ */
+export interface RequiredSigner extends ESignSigner {
+  mode: "email" | "in_app";
+}
+
+const signerSlug = (s: string): string =>
+  s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "signer";
+
+/**
+ * Synthetic recipient id for an in-app signer. Deterministic, so the envelope
+ * raised for the ceremony and the "signed in app" badge derive the same value.
+ * No mail is delivered here — the address exists only to satisfy DocuSign's
+ * per-recipient email + `clientUserId` requirement for embedded signing.
+ */
+export function syntheticSignerEmail(name: string, role: string): string {
+  return `${signerSlug(name)}.${signerSlug(role)}@in-app.lexescrow.local`;
+}
+
+/**
+ * Build the signer list from the manually-entered trust anchors (spec §23).
  *
- * Every asset class names its parties differently (buyer/seller,
- * licensee/licensor, client/law firm), so rather than hardcode seven shapes we
- * read the class's own anchor field definitions: each `email` field is paired
- * with the sibling `*Name` field sharing its prefix. Legal's
- * `clientFullLegalName` + `clientEmail` does not follow that convention, so the
- * class's declared primary party is used as the fallback pairing.
+ * Both parties of the class are required signers. Each routes by the choice the
+ * officer made on Document Load: a valid email → DocuSign email; otherwise
+ * in-app signing with a synthetic recipient id. Emails are never inferred from
+ * the document — the AI extraction no longer captures them at all.
  */
 export function deriveSigners(
   assetClass: AssetClass,
   anchors: TrustAnchors,
   rawAnchors: Record<string, string>,
-): ESignSigner[] {
+): RequiredSigner[] {
   const descriptor = ASSET_CLASSES[assetClass];
-  const { primaryParty, primaryEmail } = descriptor.trustAnchorMap;
-  const out: ESignSigner[] = [];
+  const out: RequiredSigner[] = [];
   const seen = new Set<string>();
 
-  const push = (name: string, email: string, role: string) => {
+  const push = (name: string, email: string, role: string, mode: "email" | "in_app") => {
     const key = email.trim().toLowerCase();
     if (!name.trim() || !key || seen.has(key)) return;
     seen.add(key);
     // Equal routing order → DocuSign sends to everyone at once. Escrow
     // signatures are peers, not a chain of approvals.
-    out.push({ name: name.trim(), email: email.trim(), role, routingOrder: 1 });
+    out.push({ name: name.trim(), email: email.trim(), role, routingOrder: 1, mode });
   };
 
-  for (const field of descriptor.anchorFields) {
-    if (field.type !== "email") continue;
-    const email = rawAnchors[field.key] ?? "";
-    if (!email.trim()) continue;
+  const route = (name: string, role: string, email: string, inApp: boolean) => {
+    if (!inApp && EMAIL_RE.test(email.trim())) {
+      push(name, email.trim(), role, "email");
+    } else {
+      push(name, syntheticSignerEmail(name, role), role, "in_app");
+    }
+  };
 
-    const prefix = field.key.replace(/Email$/i, "");
-    const nameKey =
-      [`${prefix}Name`, `${prefix}FullLegalName`, `${prefix}EntityName`].find(
-        (k) => (rawAnchors[k] ?? "").trim().length > 0,
-      ) ?? (field.key === primaryEmail ? primaryParty : undefined);
-
-    const name = (nameKey && rawAnchors[nameKey]) || "";
-    // `role` mirrors the class's own label for this party, e.g. "Buyer".
-    const role = prefix.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (c) => c.toUpperCase());
-    push(name, email, role || "Signer");
+  for (const s of descriptor.signers) {
+    const name = (rawAnchors[s.nameKey] ?? "").trim();
+    if (!name) continue; // no name → this party cannot be a signer yet
+    route(name, s.role, rawAnchors[s.emailKey] ?? "", (rawAnchors[s.modeKey] ?? "") === "in_app");
   }
 
-  // Fallback: the projected TrustAnchors always carry the primary party, even
-  // when the raw record is empty (e.g. a session hydrated from a batch item).
-  if (out.length === 0) {
-    push(anchors.clientFullLegalName, anchors.clientEmail, descriptor.partyLabels[0]);
+  // Fallback: a session hydrated from a batch item carries the projected
+  // TrustAnchors but an empty raw record.
+  if (out.length === 0 && anchors.clientFullLegalName.trim()) {
+    route(
+      anchors.clientFullLegalName,
+      descriptor.partyLabels[0],
+      (anchors.email ?? anchors.clientEmail ?? "").trim(),
+      false,
+    );
   }
   return out;
 }
@@ -147,67 +170,61 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
 // ── Signer row ───────────────────────────────────────────────────────────────
 
 /**
- * One required signer, with both routes to their signature.
+ * One required signer, with the single route decided on Document Load.
  *
- * The choice is about *who the signer is*, not about convenience. An external
- * party — client, counterparty, opposing counsel — gets an email, because
- * LexEscrow has no standing to authenticate them and DocuSign's own identity
- * assurance is the point. An internal party is already authenticated to this
- * machine and this vault, so routing them through an inbox adds a hop and
- * proves nothing extra.
- *
- * Both routes converge: same envelope, same certificate, same AnchorReceipt
- * registration, same AnchorMatcher check.
+ * There is no email-vs-in-app toggle here anymore: the choice was made when the
+ * officer entered (or omitted) the party's email. A signer with an email gets a
+ * DocuSign envelope emailed to that address; a signer marked in-app signs in
+ * LexEscrow with no email sent. Both routes converge on the same envelope,
+ * certificate, AnchorReceipt registration, and AnchorMatcher check.
  */
 function SignerRow({
   signer,
   signedInApp,
   busy,
   preparing,
-  canSendEmail,
-  canSignInApp,
+  canAct,
   onSendEmail,
   onSignHere,
 }: {
-  signer: ESignSigner;
+  signer: RequiredSigner;
   signedInApp: boolean;
   busy: boolean;
   preparing: boolean;
-  canSendEmail: boolean;
-  canSignInApp: boolean;
+  canAct: boolean;
   onSendEmail: () => void;
   onSignHere: () => void;
 }) {
+  const isEmail = signer.mode === "email";
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 py-1 text-sm">
       <span className="min-w-0">
         <span className="text-text-primary">{signer.name}</span>{" "}
-        <span className="truncate text-xs text-text-muted" title={signer.email}>
-          · {signer.role} · {signer.email}
+        <span className="truncate text-xs text-text-muted" title={isEmail ? signer.email : undefined}>
+          · {signer.role} · {isEmail ? signer.email : "signs in-app"}
         </span>
       </span>
 
       {signedInApp ? (
         <span className="badge badge-emerald">✅ Signed in app</span>
+      ) : isEmail ? (
+        <button
+          className="btn btn-secondary btn-sm shrink-0"
+          disabled={!canAct || busy}
+          onClick={onSendEmail}
+          title={`Email a DocuSign envelope to ${signer.email}`}
+        >
+          Send Email
+        </button>
       ) : (
-        <span className="flex shrink-0 gap-1.5">
-          <button
-            className="btn btn-secondary btn-sm"
-            disabled={!canSendEmail || busy}
-            onClick={onSendEmail}
-            title={`Email a DocuSign envelope to ${signer.email}`}
-          >
-            Send Email
-          </button>
-          <button
-            className="btn btn-primary btn-sm"
-            disabled={!canSignInApp || busy || preparing}
-            onClick={onSignHere}
-            title={`Sign in LexEscrow as ${signer.name} — no email sent`}
-          >
-            {preparing ? "Opening…" : "Sign Here"}
-          </button>
-        </span>
+        <button
+          className="btn btn-primary btn-sm shrink-0"
+          disabled={!canAct || busy || preparing}
+          onClick={onSignHere}
+          title={`Sign in LexEscrow as ${signer.name} — no email sent`}
+        >
+          {preparing ? "Opening…" : "Sign Here"}
+        </button>
       )}
     </li>
   );
@@ -488,8 +505,11 @@ export function ConditionDefinitionView({
   );
 
   const documentReady = !!artifact;
+  // Only email-route signers are dispatched by the bulk send; in-app signers
+  // sign per-row via "Sign Here".
+  const emailSigners = useMemo(() => signers.filter((s) => s.mode === "email"), [signers]);
   const send = async () => {
-    await onSendForSignature(artifact?.filename ?? "Escrow document", signers, subject, message);
+    await onSendForSignature(artifact?.filename ?? "Escrow document", emailSigners, subject, message);
     setDrawerOpen(false);
   };
 
@@ -561,7 +581,7 @@ export function ConditionDefinitionView({
         {/* 3 — Multi-party signature */}
         <ConditionCard
           title="Multi-party signature conditions"
-          subtitle="DocuSign eSignature — signers drawn from trust anchors"
+          subtitle="DocuSign eSignature — email parties get an envelope; no-email parties sign in-app"
           status={
             eSignEnvelopes.length === 0
               ? { cls: "badge badge-slate", text: "⏳ Not sent" }
@@ -572,7 +592,7 @@ export function ConditionDefinitionView({
         >
           {signers.length === 0 ? (
             <p className="text-sm text-text-muted">
-              No signer contact details were captured in the trust anchors for this session.
+              No signers could be derived — enter each party's name in the trust anchors first.
             </p>
           ) : (
             <>
@@ -580,8 +600,8 @@ export function ConditionDefinitionView({
                 Required signers
               </div>
               <p className="mt-0.5 text-[11px] text-text-muted">
-                Send Email for external parties · Sign Here for internal parties, signed in
-                LexEscrow with no email sent.
+                The route for each party was chosen on Document Load: an email address sends a
+                DocuSign envelope; no email means the party signs in-app here.
               </p>
               <ul className="mt-1.5 divide-y divide-app-border">
                 {signers.map((s) => (
@@ -591,8 +611,7 @@ export function ConditionDefinitionView({
                     signedInApp={signedInApp.has(s.email.trim().toLowerCase())}
                     busy={busy}
                     preparing={preparing === s.email}
-                    canSendEmail={documentReady}
-                    canSignInApp={documentReady && !!onSignInApp}
+                    canAct={documentReady && (s.mode === "email" || !!onSignInApp)}
                     onSendEmail={() =>
                       void onSendForSignature(
                         artifact?.filename ?? "Escrow document",
@@ -606,15 +625,16 @@ export function ConditionDefinitionView({
                 ))}
               </ul>
 
-              {!drawerOpen ? (
-                <button
-                  className="btn btn-primary mt-4"
-                  disabled={!documentReady || busy}
-                  onClick={() => setDrawerOpen(true)}
-                >
-                  Send for Signature
-                </button>
-              ) : (
+              {emailSigners.length > 0 &&
+                (!drawerOpen ? (
+                  <button
+                    className="btn btn-primary mt-4"
+                    disabled={!documentReady || busy}
+                    onClick={() => setDrawerOpen(true)}
+                  >
+                    Send for Signature ({emailSigners.length} via email)
+                  </button>
+                ) : (
                 <div className="mt-4 space-y-3 rounded-lg border border-app-border bg-app-input p-4">
                   <div>
                     <label className="label" htmlFor="esign-subject">
@@ -644,14 +664,14 @@ export function ConditionDefinitionView({
                       disabled={busy || !subject.trim()}
                       onClick={() => void send()}
                     >
-                      {busy ? "Sending…" : `Send to ${signers.length} signer${signers.length > 1 ? "s" : ""}`}
+                      {busy ? "Sending…" : `Send to ${emailSigners.length} signer${emailSigners.length > 1 ? "s" : ""}`}
                     </button>
                     <button className="btn btn-secondary" onClick={() => setDrawerOpen(false)}>
                       Cancel
                     </button>
                   </div>
                 </div>
-              )}
+              ))}
             </>
           )}
 

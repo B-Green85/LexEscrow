@@ -60,7 +60,11 @@ vi.mock("../lib/esign", async (importOriginal) => ({
 }));
 
 import { EmbeddedSigningPanel, isSigningComplete, outcomeFromUrl } from "./EmbeddedSigningPanel";
-import { ConditionDefinitionView, type ConditionDefinitionViewProps } from "../screens/ConditionDefinition";
+import {
+  ConditionDefinitionView,
+  syntheticSignerEmail,
+  type ConditionDefinitionViewProps,
+} from "../screens/ConditionDefinition";
 import { anchorsToTrustAnchors, ASSET_CLASSES, emptyAnchorsFor, type AssetClass } from "../lib/assetClasses";
 
 const SIGNING_URL = "https://demo.docusign.net/Signing/StartInSession?t=abc123";
@@ -310,18 +314,21 @@ describe("outcomeFromUrl", () => {
 
 // ── Condition Definition — both routes to a signature ────────────────────────
 
-function conditionProps(cls: AssetClass = "legal"): ConditionDefinitionViewProps {
+function conditionProps(
+  cls: AssetClass = "legal",
+  route: "email" | "in_app" = "email",
+): ConditionDefinitionViewProps {
   const raw = emptyAnchorsFor(cls);
   for (const field of ASSET_CLASSES[cls].anchorFields) {
     if (raw[field.key]) continue;
     raw[field.key] =
-      field.type === "email"
-        ? `${field.key.toLowerCase()}@example.com`
-        : field.type === "money"
-          ? "100000"
-          : field.type === "state"
-            ? "California"
-            : `${field.label} Value`;
+      field.type === "money" ? "100000" : field.type === "state" ? "California" : `${field.label} Value`;
+  }
+  // Route every signer the same way for the test: an email address (→ DocuSign)
+  // or an explicit in-app choice.
+  for (const s of ASSET_CLASSES[cls].signers) {
+    if (route === "email") raw[s.emailKey] = `${s.emailKey.toLowerCase()}@example.com`;
+    else raw[s.modeKey] = "in_app";
   }
   return {
     assetClass: cls,
@@ -342,36 +349,41 @@ function conditionProps(cls: AssetClass = "legal"): ConditionDefinitionViewProps
   };
 }
 
-describe("ConditionDefinition — Send Email and Sign Here", () => {
-  it("offers a Sign Here button for each required signer", () => {
-    const html = renderToString(createElement(ConditionDefinitionView, conditionProps()));
+describe("ConditionDefinition — signer routes (single flow, no toggle)", () => {
+  it("shows Sign Here — and no Send Email — for an in-app signer", () => {
+    const html = renderToString(createElement(ConditionDefinitionView, conditionProps("legal", "in_app")));
 
     expect(html).toContain("Sign Here");
     // Named for the signer it acts on, so two signers cannot share one button.
     expect(html).toContain("Sign in LexEscrow as");
+    expect(html).not.toContain("Send Email");
   });
 
-  it("offers a Send Email button alongside Sign Here", () => {
-    const html = renderToString(createElement(ConditionDefinitionView, conditionProps()));
+  it("shows Send Email — and no Sign Here — for an email signer, plus the bulk drawer", () => {
+    const html = renderToString(createElement(ConditionDefinitionView, conditionProps("legal", "email")));
 
     expect(html).toContain("Send Email");
-    expect(html).toContain("Sign Here");
-    // The bulk email drawer is unchanged — the per-signer buttons are additive.
     expect(html).toContain("Send for Signature");
+    expect(html).not.toContain("Sign Here");
   });
 
-  it("shows one Send Email and one Sign Here per signer", () => {
-    const html = renderToString(createElement(ConditionDefinitionView, conditionProps("real_estate")));
-    const sendEmail = html.split("Send Email").length - 1;
-    const signHere = html.split("Sign Here").length - 1;
+  it("shows exactly one action per signer — no per-signer toggle", () => {
+    const emailHtml = renderToString(
+      createElement(ConditionDefinitionView, conditionProps("real_estate", "email")),
+    );
+    expect(emailHtml.split("Send Email").length - 1).toBe(2); // buyer + seller
+    expect(emailHtml).not.toContain("Sign Here");
 
-    expect(sendEmail).toBeGreaterThan(1); // real estate has buyer + seller
-    expect(sendEmail).toBe(signHere);
+    const inAppHtml = renderToString(
+      createElement(ConditionDefinitionView, conditionProps("real_estate", "in_app")),
+    );
+    expect(inAppHtml.split("Sign Here").length - 1).toBe(2);
+    expect(inAppHtml).not.toContain("Send Email");
   });
 
-  it("replaces both buttons with a Signed in app badge once the envelope completes", () => {
-    const props = conditionProps();
-    const signerEmail = props.anchors.clientEmail;
+  it("replaces the action with a Signed in app badge once the in-app envelope completes", () => {
+    const props = conditionProps("legal", "in_app");
+    const clientName = props.rawAnchors.clientFullLegalName;
     const html = renderToString(
       createElement(ConditionDefinitionView, {
         ...props,
@@ -381,12 +393,17 @@ describe("ConditionDefinition — Send Email and Sign Here", () => {
             sessionId: "wf-1",
             documentLabel: "agreement.pdf",
             signers: [
-              { name: "Dana Whitfield", email: signerEmail, role: "Client", routingOrder: 1 },
+              {
+                name: clientName,
+                email: syntheticSignerEmail(clientName, "Client"),
+                role: "Client",
+                routingOrder: 1,
+              },
             ],
             status: "completed",
             sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
             embeddedSigning: true,
-            embeddedSignerName: "Dana Whitfield",
+            embeddedSignerName: clientName,
           },
         ],
       }),
@@ -396,7 +413,8 @@ describe("ConditionDefinition — Send Email and Sign Here", () => {
   });
 
   it("does not claim in-app signature for an envelope still in flight", () => {
-    const props = conditionProps();
+    const props = conditionProps("legal", "in_app");
+    const clientName = props.rawAnchors.clientFullLegalName;
     const html = renderToString(
       createElement(ConditionDefinitionView, {
         ...props,
@@ -406,7 +424,12 @@ describe("ConditionDefinition — Send Email and Sign Here", () => {
             sessionId: "wf-1",
             documentLabel: "agreement.pdf",
             signers: [
-              { name: "Dana Whitfield", email: props.anchors.clientEmail, role: "Client", routingOrder: 1 },
+              {
+                name: clientName,
+                email: syntheticSignerEmail(clientName, "Client"),
+                role: "Client",
+                routingOrder: 1,
+              },
             ],
             status: "sent",
             sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),

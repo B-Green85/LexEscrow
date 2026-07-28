@@ -52,6 +52,22 @@ export interface AnchorFieldDef {
   full?: boolean; // span both grid columns
 }
 
+/**
+ * One required signer for a class's escrow release. Every class has exactly two
+ * (its two parties). The email and the in-app choice are entered manually on
+ * Document Load and stored in the raw anchor record under `emailKey` / `modeKey`
+ * — **never populated by AI parsing**. A signer routes to a DocuSign email when a
+ * valid email is entered; the officer may instead mark `modeKey` as `"in_app"`,
+ * and that party signs in-app with no email. One of the two must be chosen for
+ * every signer before processing can begin.
+ */
+export interface SignerDef {
+  role: string; // display label, e.g. "Buyer", "Client", "Law firm"
+  nameKey: string; // raw anchor key holding the party's name
+  emailKey: string; // raw anchor key holding the party's (optional) email
+  modeKey: string; // raw anchor key; "in_app" when the party signs in-app
+}
+
 /** Maps a class's anchor field keys onto the pipeline's `TrustAnchors` shape so
  *  AnchorMatcher / notification / bar-verify code is class-agnostic. */
 export interface TrustAnchorMap {
@@ -72,6 +88,8 @@ export interface AssetClassDescriptor {
   partyLabels: [string, string];
   anchorFields: AnchorFieldDef[];
   trustAnchorMap: TrustAnchorMap;
+  /** The two required signers for this class's escrow release (spec §23). */
+  signers: SignerDef[];
   /** AI-extracted metadata field names (spec §4 "Key metadata"). */
   metadataFields: string[];
   /** Release conditions applicable to this class (spec §4). */
@@ -91,12 +109,6 @@ export const US_STATES: string[] = [
   "Wisconsin", "Wyoming",
 ];
 
-const email = (key: string, label: string, required = true): AnchorFieldDef => ({
-  key,
-  label,
-  type: "email",
-  required,
-});
 const text = (key: string, label: string, required = true, placeholder?: string): AnchorFieldDef => ({
   key,
   label,
@@ -109,6 +121,15 @@ const money = (key: string, label: string, required = true): AnchorFieldDef => (
   label,
   type: "money",
   required,
+});
+
+/** A signer definition, deriving `modeKey` from the email key's party prefix
+ *  (e.g. `buyerEmail` → `buyerSignMode`). */
+const signer = (role: string, nameKey: string, emailKey: string): SignerDef => ({
+  role,
+  nameKey,
+  emailKey,
+  modeKey: `${emailKey.replace(/Email$/i, "")}SignMode`,
 });
 
 // ── The registry ─────────────────────────────────────────────────────────────
@@ -126,7 +147,7 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       // Legal is California-only for now (V2 roadmap: 50-state BarVerify).
       { key: "state", label: "State", type: "select", required: true, options: ["California"] },
       { key: "clientFullLegalName", label: "Client full legal name", type: "text", required: true, placeholder: "Jane Anderson", full: true },
-      email("clientEmail", "Client email"),
+      text("lawFirmName", "Law firm name", true, "Hargrove & Weston LLP"),
       { key: "clientPhone", label: "Client phone", type: "text", required: false, placeholder: "+1 555 010 0000" },
     ],
     trustAnchorMap: {
@@ -136,6 +157,10 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       primaryEmail: "clientEmail",
       phone: "clientPhone",
     },
+    signers: [
+      signer("Client", "clientFullLegalName", "clientEmail"),
+      signer("Law firm", "lawFirmName", "lawFirmEmail"),
+    ],
     metadataFields: [
       "attorney bar number", "client ID", "total retainer held", "earned fees",
       "unearned balance", "disputed hours", "termination date",
@@ -158,8 +183,6 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       { key: "state", label: "State", type: "state", required: true },
       text("buyerName", "Buyer name", true, "Smith"),
       text("sellerName", "Seller name", true, "Jones"),
-      email("buyerEmail", "Buyer email"),
-      email("sellerEmail", "Seller email"),
       money("purchasePrice", "Purchase price"),
     ],
     trustAnchorMap: {
@@ -168,6 +191,10 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       primaryParty: "buyerName",
       primaryEmail: "buyerEmail",
     },
+    signers: [
+      signer("Buyer", "buyerName", "buyerEmail"),
+      signer("Seller", "sellerName", "sellerEmail"),
+    ],
     metadataFields: [
       "parcel number", "legal description", "county", "state", "purchase price",
       "earnest money amount", "closing date", "contingencies",
@@ -190,14 +217,16 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       text("sellerEntityName", "Seller entity name", true, "Beta LLC"),
       text("ein", "EIN", true, "12-3456789"),
       money("purchasePrice", "Purchase price"),
-      email("buyerEmail", "Buyer email"),
-      email("sellerEmail", "Seller email"),
     ],
     trustAnchorMap: {
       identifier: "ein",
       primaryParty: "buyerEntityName",
       primaryEmail: "buyerEmail",
     },
+    signers: [
+      signer("Buyer entity", "buyerEntityName", "buyerEmail"),
+      signer("Seller entity", "sellerEntityName", "sellerEmail"),
+    ],
     metadataFields: [
       "entity names", "EIN", "purchase price", "earnest deposit",
       "closing conditions", "rep and warranty expiration",
@@ -219,8 +248,6 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       text("usptoFilingNumber", "USPTO filing number", true, "US 12/345,678"),
       text("licenseeName", "Licensee name", true, "Inventor"),
       text("licensorName", "Licensor name", true, "Licensee Co"),
-      email("licenseeEmail", "Licensee email"),
-      email("licensorEmail", "Licensor email"),
       text("royaltyRate", "Royalty rate", true, "5%"),
     ],
     trustAnchorMap: {
@@ -228,6 +255,10 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       primaryParty: "licenseeName",
       primaryEmail: "licenseeEmail",
     },
+    signers: [
+      signer("Licensee", "licenseeName", "licenseeEmail"),
+      signer("Licensor", "licensorName", "licensorEmail"),
+    ],
     metadataFields: [
       "USPTO filing number", "patent number", "licensee", "licensor",
       "royalty rate", "royalty period", "territory",
@@ -252,14 +283,16 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       money("appraisedValue", "Appraised value"),
       text("buyerName", "Buyer name", true, "Collector"),
       text("sellerName", "Seller name", true, "Gallery"),
-      email("buyerEmail", "Buyer email"),
-      email("sellerEmail", "Seller email"),
     ],
     trustAnchorMap: {
       identifier: "title",
       primaryParty: "buyerName",
       primaryEmail: "buyerEmail",
     },
+    signers: [
+      signer("Buyer", "buyerName", "buyerEmail"),
+      signer("Seller", "sellerName", "sellerEmail"),
+    ],
     metadataFields: [
       "artist", "title", "medium", "dimensions", "creation date",
       "current location", "appraised value", "provenance chain",
@@ -289,13 +322,16 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       { key: "acreage", label: "Acreage", type: "text", required: true, placeholder: "640" },
       text("buyerName", "Buyer name", true, "Farm"),
       text("sellerName", "Seller name", true, "County"),
-      email("buyerEmail", "Buyer email"),
     ],
     trustAnchorMap: {
       identifier: "jurisdiction",
       primaryParty: "buyerName",
       primaryEmail: "buyerEmail",
     },
+    signers: [
+      signer("Buyer", "buyerName", "buyerEmail"),
+      signer("Seller", "sellerName", "sellerEmail"),
+    ],
     metadataFields: [
       "rights type", "jurisdiction", "acreage", "resource type",
       "extraction limits", "royalty rate", "expiration date",
@@ -326,13 +362,16 @@ export const ASSET_CLASSES: Record<AssetClass, AssetClassDescriptor> = {
       text("entityName", "Entity name", true, "GreenLeaf Co"),
       text("buyerName", "Buyer name", true, "GreenLeaf"),
       text("sellerName", "Seller name", true, "Emerald Co"),
-      email("buyerEmail", "Buyer email"),
     ],
     trustAnchorMap: {
       identifier: "stateLicenseNumber",
       primaryParty: "buyerName",
       primaryEmail: "buyerEmail",
     },
+    signers: [
+      signer("Buyer", "buyerName", "buyerEmail"),
+      signer("Seller", "sellerName", "sellerEmail"),
+    ],
     metadataFields: [
       "state license number", "Metrc facility ID", "license type", "license status",
       "compliance hold status", "inventory batch numbers", "entity name", "EIN",
@@ -353,41 +392,84 @@ export function descriptorFor(assetClass: AssetClass): AssetClassDescriptor {
 
 // ── Anchor helpers ───────────────────────────────────────────────────────────
 
-/** Empty anchor record for a class — every field key present, state defaulted. */
+/** Empty anchor record for a class — every field key present, state defaulted,
+ *  plus each signer's email and sign-mode key seeded blank. */
 export function emptyAnchorsFor(assetClass: AssetClass): Record<string, string> {
   const out: Record<string, string> = {};
   for (const f of ASSET_CLASSES[assetClass].anchorFields) {
     out[f.key] = f.type === "state" ? "" : f.options?.[0] ?? "";
   }
+  for (const s of ASSET_CLASSES[assetClass].signers) {
+    out[s.emailKey] = "";
+    out[s.modeKey] = "";
+  }
   return out;
 }
 
 /** Project a class's anchor record onto the pipeline's `TrustAnchors` shape.
- *  For `legal` this is the identity mapping, so the Legal flow is unchanged. */
+ *  For `legal` this is the identity mapping, so the Legal flow is unchanged.
+ *  `email` mirrors the primary party's manually-entered address (blank → in-app);
+ *  it is never populated by AI. */
 export function anchorsToTrustAnchors(
   assetClass: AssetClass,
   raw: Record<string, string>,
 ): TrustAnchors {
   const map = ASSET_CLASSES[assetClass].trustAnchorMap;
+  const primaryEmail = ((map.primaryEmail && raw[map.primaryEmail]) || "").trim();
   return {
     attorneyBarNumber: (map.identifier && raw[map.identifier]) || "",
     state: (map.state && raw[map.state]) || "",
     clientFullLegalName: (map.primaryParty && raw[map.primaryParty]) || "",
-    clientEmail: (map.primaryEmail && raw[map.primaryEmail]) || "",
+    clientEmail: primaryEmail,
     clientPhone: map.phone ? raw[map.phone] : undefined,
+    ...(primaryEmail && { email: primaryEmail }),
   };
 }
 
-/** Required anchor fields for a class are all filled (emails validated). */
+// ── Signer routing (email vs in-app) ─────────────────────────────────────────
+
+export const EMAIL_RE = /^\S+@\S+\.\S+$/;
+
+/** The two required signers for a class. */
+export function signersFor(assetClass: AssetClass): SignerDef[] {
+  return ASSET_CLASSES[assetClass].signers;
+}
+
+/**
+ * A signer routes to a DocuSign email — a valid email was entered and the
+ * officer has not overridden the party to in-app signing. Email absent or the
+ * in-app override set means the party signs in-app instead.
+ */
+export function signerHasEmail(signer: SignerDef, raw: Record<string, string>): boolean {
+  if ((raw[signer.modeKey] ?? "") === "in_app") return false;
+  return EMAIL_RE.test((raw[signer.emailKey] ?? "").trim());
+}
+
+/**
+ * The officer has resolved this signer's route: either a valid email is entered,
+ * or the party is explicitly marked to sign in-app. An undecided signer (no
+ * email and no in-app choice) is not complete — the choice is forced.
+ */
+export function signerRouteComplete(signer: SignerDef, raw: Record<string, string>): boolean {
+  if ((raw[signer.modeKey] ?? "") === "in_app") return true;
+  return EMAIL_RE.test((raw[signer.emailKey] ?? "").trim());
+}
+
+/** Every required signer has a resolved route (email or in-app). */
+export function signersComplete(assetClass: AssetClass, raw: Record<string, string>): boolean {
+  return ASSET_CLASSES[assetClass].signers.every((s) => signerRouteComplete(s, raw));
+}
+
+/**
+ * Required anchor fields are all filled, and every required signer's route
+ * (email or in-app) has been decided.
+ */
 export function anchorsComplete(assetClass: AssetClass, raw: Record<string, string>): boolean {
-  const emailRe = /^\S+@\S+\.\S+$/;
-  return ASSET_CLASSES[assetClass].anchorFields.every((f) => {
+  const fieldsOk = ASSET_CLASSES[assetClass].anchorFields.every((f) => {
     if (!f.required) return true;
-    const v = (raw[f.key] ?? "").trim();
-    if (v.length === 0) return false;
-    if (f.type === "email") return emailRe.test(v);
-    return true;
+    return (raw[f.key] ?? "").trim().length > 0;
   });
+  return fieldsOk && signersComplete(assetClass, raw);
 }
 
 // ── Folder / filename → asset class detection (batch Load Folder) ────────────

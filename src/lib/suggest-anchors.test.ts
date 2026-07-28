@@ -63,7 +63,6 @@ describe("suggestAnchors — legal", () => {
 
   it("returns nothing for fields the document does not contain", () => {
     const s = suggestAnchors(LEGAL_DOC, "legal");
-    expect(s.primaryEmail).toBeUndefined();
     expect(s.parcelNumber).toBeUndefined();
     expect(s.ein).toBeUndefined();
   });
@@ -186,18 +185,6 @@ describe("suggestAnchors — remaining classes", () => {
 });
 
 describe("suggestAnchors — general", () => {
-  it("takes the first two email addresses found", () => {
-    const s = suggestAnchors("Contact first@example.com or second@example.org, cc third@x.io", "legal");
-    expect(s.primaryEmail).toBe("first@example.com");
-    expect(s.secondaryEmail).toBe("second@example.org");
-  });
-
-  it("treats a repeated address as one party", () => {
-    const s = suggestAnchors("Send to a@b.com. Confirmations also to a@b.com.", "legal");
-    expect(s.primaryEmail).toBe("a@b.com");
-    expect(s.secondaryEmail).toBeUndefined();
-  });
-
   it("returns the largest dollar amount, not the smallest or the first", () => {
     expect(suggestAnchors("Fee $100.00, price $9,500.00, deposit $250.00", "legal").amountCents)
       .toBe(950_000);

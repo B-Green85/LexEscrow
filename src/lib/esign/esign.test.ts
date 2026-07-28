@@ -284,7 +284,7 @@ describe("deriveSigners", () => {
     };
     const signers = deriveSigners("legal", anchors, {});
     expect(signers).toEqual([
-      { name: "Jane Anderson", email: "jane@example.com", role: "Client", routingOrder: 1 },
+      { name: "Jane Anderson", email: "jane@example.com", role: "Client", routingOrder: 1, mode: "email" },
     ]);
   });
 

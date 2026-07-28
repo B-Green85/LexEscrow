@@ -75,10 +75,10 @@ describe("DocumentLoad — suggestion from the dropped artifact", () => {
 
   it("leaves fields with no match empty and unmarked", async () => {
     render(<DocumentLoad />);
-    // The clean retainer carries no email or phone number.
+    // The clean retainer carries no phone number, and emails are never suggested
+    // — signature addresses are entered manually per signer.
     await load("Clean retainer", () => expect(field("Client full legal name").value).toBe("Jane Anderson"));
-    expect(field("Client email").value).toBe("");
-    expect(dot("Client email")).toBeNull();
+    expect((screen.getByLabelText("Client email") as HTMLInputElement).value).toBe("");
     expect(dot(/^Client phone/)).toBeNull();
   });
 
