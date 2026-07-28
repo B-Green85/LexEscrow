@@ -453,6 +453,14 @@ function ConditionCard({
 
 // ── Escrow balance ───────────────────────────────────────────────────────────
 
+/**
+ * A stand-in Sepolia deposit transaction hash for local testing. Only ever used
+ * by the dev-only "Use test deposit" button below (gated on `import.meta.env.DEV`),
+ * so it never reaches a production build. Replace with a real Path A deposit tx
+ * once one exists.
+ */
+const TEST_DEPOSIT_TX = "0x6f532f0eefc61a5792ad211850a8b48fbc388674";
+
 function BalanceCard({
   fundsDeposited,
   depositTxHash,
@@ -514,6 +522,15 @@ function BalanceCard({
             Confirm Deposit
           </button>
         </div>
+        {import.meta.env.DEV && (
+          <button
+            type="button"
+            className="mt-2 text-xs text-text-muted underline decoration-dotted underline-offset-2 transition-colors hover:text-text-primary"
+            onClick={() => setTxHash(TEST_DEPOSIT_TX)}
+          >
+            Use test deposit (dev)
+          </button>
+        )}
       </div>
     </div>
   );
