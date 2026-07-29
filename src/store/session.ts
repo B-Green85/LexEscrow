@@ -1687,6 +1687,21 @@ export const useSession = create<SessionState>((set, get) => {
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const provider = await resolveESignProvider();
+
+        // Diagnostic: confirm exactly what reaches DocuSign — the recipient
+        // addresses actually being sent (not a stale parsed value or a synthetic
+        // in-app id) and whether this is the real API or the demo/mock provider.
+        const providerLabel = provider.providerName();
+        console.log(
+          `[esign] sendForSignature → provider: ${providerLabel} — ${
+            providerLabel.includes("demo") ? "DEMO/MOCK (no real email is sent)" : "REAL DocuSign API"
+          }`,
+        );
+        console.log(
+          "[esign] recipients:",
+          signers.map((s) => ({ name: s.name, email: s.email, clientUserId: s.clientUserId ?? null })),
+        );
+
         const envelopeId = await provider.sendEnvelope(
           sessionId,
           bytes,
