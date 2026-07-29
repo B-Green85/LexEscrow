@@ -6,8 +6,9 @@
  * in the workflow against the one from the Console should not have to work out
  * whether two different layouts are describing the same object.
  *
- * Pure and store-free: everything arrives as props, so it render-tests without
- * a live store (the same shape as `ExecutionConfirmationView`).
+ * Everything it renders arrives as props, so it render-tests without a live
+ * store (the same shape as `ExecutionConfirmationView`). The one store it
+ * touches is write-only and inert when unmounted — see `toast`.
  */
 
 import { useState } from "react";
@@ -16,6 +17,7 @@ import {
   type AnchorReceipt,
   type ReceiptVerification,
 } from "../lib/anchor-receipt";
+import { toast } from "./Toast";
 import { descriptorFor } from "../lib/assetClasses";
 import { txUrl } from "../lib/explorer";
 
@@ -197,7 +199,16 @@ export function AnchorReceiptCard({
       </div>
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
-        <button className="btn btn-primary" onClick={onDownload}>
+        <button
+          className="btn btn-primary"
+          // The toast is raised before the handler, not after: the download is
+          // the caller's business (and may be async), while the feedback is
+          // owed the moment the button is pressed.
+          onClick={() => {
+            toast("Downloading receipt…");
+            onDownload();
+          }}
+        >
           Download Receipt JSON
         </button>
         <button className="btn btn-secondary" onClick={() => void onVerify()} disabled={verifying}>

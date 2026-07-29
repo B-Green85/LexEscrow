@@ -23,6 +23,7 @@ import { formatUsd, toCents, toPayloadCents } from "../lexguard/payload-diff";
 import * as backend from "../lib/backend";
 import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
 import { AnchorReceiptCard } from "../components/AnchorReceiptCard";
+import { toast } from "../components/Toast";
 import type { AnchorReceipt } from "../lib/anchor-receipt";
 import type { AssetClass } from "../lib/assetClasses";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
@@ -82,7 +83,7 @@ function TxLink({ hash }: { hash: string | null }) {
  * counterparty-facing record (spec §14 V1), the JSON is the machine-readable
  * extract a verifier re-hashes. Neither is a substitute for the other.
  */
-function AuditCard({
+export function AuditCard({
   onDownload,
   onPrintReport,
 }: {
@@ -109,7 +110,15 @@ function AuditCard({
         </div>
       </div>
       <div className="flex shrink-0 gap-2">
-        <button className="btn btn-primary" onClick={onPrintReport}>
+        <button
+          className="btn btn-primary"
+          // Raised before the handler runs — see the note on the receipt
+          // download button, which owes its feedback on the same terms.
+          onClick={() => {
+            toast("Downloading audit report…");
+            onPrintReport();
+          }}
+        >
           Audit report (PDF)
         </button>
         <button className="btn btn-secondary" onClick={onDownload}>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { initMenuListeners, useSession, type Screen } from "./store/session";
 import emblem from "./assets/lexescrow-emblem.png";
 import { Splash } from "./components/Splash";
+import { Toaster } from "./components/Toast";
 import { WorkflowRail } from "./components/WorkflowRail";
 import { HeaderIconButton } from "./components/HeaderIconButton";
 import { DocumentLoad } from "./screens/DocumentLoad";
@@ -219,6 +220,10 @@ function App() {
           AI parses. LexGuard validates. Humans decide. CRE executes.
         </span>
       </footer>
+
+      {/* Last child, outside every screen: a toast outlives the click that
+          raised it and must not unmount when a screen swaps. */}
+      <Toaster />
     </div>
   );
 }
