@@ -1319,6 +1319,8 @@ function ChangePassword() {
 export function Configuration() {
   const closeConfig = useSession((s) => s.closeConfig);
   const openWizard = useSession((s) => s.openWizard);
+  const lockVault = useSession((s) => s.lockVault);
+  const unlockVault = useSession((s) => s.unlockVault);
   const [exists, setExists] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [pub, setPub] = useState<VaultPublic | null>(null);
@@ -1360,7 +1362,9 @@ export function Configuration() {
     setBusy(true);
     setError(null);
     try {
-      const r = await backend.vaultUnlock(password);
+      // Same entry point the launch gate uses, so an unlock from here has the
+      // identical side effects — gate down, settlement config re-read.
+      const r = await unlockVault(password);
       if (!r.ok) {
         setError(r.message ?? "Unlock failed.");
         setBusy(false);
@@ -1377,7 +1381,10 @@ export function Configuration() {
   };
 
   const onLock = async () => {
-    await backend.vaultLock();
+    // Through the store, not `backend.vaultLock` directly: locking has to raise
+    // the same gate the app launches behind, or this button would leave the
+    // operator in a running UI whose credentials have all just gone away.
+    await lockVault();
     setUnlocked(false);
     setPub(null);
     setDocusign(null);

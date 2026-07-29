@@ -3,6 +3,7 @@ import { initMenuListeners, useSession, type Screen } from "./store/session";
 import emblem from "./assets/lexescrow-emblem.png";
 import { Splash } from "./components/Splash";
 import { Toaster } from "./components/Toast";
+import { VaultUnlockGate } from "./components/VaultUnlockGate";
 import { WorkflowRail } from "./components/WorkflowRail";
 import { HeaderIconButton } from "./components/HeaderIconButton";
 import { DocumentLoad } from "./screens/DocumentLoad";
@@ -107,6 +108,7 @@ function App() {
     openRecent,
     showWizard,
     checkWizard,
+    vaultLocked,
   } = useSession();
   const [showSplash, setShowSplash] = useState(true);
   const chromeLabel = CHROMELESS_LABELS[screen];
@@ -134,6 +136,25 @@ function App() {
   useEffect(() => {
     void checkWizard();
   }, [checkWizard]);
+
+  // A sealed vault *replaces* the app rather than covering it. An overlay would
+  // leave every screen mounted underneath — firing its effects, holding its own
+  // place in the tab order — which is a lock screen in appearance only. Nothing
+  // past this point renders until the vault is open.
+  //
+  // The gate and the wizard are mutually exclusive by construction (see
+  // `checkWizard`), but the gate is tested first regardless: if the two ever did
+  // collide, an install with saved credentials should be asked to unlock them,
+  // not walked through creating them again.
+  if (vaultLocked) {
+    return (
+      <div className="flex min-h-screen flex-col">
+        {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
+        <VaultUnlockGate />
+        <Toaster />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col">

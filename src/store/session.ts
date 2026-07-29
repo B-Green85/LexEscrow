@@ -38,7 +38,7 @@ import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 import { fireIntegrationWebhooks } from "../lib/integrations";
 import { setExplorerChain } from "../lib/explorer";
-import type { BlockchainPublic } from "../lib/vaultTypes";
+import type { BlockchainPublic, UnlockResult } from "../lib/vaultTypes";
 import { downloadAuditReport as downloadAuditReportPdf } from "../lib/export/audit-pdf-export";
 import {
   buildConditions,
@@ -462,6 +462,23 @@ export interface SessionState {
   /** True once onboarding has been finished, or found to be unnecessary. */
   wizardComplete: boolean;
 
+  // ── Vault lock gate ──────────────────────────────────────────────────────
+  /**
+   * Is a configured vault sitting locked, with the app gated behind it?
+   *
+   * Distinct from "the vault is locked": a first-run install has no vault at
+   * all, and gating that operator behind a password for credentials that do not
+   * exist would be a dead end. This is specifically *there are saved
+   * credentials and they are sealed*, which is the only case where the main UI
+   * would otherwise run against an AI provider, an SMTP server and a DocuSign
+   * account that all silently resolve to nothing.
+   *
+   * Set by `checkWizard` at mount and by `lockVault`. Absent from `reset()` —
+   * starting a new transaction is not a reason to re-authenticate, and locking
+   * is not something a workflow step gets to decide.
+   */
+  vaultLocked: boolean;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
@@ -479,6 +496,11 @@ export interface SessionState {
   /** Re-run onboarding — Configuration's footer link and the File menu. */
   openWizard: () => void;
   completeWizard: () => void;
+  /** Open the vault and lift the gate. Returns the backend's verdict verbatim
+   *  so the caller can show *why* an unlock failed. */
+  unlockVault: (password: string) => Promise<UnlockResult>;
+  /** Seal the vault and re-gate the app. */
+  lockVault: () => Promise<void>;
   downloadAnchorReceipt: () => void;
   returnToBatch: () => void;
   loadBatchItem: (h: BatchHydration) => void;
@@ -774,6 +796,10 @@ export const useSession = create<SessionState>((set, get) => {
     blockchainReady: false,
     showWizard: false,
     wizardComplete: false,
+    // Starts down: `checkWizard` raises it at mount if there is a sealed vault.
+    // Defaulting to gated would flash a password prompt at every first-run
+    // operator before the status read comes back.
+    vaultLocked: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -820,25 +846,37 @@ export const useSession = create<SessionState>((set, get) => {
       }),
 
     /**
-     * First-run detection (spec §12 Screen 0).
+     * First-run detection (spec §12 Screen 0) and the launch lock gate.
      *
-     * The vault's existence *is* the answer. Every credential the wizard
-     * collects lives in the vault, so "no vault" and "this install has never
-     * been set up" are the same condition — and unlike a stored flag, it
-     * survives a cleared browser profile and cannot claim an install is
-     * configured when its credentials are gone.
+     * One call because one vault status answers both, and asking twice invites
+     * the two answers to disagree. The vault's existence *is* first-run: every
+     * credential the wizard collects lives in the vault, so "no vault" and
+     * "this install has never been set up" are the same condition — and unlike
+     * a stored flag, it survives a cleared browser profile and cannot claim an
+     * install is configured when its credentials are gone.
      *
-     * A failure here is not fatal: an unreadable vault status is a reason to
-     * leave the operator in the app, not to trap them behind an onboarding
-     * flow whose first step would fail for the same reason.
+     * Given a vault, whether it is *open* decides the gate. The two outcomes
+     * are mutually exclusive by construction: no vault means onboarding and
+     * nothing to unlock; a vault means no onboarding and possibly a password.
+     *
+     * A failure here is not fatal, and fails open in both directions: an
+     * unreadable vault status is a reason to leave the operator in the app, not
+     * to trap them behind an onboarding flow whose first step would fail for
+     * the same reason, nor behind a password prompt for a vault we cannot
+     * confirm exists. Every credential read stays independently guarded — a
+     * locked vault yields nothing regardless of what this flag says.
      */
     checkWizard: async () => {
       try {
         const status = await backend.vaultStatus();
         if (status.exists) {
-          set({ showWizard: false, wizardComplete: true });
+          set({
+            showWizard: false,
+            wizardComplete: true,
+            vaultLocked: !status.unlocked,
+          });
         } else {
-          set({ showWizard: true });
+          set({ showWizard: true, vaultLocked: false });
         }
       } catch (e) {
         console.error("vault status check failed", e);
@@ -846,6 +884,29 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     openWizard: () => set({ showWizard: true }),
+
+    unlockVault: async (password) => {
+      const result = await backend.vaultUnlock(password);
+      if (!result.ok) return result;
+
+      set({ vaultLocked: false });
+      // The blockchain config read as "not configured" for as long as the vault
+      // was sealed, and the settle gate reads it from the store rather than
+      // asking the vault each time. Re-read now that there is something to
+      // read, so unlocking does not leave a configured install looking unable
+      // to settle until something else happens to refresh it.
+      await get().refreshBlockchainConfig();
+      return result;
+    },
+
+    lockVault: async () => {
+      await backend.vaultLock();
+      set({ vaultLocked: true });
+      // Drops the cached public view with it — leaving settlement config on
+      // screen after the vault that backs it is sealed would misreport what
+      // this install can currently do.
+      await get().refreshBlockchainConfig();
+    },
 
     completeWizard: () => {
       set({ showWizard: false, wizardComplete: true });

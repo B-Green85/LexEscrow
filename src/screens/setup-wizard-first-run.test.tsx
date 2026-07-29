@@ -21,7 +21,7 @@ import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
 
 beforeEach(() => {
-  useSession.setState({ showWizard: false, wizardComplete: false });
+  useSession.setState({ showWizard: false, wizardComplete: false, vaultLocked: false });
 });
 
 describe("checkWizard — no vault yet", () => {
@@ -46,5 +46,17 @@ describe("checkWizard — no vault yet", () => {
     // the first time as an unexplained, unrecoverable password field.
     expect(screen.getByText(/Welcome to LexEscrow/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Get Started/ })).toBeTruthy();
+  });
+
+  it("does not raise the launch lock gate — there is nothing to unlock", async () => {
+    await useSession.getState().checkWizard();
+
+    // The other half of this decision is in `vault-unlock-gate.test.tsx`, which
+    // has to create a vault to have one to seal. Only here, where none has ever
+    // existed, does the negative mean anything: gating a first-run operator
+    // behind a password for credentials that do not exist is a dead end, since
+    // the vault has no password until the wizard sets one.
+    expect(useSession.getState().vaultLocked).toBe(false);
+    expect(useSession.getState().showWizard).toBe(true);
   });
 });
