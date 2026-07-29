@@ -453,11 +453,29 @@ export async function setDocusign(input: DocuSignInput): Promise<void> {
 export function getDocusignPublic(): DocuSignPublic {
   const { data } = requireUnlocked();
   const d = data.docusign;
-  if (!d) return { hasCredentials: false, environment: "", accountIdHint: "" };
+  if (!d) {
+    return {
+      hasCredentials: false,
+      environment: "",
+      accountIdHint: "",
+      userId: "",
+      accountId: "",
+      baseUri: "",
+      hasIntegrationKey: false,
+      hasJwtPrivateKey: false,
+    };
+  }
   return {
     hasCredentials: usable(d),
     environment: d.environment,
     accountIdHint: d.accountId.length <= 4 ? d.accountId : d.accountId.slice(-4),
+    // Addressing, not key material — echoed so an edit can start from what is
+    // stored rather than from blanks.
+    userId: d.userId,
+    accountId: d.accountId,
+    baseUri: d.baseUri,
+    hasIntegrationKey: d.integrationKey.length > 0,
+    hasJwtPrivateKey: d.jwtPrivateKey.length > 0,
   };
 }
 

@@ -40,15 +40,28 @@ export interface TwilioPublic {
 }
 
 /**
- * DocuSign's public view is narrower than the others: no integration key, no
- * user ID, and the account ID reduced to its last four characters. Everything
- * an operator needs to confirm the right account is wired up, nothing that
- * helps an attacker (spec §24).
+ * DocuSign's public view (spec §24).
+ *
+ * The two credentials — the integration key and the RSA PEM — never cross IPC
+ * and are reduced to presence flags, as every other secret in the vault is. The
+ * addressing fields are echoed in full for the same reason Clio's webhook URL
+ * is: the operator typed them, needs to confirm them, and must be able to
+ * correct one without re-entering the whole credential. Without them an edit
+ * starts blank and overwrites what is stored with whatever was retyped.
+ *
+ * `accountIdHint` stays alongside the full `accountId` because the collapsed
+ * summary still masks the account down to its last four characters — the edit
+ * form is where the full value is needed.
  */
 export interface DocuSignPublic {
   hasCredentials: boolean;
   environment: string;
   accountIdHint: string;
+  userId: string;
+  accountId: string;
+  baseUri: string;
+  hasIntegrationKey: boolean;
+  hasJwtPrivateKey: boolean;
 }
 
 export interface VaultPublic {

@@ -84,7 +84,14 @@ struct TokenResponse {
     expires_in: Option<u64>,
 }
 
+/// DocuSign answers a create with `{"envelopeId": ...}`. The `rename_all` is
+/// load-bearing: without it serde looks for a literal `envelope_id`, which the
+/// API never sends, and a perfectly successful 201 fails to deserialize with
+/// "missing field envelope_id" — after the envelope has already been created
+/// and dispatched. Any field added here needs the camelCase name to exist on
+/// the wire, not the Rust one.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct EnvelopeCreated {
     envelope_id: String,
 }
@@ -105,6 +112,45 @@ struct CachedToken {
 
 /// `RwLock::const_new` lets the cache be a plain `static` with no init cost.
 static TOKEN_CACHE: RwLock<Option<CachedToken>> = RwLock::const_new(None);
+
+/// Print a raw DocuSign response body to stderr before anything parses it.
+///
+/// The failure this exists for is invisible from the error alone: serde reports
+/// the field it wanted and the column it gave up at, never the JSON it was
+/// handed, so a 2xx body that does not deserialize is indistinguishable from an
+/// API rejection until someone can read the bytes.
+///
+/// The token exchange is deliberately *not* routed through here — its body
+/// carries the bearer token, and a log line is a poor place for one.
+fn log_response(what: &str, status: reqwest::StatusCode, body: &str) {
+    const MAX: usize = 2_000;
+    if body.len() <= MAX {
+        eprintln!("docusign: {what} → HTTP {status}: {body}");
+    } else {
+        // Slice on a char boundary — a truncated multi-byte sequence panics.
+        let head: String = body.chars().take(MAX).collect();
+        eprintln!(
+            "docusign: {what} → HTTP {status} ({} bytes, first {MAX} chars shown): {head}…",
+            body.len()
+        );
+    }
+}
+
+/// Pull the envelope ID out of a create-envelope response.
+///
+/// Split out of [`create_envelope`] for the same reason [`parse_signing_url`]
+/// is: the shape of what DocuSign returns is worth a test that does not need a
+/// live account. The body is echoed into the error because the operator sees
+/// that string in the UI, where stderr is not reachable.
+fn parse_envelope_created(body: &str) -> Result<String, String> {
+    let created: EnvelopeCreated = serde_json::from_str(body).map_err(|e| {
+        format!("DocuSign envelope response was not valid JSON: {e} — body was: {body}")
+    })?;
+    if created.envelope_id.trim().is_empty() {
+        return Err("DocuSign envelope response carried an empty envelope ID.".into());
+    }
+    Ok(created.envelope_id)
+}
 
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -363,14 +409,13 @@ pub async fn create_envelope(
         .text()
         .await
         .map_err(|e| format!("DocuSign envelope response was unreadable: {e}"))?;
+    log_response("create envelope", status, &text);
 
     if !status.is_success() {
         return Err(format!("DocuSign rejected the envelope (HTTP {status}): {text}"));
     }
 
-    let created: EnvelopeCreated = serde_json::from_str(&text)
-        .map_err(|e| format!("DocuSign envelope response was not valid JSON: {e}"))?;
-    Ok(created.envelope_id)
+    parse_envelope_created(&text)
 }
 
 /// Current envelope status: `sent` | `delivered` | `completed` | `declined` |
@@ -394,13 +439,15 @@ pub async fn get_envelope_status(
         .text()
         .await
         .map_err(|e| format!("DocuSign status response was unreadable: {e}"))?;
+    log_response("envelope status", status, &text);
 
     if !status.is_success() {
         return Err(format!("DocuSign status check failed (HTTP {status}): {text}"));
     }
 
-    let parsed: EnvelopeStatus = serde_json::from_str(&text)
-        .map_err(|e| format!("DocuSign status response was not valid JSON: {e}"))?;
+    let parsed: EnvelopeStatus = serde_json::from_str(&text).map_err(|e| {
+        format!("DocuSign status response was not valid JSON: {e} — body was: {text}")
+    })?;
     Ok(parsed.status.to_ascii_lowercase())
 }
 
@@ -461,12 +508,17 @@ pub async fn get_embedded_signing_url(
         .map_err(|e| format!("DocuSign recipient view response was unreadable: {e}"))?;
 
     if !status.is_success() {
+        log_response("recipient view", status, &text);
         return Err(format!(
             "DocuSign refused the embedded signing view (HTTP {status}): {text}"
         ));
     }
 
-    parse_signing_url(&text)
+    // Logged only on the way out, unlike the other endpoints: a *successful*
+    // recipient-view body carries a live signing URL, which is a credential in
+    // its own right and does not belong in a log that gets pasted into a bug
+    // report. A failing one is exactly what needs reading.
+    parse_signing_url(&text).inspect_err(|_| log_response("recipient view", status, &text))
 }
 
 /// Pull the signing URL out of a recipient-view response.
@@ -511,6 +563,7 @@ pub async fn get_certificate(
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
+        log_response("certificate", status, &text);
         return Err(format!("DocuSign certificate download failed (HTTP {status}): {text}"));
     }
 
@@ -518,6 +571,9 @@ pub async fn get_certificate(
         .bytes()
         .await
         .map_err(|e| format!("DocuSign certificate body was unreadable: {e}"))?;
+    // A PDF is not worth echoing; its size is the thing that distinguishes a
+    // real certificate from a stub returned for an envelope that is not done.
+    eprintln!("docusign: certificate → HTTP {status}, {} bytes", bytes.len());
     Ok(bytes.to_vec())
 }
 
@@ -758,6 +814,38 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.client_user_id.as_deref(), Some("cuid-1"));
+    }
+
+    /// The exact body DocuSign returns from a successful create — camelCase
+    /// keys, four of them, three we ignore. This is the shape that used to fail
+    /// to deserialize with "missing field envelope_id" *after* the envelope had
+    /// been created and sent, so every retry dispatched another one.
+    #[test]
+    fn parse_envelope_created_accepts_the_live_api_shape() {
+        let body = r#"{"envelopeId":"a1b2c3d4-e5f6-7890-abcd-ef1234567890","uri":"/envelopes/a1b2c3d4-e5f6-7890-abcd-ef1234567890","statusDateTime":"2026-07-28T18:12:33.4570000Z","status":"sent"}"#;
+        assert_eq!(
+            parse_envelope_created(body).unwrap(),
+            "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        );
+    }
+
+    #[test]
+    fn parse_envelope_created_accepts_the_mock_adapter_shape() {
+        let body = r#"{"envelopeId":"demo-env-1753725153000","status":"sent","statusDateTime":"2026-07-28T18:12:33.457Z","uri":"/envelopes/demo-env-1753725153000"}"#;
+        assert_eq!(parse_envelope_created(body).unwrap(), "demo-env-1753725153000");
+    }
+
+    #[test]
+    fn parse_envelope_created_rejects_a_response_with_no_id() {
+        // A DocuSign error body carries an errorCode, never an envelopeId.
+        let err = parse_envelope_created(r#"{"errorCode":"INVALID_REQUEST","message":"nope"}"#)
+            .unwrap_err();
+        // The body rides along in the error — the operator only sees this
+        // string, and "missing field" alone says nothing about what arrived.
+        assert!(err.contains("INVALID_REQUEST"), "body not echoed: {err}");
+
+        assert!(parse_envelope_created(r#"{"envelopeId":"  "}"#).is_err());
+        assert!(parse_envelope_created("not json").is_err());
     }
 
     #[test]

@@ -445,7 +445,13 @@ export function SecretTextarea({
   );
 }
 
-function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh: () => void }) {
+export function DocuSignCard({
+  data,
+  refresh,
+}: {
+  data: DocuSignPublic | null;
+  refresh: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [integrationKey, setIntegrationKey] = useState("");
   const [userId, setUserId] = useState("");
@@ -458,14 +464,23 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
   const [testResult, setTestResult] = useState<string | null>(null);
 
   const configured = !!data?.hasCredentials;
+  /** Something is in the vault — not necessarily enough to authenticate with. */
+  const stored =
+    configured ||
+    !!data?.accountId ||
+    !!data?.userId ||
+    !!data?.hasIntegrationKey ||
+    !!data?.hasJwtPrivateKey;
 
   const openEdit = () => {
-    // The public shape carries no key, user ID or full account ID by design, so
-    // an edit starts from the environment default rather than echoing secrets.
+    // Addressing round-trips from the public shape — it is what the operator
+    // typed, and starting blank meant a save that only rotated a key wrote the
+    // blanks back over the stored account. The two secrets start empty and,
+    // left empty, keep whatever is stored (see `setDocuSign`).
     setIntegrationKey("");
-    setUserId("");
-    setAccountId("");
-    setBaseUri(data?.environment === "production" ? "" : DEFAULT_BASE_URI);
+    setUserId(data?.userId ?? "");
+    setAccountId(data?.accountId ?? "");
+    setBaseUri(data?.baseUri || (data?.environment === "production" ? "" : DEFAULT_BASE_URI));
     setJwtPrivateKey("");
     setEnvironment(data?.environment || "sandbox");
     setErr(null);
@@ -484,6 +499,9 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
         jwtPrivateKey,
         environment,
       });
+      // Nothing keeps a PEM in component state past the write that consumed it.
+      setIntegrationKey("");
+      setJwtPrivateKey("");
       setEditing(false);
       setTestResult(null);
       refresh();
@@ -513,28 +531,45 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
     <CardShell title="DocuSign" subtitle="eSignature envelopes — JWT Grant, server-to-server">
       {!editing ? (
         <div>
-          {configured ? (
+          {stored ? (
             <dl className="space-y-1.5 text-sm">
-              <Row k="Credentials" v="•••••••• stored" />
               <Row
                 k="Environment"
                 v={data?.environment === "production" ? "Production" : "Sandbox"}
               />
-              <Row k="Account ID" v={`…${data?.accountIdHint ?? ""}`} mono />
+              <Row k="User ID" v={data?.userId || "not set"} mono />
+              {/* Masked here, in full only in the edit form — the summary is
+                  for recognising the account, not for reading it off. */}
+              <Row k="Account ID" v={data?.accountId ? `…${data.accountIdHint}` : "not set"} mono />
+              <Row k="Base URI" v={data?.baseUri || "not set"} mono />
+              <Row
+                k="Integration key"
+                v={data?.hasIntegrationKey ? "•••••••• stored" : "not set"}
+              />
+              <Row
+                k="JWT private key"
+                v={data?.hasJwtPrivateKey ? "•••••••• stored" : "not set"}
+              />
             </dl>
           ) : (
             <p className="text-sm text-text-muted">
               No DocuSign credentials — Send for Signature runs against the demo provider.
             </p>
           )}
+          {stored && !configured && (
+            <div className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700">
+              Stored, but incomplete — the integration key, JWT private key and account ID are all
+              required to authenticate. Send for Signature still runs against the demo provider.
+            </div>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <button className="btn btn-secondary" onClick={openEdit}>
-              {configured ? "Edit" : "Add"}
+              {stored ? "Edit" : "Add"}
             </button>
             <button className="btn btn-secondary" onClick={test}>
               Test Connection
             </button>
-            {configured && (
+            {stored && (
               <button className="btn btn-secondary text-red-600" onClick={del}>
                 Delete
               </button>
@@ -549,16 +584,26 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
       ) : (
         <div className="space-y-3">
           <div>
-            <label className="label">Integration key</label>
+            <label className="label" htmlFor="ds-integration-key">
+              Integration key
+            </label>
             <SecretInput
+              id="ds-integration-key"
               value={integrationKey}
               onChange={setIntegrationKey}
-              placeholder={configured ? "leave blank to keep existing" : "00000000-0000-0000-0000-000000000000"}
+              placeholder={
+                data?.hasIntegrationKey
+                  ? "leave blank to keep existing"
+                  : "00000000-0000-0000-0000-000000000000"
+              }
             />
           </div>
           <div>
-            <label className="label">User ID</label>
+            <label className="label" htmlFor="ds-user-id">
+              User ID
+            </label>
             <input
+              id="ds-user-id"
               className="input"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
@@ -566,8 +611,11 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
             />
           </div>
           <div>
-            <label className="label">Account ID</label>
+            <label className="label" htmlFor="ds-account-id">
+              Account ID
+            </label>
             <input
+              id="ds-account-id"
               className="input"
               value={accountId}
               onChange={(e) => setAccountId(e.target.value)}
@@ -575,8 +623,11 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
             />
           </div>
           <div>
-            <label className="label">Base URI</label>
+            <label className="label" htmlFor="ds-base-uri">
+              Base URI
+            </label>
             <input
+              id="ds-base-uri"
               className="input"
               value={baseUri}
               onChange={(e) => setBaseUri(e.target.value)}
@@ -584,20 +635,26 @@ function DocuSignCard({ data, refresh }: { data: DocuSignPublic | null; refresh:
             />
           </div>
           <div>
-            <label className="label">JWT private key (RSA PEM)</label>
+            <label className="label" htmlFor="ds-jwt-key">
+              JWT private key (RSA PEM)
+            </label>
             <SecretTextarea
+              id="ds-jwt-key"
               value={jwtPrivateKey}
               onChange={setJwtPrivateKey}
               placeholder={
-                configured
+                data?.hasJwtPrivateKey
                   ? "leave blank to keep existing"
                   : "-----BEGIN RSA PRIVATE KEY-----"
               }
             />
           </div>
           <div>
-            <label className="label">Environment</label>
+            <label className="label" htmlFor="ds-environment">
+              Environment
+            </label>
             <select
+              id="ds-environment"
               className="input"
               value={environment}
               onChange={(e) => setEnvironment(e.target.value)}

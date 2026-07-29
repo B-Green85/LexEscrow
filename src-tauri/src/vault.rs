@@ -225,16 +225,29 @@ pub struct TwilioPublic {
     has_auth_token: bool,
 }
 
-/// Secret-free DocuSign view. Deliberately narrower than the other `*Public`
-/// shapes: neither the integration key nor the user ID is echoed back, and the
-/// account ID is reduced to its last four characters — just enough for an
-/// operator to confirm *which* DocuSign account is wired up.
+/// Secret-free DocuSign view.
+///
+/// The two credentials — the integration key and the RSA PEM — are reduced to
+/// presence flags and never cross IPC. The addressing fields are echoed in full
+/// on the same reasoning that echoes Clio's webhook URL: the operator typed
+/// them, needs to confirm them, and must be able to correct one without
+/// re-entering the whole credential. Without them the edit form starts blank
+/// and a save overwrites the stored addressing with whatever was retyped.
+///
+/// `account_id_hint` survives alongside the full `account_id` because the
+/// collapsed summary still masks the account to its last four characters; the
+/// edit form is the only place the full value is needed.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocuSignPublic {
     pub has_credentials: bool,
     pub environment: String,
-    pub account_id_hint: String, // last 4 chars of account_id only
+    pub account_id_hint: String, // last 4 chars — for the collapsed summary
+    pub user_id: String,
+    pub account_id: String,
+    pub base_uri: String,
+    pub has_integration_key: bool,
+    pub has_jwt_private_key: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -654,11 +667,21 @@ impl VaultState {
                     && !e.account_id.is_empty(),
                 environment: e.environment.clone(),
                 account_id_hint: last4(&e.account_id),
+                user_id: e.user_id.clone(),
+                account_id: e.account_id.clone(),
+                base_uri: e.base_uri.clone(),
+                has_integration_key: !e.integration_key.is_empty(),
+                has_jwt_private_key: !e.jwt_private_key.is_empty(),
             },
             None => DocuSignPublic {
                 has_credentials: false,
                 environment: String::new(),
                 account_id_hint: String::new(),
+                user_id: String::new(),
+                account_id: String::new(),
+                base_uri: String::new(),
+                has_integration_key: false,
+                has_jwt_private_key: false,
             },
         })
     }
@@ -1327,6 +1350,21 @@ mod tests {
         assert!(p.has_credentials);
         assert_eq!(p.environment, "sandbox");
         assert_eq!(p.account_id_hint, "7654");
+
+        // Addressing round-trips in full so the edit form can pre-populate
+        // instead of starting blank and overwriting what is stored.
+        assert_eq!(p.user_id, "user-123");
+        assert_eq!(p.account_id, "acct-987654");
+        assert_eq!(p.base_uri, "https://demo.docusign.net");
+
+        // The two credentials are presence flags, and are not smuggled into
+        // some other field either — the whole serialized shape is checked, the
+        // only version of this assertion that survives a later field addition.
+        assert!(p.has_integration_key);
+        assert!(p.has_jwt_private_key);
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("ik-abc"), "integration key leaked: {json}");
+        assert!(!json.contains("BEGIN RSA PRIVATE KEY"), "PEM leaked: {json}");
 
         // Trailing slash stripped so base_uri joins cleanly with /restapi/...
         let s = v.resolve_docusign().unwrap();
