@@ -281,7 +281,7 @@ pub fn normalize_text(raw: String) -> String {
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
 
-use crate::vault::VaultState;
+use crate::credential_store::CredentialStoreState;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -330,7 +330,7 @@ pub fn compute_seal(key: &[u8; 32], hash: &str, size: u64) -> String {
 #[tauri::command]
 pub async fn compute_hmac_seal(
     state: tauri::State<'_, ArtifactGuardState>,
-    vault: tauri::State<'_, VaultState>,
+    vault: tauri::State<'_, CredentialStoreState>,
     hash: String,
     size: u64,
 ) -> Result<String, String> {
@@ -345,6 +345,26 @@ pub async fn compute_hmac_seal(
         .resolve_seal_key()
         .ok_or_else(|| SEAL_KEY_UNAVAILABLE.to_string())?;
     Ok(compute_seal(&key, &hash, size))
+}
+
+// ============================================================================
+// Audit report export (spec §14 V1)
+// ============================================================================
+
+/// Write an exported audit-report PDF to the path the operator picked in the
+/// native save dialog (`@tauri-apps/plugin-dialog`'s `save()` on the WebView
+/// side).
+///
+/// Deliberately narrow: the target must end in `.pdf`, so this command cannot
+/// be repurposed from the WebView as a general write-anything-anywhere
+/// primitive. The dialog is what chooses the directory; this only puts the
+/// bytes there.
+#[tauri::command]
+pub fn save_audit_report(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    if !path.to_ascii_lowercase().ends_with(".pdf") {
+        return Err("audit report must be saved to a .pdf path".to_string());
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("failed to write {path}: {e}"))
 }
 
 // ============================================================================
@@ -492,4 +512,25 @@ mod tests {
     // The vault seam — seal key resolution against a locked vs unlocked vault
     // — is tested in `vault.rs`, where the private lock/unlock methods are
     // reachable without widening the vault's public API for a test.
+
+    #[test]
+    fn save_audit_report_refuses_non_pdf_target() {
+        // The extension guard is what keeps this command from being a general
+        // write-anything-anywhere primitive reachable from the WebView.
+        let path = std::env::temp_dir().join("lexescrow-audit-guard-test.html");
+        let err = save_audit_report(path.to_string_lossy().into_owned(), vec![1, 2, 3])
+            .expect_err("non-.pdf target must be refused");
+        assert!(err.contains(".pdf"));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_audit_report_writes_bytes_to_pdf_path() {
+        let path = std::env::temp_dir().join("lexescrow-audit-guard-test.PDF");
+        let bytes = b"%PDF-1.4 test".to_vec();
+        save_audit_report(path.to_string_lossy().into_owned(), bytes.clone())
+            .expect("write should succeed");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        let _ = std::fs::remove_file(&path);
+    }
 }

@@ -215,7 +215,13 @@ export function ParsedOutputReview() {
           <div className="divide-y divide-app-border">
             <Row
               label="Recommended path"
-              value={isDirect ? "Path A — Direct Settlement" : "Path B — Arbitration Escrow"}
+              value={
+                payload.recommendedPath === ExecutionPath.StagedRelease
+                  ? "Path C — Staged Release"
+                  : isDirect
+                    ? "Path A — Direct Settlement"
+                    : "Path B — Arbitration Escrow"
+              }
             />
             <Row
               label="Signatures"

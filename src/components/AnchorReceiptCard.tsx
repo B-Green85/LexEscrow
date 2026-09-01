@@ -19,7 +19,7 @@ import {
 } from "../lib/anchor-receipt";
 import { toast } from "./Toast";
 import { descriptorFor } from "../lib/assetClasses";
-import { txUrl } from "../lib/explorer";
+import { isRealTxHash, txUrl } from "../lib/explorer";
 
 /** Middle-elided reference — long enough to compare by eye, short enough to fit. */
 export function shortHash(value: string | null | undefined, head = 10, tail = 6): string {
@@ -28,8 +28,21 @@ export function shortHash(value: string | null | undefined, head = 10, tail = 6)
   return `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
 
+/**
+ * Registration reference — an Etherscan link only for a real 32-byte
+ * transaction hash. The simulated `0xanchor-…` references render as plain
+ * monospace text: a link to "transaction not found" reads as evidence the
+ * registration never happened.
+ */
 export function AnchorTxLink({ hash }: { hash: string | null | undefined }) {
   if (!hash) return <span className="font-mono text-sm text-text-muted">—</span>;
+  if (!isRealTxHash(hash)) {
+    return (
+      <span className="font-mono text-sm text-text-primary" data-selectable>
+        {shortHash(hash, 12, 6)}
+      </span>
+    );
+  }
   return (
     <a
       className="font-mono text-sm text-brand-fg underline-offset-2 hover:underline"

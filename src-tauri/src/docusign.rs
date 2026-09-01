@@ -31,7 +31,8 @@ use serde_json::json;
 use tauri::State;
 use tokio::sync::RwLock;
 
-use crate::vault::{DocuSignSecret, VaultState};
+use crate::credential_store::CredentialStoreState;
+use crate::vault::DocuSignSecret;
 
 /// DocuSign rejects assertions older than an hour; we ask for the full window.
 const JWT_TTL_SECS: u64 = 3600;
@@ -583,7 +584,7 @@ pub async fn get_certificate(
 
 /// Pull credentials + a live token. The resolved secret is dropped (and
 /// zeroized) as soon as this returns.
-async fn authed(vault: &State<'_, VaultState>) -> Result<(DocuSignSecret, String), String> {
+async fn authed(vault: &State<'_, CredentialStoreState>) -> Result<(DocuSignSecret, String), String> {
     let creds = vault.resolve_docusign().ok_or(
         "DocuSign is not configured. Unlock the vault and add DocuSign credentials in \
          Configuration.",
@@ -598,7 +599,7 @@ async fn authed(vault: &State<'_, VaultState>) -> Result<(DocuSignSecret, String
 /// and lifecycle, so a closed session stops polling without a task leak.
 #[tauri::command]
 pub async fn docusign_send_envelope(
-    vault: State<'_, VaultState>,
+    vault: State<'_, CredentialStoreState>,
     document_bytes: Vec<u8>,
     document_name: String,
     subject: String,
@@ -627,7 +628,7 @@ pub async fn docusign_send_envelope(
 /// One status read. Called by the frontend on its 30-second interval.
 #[tauri::command]
 pub async fn docusign_poll_status(
-    vault: State<'_, VaultState>,
+    vault: State<'_, CredentialStoreState>,
     envelope_id: String,
 ) -> Result<String, String> {
     let (creds, token) = authed(&vault).await?;
@@ -640,7 +641,7 @@ pub async fn docusign_poll_status(
 /// `client_user_id` — see [`ESignSigner::client_user_id`].
 #[tauri::command]
 pub async fn docusign_get_embedded_signing_url(
-    vault: State<'_, VaultState>,
+    vault: State<'_, CredentialStoreState>,
     envelope_id: String,
     signer_email: String,
     signer_name: String,
@@ -664,7 +665,7 @@ pub async fn docusign_get_embedded_signing_url(
 /// Certificate of completion PDF bytes. Call only once status is `completed`.
 #[tauri::command]
 pub async fn docusign_get_certificate(
-    vault: State<'_, VaultState>,
+    vault: State<'_, CredentialStoreState>,
     envelope_id: String,
 ) -> Result<Vec<u8>, String> {
     let (creds, token) = authed(&vault).await?;

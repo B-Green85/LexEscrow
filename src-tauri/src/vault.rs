@@ -24,7 +24,6 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use scrypt::{scrypt, Params};
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const VAULT_FILENAME: &str = "credentials.vault";
@@ -51,6 +50,14 @@ pub enum VaultError {
     Corrupt,
     #[error("crypto failure")]
     Crypto,
+    /// The group exists in the schema but holds nothing yet. Distinct from
+    /// `UnknownKey` because the credential store maps this one to
+    /// `CredentialStoreError::NotFound`, which callers treat as "not
+    /// configured" rather than as a fault.
+    #[error("credential not set")]
+    NotFound,
+    #[error("unknown credential key: {0}")]
+    UnknownKey(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -302,6 +309,154 @@ pub struct BlockchainPublic {
 }
 
 // ============================================================================
+// Shape builders
+// ============================================================================
+//
+// The public shapes are built from resolved entries rather than from
+// `VaultData`, because the OS-keychain backend has no `VaultData` to read. One
+// builder per shape, shared by both backends: the masking rules — the account
+// hint, the RPC host, every presence flag — are the IPC boundary this app is
+// built around, and two implementations of them is one implementation too many.
+
+impl VaultPublic {
+    pub fn build(
+        ai: Option<&AiEntry>,
+        smtp: Option<&SmtpEntry>,
+        twilio: Option<&TwilioEntry>,
+    ) -> Self {
+        VaultPublic {
+            ai: ai.map(|e| AiPublic {
+                provider_name: e.provider_name.clone(),
+                endpoint: e.endpoint.clone(),
+                connection_type: e.connection_type.clone(),
+                has_api_key: !e.api_key.is_empty(),
+            }),
+            smtp: smtp.map(|e| SmtpPublic {
+                host: e.host.clone(),
+                port: e.port,
+                username: e.username.clone(),
+                has_password: !e.password.is_empty(),
+            }),
+            twilio: twilio.map(|e| TwilioPublic {
+                account_sid: e.account_sid.clone(),
+                from_number: e.from_number.clone(),
+                has_auth_token: !e.auth_token.is_empty(),
+            }),
+        }
+    }
+}
+
+impl DocuSignPublic {
+    pub fn build(entry: Option<&DocuSignSecret>) -> Self {
+        match entry {
+            Some(e) => DocuSignPublic {
+                // "Configured" means it could actually authenticate — metadata
+                // alone with no signing key is not a usable credential.
+                has_credentials: has_docusign_credentials(e),
+                environment: e.environment.clone(),
+                account_id_hint: last4(&e.account_id),
+                user_id: e.user_id.clone(),
+                account_id: e.account_id.clone(),
+                base_uri: e.base_uri.clone(),
+                has_integration_key: !e.integration_key.is_empty(),
+                has_jwt_private_key: !e.jwt_private_key.is_empty(),
+            },
+            None => DocuSignPublic {
+                has_credentials: false,
+                environment: String::new(),
+                account_id_hint: String::new(),
+                user_id: String::new(),
+                account_id: String::new(),
+                base_uri: String::new(),
+                has_integration_key: false,
+                has_jwt_private_key: false,
+            },
+        }
+    }
+}
+
+impl ClioPublic {
+    pub fn build(entry: Option<&ClioConfig>) -> Self {
+        match entry {
+            Some(e) => ClioPublic {
+                webhook_url: e.webhook_url.clone(),
+                matter_id: e.matter_id.clone().unwrap_or_default(),
+                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
+            },
+            None => ClioPublic {
+                webhook_url: String::new(),
+                matter_id: String::new(),
+                has_api_key: false,
+            },
+        }
+    }
+}
+
+impl PracticePantherPublic {
+    pub fn build(entry: Option<&PracticePantherConfig>) -> Self {
+        match entry {
+            Some(e) => PracticePantherPublic {
+                webhook_url: e.webhook_url.clone(),
+                matter_id: e.matter_id.clone().unwrap_or_default(),
+                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
+            },
+            None => PracticePantherPublic {
+                webhook_url: String::new(),
+                matter_id: String::new(),
+                has_api_key: false,
+            },
+        }
+    }
+}
+
+impl BlockchainPublic {
+    pub fn build(entry: Option<&BlockchainConfig>) -> Self {
+        match entry {
+            Some(e) => BlockchainPublic {
+                has_config: has_network_config(e),
+                network_name: e.network_name.clone(),
+                chain_id: e.chain_id,
+                contract_address: e.contract_address.clone(),
+                deployer_address: e.deployer_address.clone(),
+                usdc_address: e.usdc_address.clone(),
+                forwarder_address: e.forwarder_address.clone(),
+                rpc_url_hint: url_host(&e.rpc_url),
+                has_private_key: !e.deployer_private_key.is_empty(),
+            },
+            None => BlockchainPublic {
+                has_config: false,
+                network_name: String::new(),
+                chain_id: 0,
+                contract_address: String::new(),
+                deployer_address: String::new(),
+                usdc_address: String::new(),
+                forwarder_address: String::new(),
+                rpc_url_hint: String::new(),
+                has_private_key: false,
+            },
+        }
+    }
+}
+
+/// Could these credentials actually authenticate against DocuSign? Metadata
+/// with no signing key describes an account this install can name but not act
+/// as, so the provider gate has to insist on all three.
+pub fn has_docusign_credentials(e: &DocuSignSecret) -> bool {
+    !e.integration_key.is_empty() && !e.jwt_private_key.is_empty() && !e.account_id.is_empty()
+}
+
+/// Can this install actually settle on-chain?
+///
+/// Stricter than `has_network_config`, and for the same reason
+/// `has_docusign_credentials` insists on a PEM: network settings with no
+/// signing key describe a chain this install can read but not write. The settle
+/// button gates on this, so "configured" has to mean "a settlement submitted
+/// now would succeed".
+pub fn can_settle(e: &BlockchainConfig) -> bool {
+    has_network_config(e) && !e.deployer_private_key.is_empty()
+}
+
+// ============================================================================
 // Renderer inputs (secret optional — omitted keeps the existing secret)
 // ============================================================================
 
@@ -395,6 +550,155 @@ pub struct BlockchainInput {
 }
 
 // ============================================================================
+// Merge rules (shared by both credential backends)
+// ============================================================================
+//
+// The house rule for every secret in this file: a blank or omitted secret on
+// edit keeps whatever is stored, so an operator can fix a mistyped endpoint
+// without re-pasting an RSA PEM or a deployer key. These live as free functions
+// rather than inside `VaultState` because the OS-keychain backend has to apply
+// exactly the same rule to exactly the same shapes — and a second copy of
+// "blank keeps existing" is a second chance to get it subtly wrong, which here
+// means silently clearing a credential the operator believed they had kept.
+
+/// Blank submitted value → keep the current one.
+fn keep(submitted: &str, current: Option<&String>) -> String {
+    if submitted.is_empty() {
+        current.cloned().unwrap_or_default()
+    } else {
+        submitted.to_string()
+    }
+}
+
+pub fn merge_ai(existing: Option<&AiEntry>, input: AiInput) -> AiEntry {
+    let api_key = input
+        .api_key
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.map(|e| e.api_key.clone()))
+        .unwrap_or_default();
+    AiEntry {
+        provider_name: input.provider_name.trim().to_string(),
+        endpoint: input.endpoint.trim().to_string(),
+        connection_type: input.connection_type,
+        api_key,
+    }
+}
+
+pub fn merge_smtp(existing: Option<&SmtpEntry>, input: SmtpInput) -> SmtpEntry {
+    let password = input
+        .password
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.map(|e| e.password.clone()))
+        .unwrap_or_default();
+    SmtpEntry {
+        host: input.host.trim().to_string(),
+        port: input.port,
+        username: input.username.trim().to_string(),
+        password,
+    }
+}
+
+pub fn merge_twilio(existing: Option<&TwilioEntry>, input: TwilioInput) -> TwilioEntry {
+    let auth_token = input
+        .auth_token
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.map(|e| e.auth_token.clone()))
+        .unwrap_or_default();
+    TwilioEntry {
+        account_sid: input.account_sid.trim().to_string(),
+        from_number: input.from_number.trim().to_string(),
+        auth_token,
+    }
+}
+
+pub fn merge_docusign(existing: Option<&DocuSignSecret>, input: DocuSignInput) -> DocuSignSecret {
+    DocuSignSecret {
+        integration_key: keep(
+            input.integration_key.trim(),
+            existing.map(|e| &e.integration_key),
+        ),
+        user_id: input.user_id.trim().to_string(),
+        account_id: input.account_id.trim().to_string(),
+        base_uri: input.base_uri.trim().trim_end_matches('/').to_string(),
+        // The PEM is *not* trimmed per-line — only outer whitespace — because
+        // its internal newlines are load-bearing for parsing.
+        jwt_private_key: keep(
+            input.jwt_private_key.trim(),
+            existing.map(|e| &e.jwt_private_key),
+        ),
+        environment: input.environment.trim().to_string(),
+    }
+}
+
+/// `None` clears the entry outright — a blank webhook URL is how the
+/// Configuration screen deletes an integration without a second command, and it
+/// means a disabled integration does not leave an API key behind.
+pub fn merge_clio(existing: Option<&ClioConfig>, input: ClioConfigInput) -> Option<ClioConfig> {
+    let url = input.webhook_url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let api_key = input
+        .api_key
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| existing.and_then(|e| e.api_key.clone()));
+    Some(ClioConfig {
+        webhook_url: url.to_string(),
+        matter_id: input
+            .matter_id
+            .clone()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        api_key,
+    })
+}
+
+/// Same clear-on-blank-URL rule as Clio.
+pub fn merge_practice_panther(
+    existing: Option<&PracticePantherConfig>,
+    input: PracticePantherConfigInput,
+) -> Option<PracticePantherConfig> {
+    let url = input.webhook_url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let api_key = input
+        .api_key
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| existing.and_then(|e| e.api_key.clone()));
+    Some(PracticePantherConfig {
+        webhook_url: url.to_string(),
+        matter_id: input
+            .matter_id
+            .clone()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        api_key,
+    })
+}
+
+pub fn merge_blockchain(
+    existing: Option<&BlockchainConfig>,
+    input: BlockchainInput,
+) -> BlockchainConfig {
+    BlockchainConfig {
+        rpc_url: keep(input.rpc_url.trim(), existing.map(|e| &e.rpc_url)),
+        chain_id: input.chain_id,
+        contract_address: input.contract_address.trim().to_string(),
+        deployer_address: input.deployer_address.trim().to_string(),
+        deployer_private_key: keep(
+            input.deployer_private_key.trim(),
+            existing.map(|e| &e.deployer_private_key),
+        ),
+        usdc_address: input.usdc_address.trim().to_string(),
+        forwarder_address: input.forwarder_address.trim().to_string(),
+        network_name: input.network_name.trim().to_string(),
+    }
+}
+
+// ============================================================================
 // Command result shapes
 // ============================================================================
 
@@ -408,10 +712,10 @@ pub struct VaultStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnlockResult {
-    ok: bool,
-    created: bool,
-    reason: Option<String>,
-    message: Option<String>,
+    pub ok: bool,
+    pub created: bool,
+    pub reason: Option<String>,
+    pub message: Option<String>,
 }
 
 // ============================================================================
@@ -451,14 +755,14 @@ impl VaultState {
         }
     }
 
-    fn status(&self) -> VaultStatus {
+    pub fn status(&self) -> VaultStatus {
         VaultStatus {
             exists: self.path.exists(),
             unlocked: self.inner.lock().unwrap().is_some(),
         }
     }
 
-    fn unlock(&self, password: &str) -> UnlockResult {
+    pub fn unlock(&self, password: &str) -> UnlockResult {
         if password.is_empty() {
             return UnlockResult {
                 ok: false,
@@ -541,33 +845,20 @@ impl VaultState {
         }
     }
 
-    fn lock(&self) {
+    pub fn lock(&self) {
         // Dropping Unlocked zeroizes the key (Zeroizing).
         *self.inner.lock().unwrap() = None;
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn get_public(&self) -> Result<VaultPublic, VaultError> {
         let guard = self.inner.lock().unwrap();
         let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
-        Ok(VaultPublic {
-            ai: data.ai.as_ref().map(|e| AiPublic {
-                provider_name: e.provider_name.clone(),
-                endpoint: e.endpoint.clone(),
-                connection_type: e.connection_type.clone(),
-                has_api_key: !e.api_key.is_empty(),
-            }),
-            smtp: data.smtp.as_ref().map(|e| SmtpPublic {
-                host: e.host.clone(),
-                port: e.port,
-                username: e.username.clone(),
-                has_password: !e.password.is_empty(),
-            }),
-            twilio: data.twilio.as_ref().map(|e| TwilioPublic {
-                account_sid: e.account_sid.clone(),
-                from_number: e.from_number.clone(),
-                has_auth_token: !e.auth_token.is_empty(),
-            }),
-        })
+        Ok(VaultPublic::build(
+            data.ai.as_ref(),
+            data.smtp.as_ref(),
+            data.twilio.as_ref(),
+        ))
     }
 
     /// Mutate the unlocked data under lock, then persist.
@@ -578,125 +869,46 @@ impl VaultState {
         persist(&state.data, &state.key, &state.salt, &self.path)
     }
 
+    // The typed setters and resolvers below are now reached through
+    // `credential_store::CredentialStoreState`, which applies the same merge
+    // rules against whichever backend is active. They are kept because they are
+    // the direct, backend-free expression of the vault's own contract, and the
+    // vault's test suite exercises them without standing up a store.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_ai(&self, input: AiInput) -> Result<(), VaultError> {
-        self.mutate(|data| {
-            let api_key = input
-                .api_key
-                .filter(|s| !s.is_empty())
-                .or_else(|| data.ai.as_ref().map(|e| e.api_key.clone()))
-                .unwrap_or_default();
-            data.ai = Some(AiEntry {
-                provider_name: input.provider_name.trim().to_string(),
-                endpoint: input.endpoint.trim().to_string(),
-                connection_type: input.connection_type,
-                api_key,
-            });
-        })
+        self.mutate(|data| data.ai = Some(merge_ai(data.ai.as_ref(), input)))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_smtp(&self, input: SmtpInput) -> Result<(), VaultError> {
-        self.mutate(|data| {
-            let password = input
-                .password
-                .filter(|s| !s.is_empty())
-                .or_else(|| data.smtp.as_ref().map(|e| e.password.clone()))
-                .unwrap_or_default();
-            data.smtp = Some(SmtpEntry {
-                host: input.host.trim().to_string(),
-                port: input.port,
-                username: input.username.trim().to_string(),
-                password,
-            });
-        })
+        self.mutate(|data| data.smtp = Some(merge_smtp(data.smtp.as_ref(), input)))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_twilio(&self, input: TwilioInput) -> Result<(), VaultError> {
-        self.mutate(|data| {
-            let auth_token = input
-                .auth_token
-                .filter(|s| !s.is_empty())
-                .or_else(|| data.twilio.as_ref().map(|e| e.auth_token.clone()))
-                .unwrap_or_default();
-            data.twilio = Some(TwilioEntry {
-                account_sid: input.account_sid.trim().to_string(),
-                from_number: input.from_number.trim().to_string(),
-                auth_token,
-            });
-        })
+        self.mutate(|data| data.twilio = Some(merge_twilio(data.twilio.as_ref(), input)))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_docusign(&self, input: DocuSignInput) -> Result<(), VaultError> {
-        self.mutate(|data| {
-            let existing = data.docusign.as_ref();
-            // Blank secret on edit → keep the stored one (same rule as AI/SMTP).
-            let keep = |submitted: &str, current: Option<&String>| -> String {
-                if submitted.is_empty() {
-                    current.cloned().unwrap_or_default()
-                } else {
-                    submitted.to_string()
-                }
-            };
-            data.docusign = Some(DocuSignSecret {
-                integration_key: keep(
-                    input.integration_key.trim(),
-                    existing.map(|e| &e.integration_key),
-                ),
-                user_id: input.user_id.trim().to_string(),
-                account_id: input.account_id.trim().to_string(),
-                base_uri: input.base_uri.trim().trim_end_matches('/').to_string(),
-                // The PEM is *not* trimmed per-line — only outer whitespace —
-                // because its internal newlines are load-bearing for parsing.
-                jwt_private_key: keep(
-                    input.jwt_private_key.trim(),
-                    existing.map(|e| &e.jwt_private_key),
-                ),
-                environment: input.environment.trim().to_string(),
-            });
-        })
+        self.mutate(|data| data.docusign = Some(merge_docusign(data.docusign.as_ref(), input)))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn get_docusign_public(&self) -> Result<DocuSignPublic, VaultError> {
         let guard = self.inner.lock().unwrap();
         let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
-        Ok(match data.docusign.as_ref() {
-            Some(e) => DocuSignPublic {
-                // "Configured" means it could actually authenticate — metadata
-                // alone with no signing key is not a usable credential.
-                has_credentials: !e.integration_key.is_empty()
-                    && !e.jwt_private_key.is_empty()
-                    && !e.account_id.is_empty(),
-                environment: e.environment.clone(),
-                account_id_hint: last4(&e.account_id),
-                user_id: e.user_id.clone(),
-                account_id: e.account_id.clone(),
-                base_uri: e.base_uri.clone(),
-                has_integration_key: !e.integration_key.is_empty(),
-                has_jwt_private_key: !e.jwt_private_key.is_empty(),
-            },
-            None => DocuSignPublic {
-                has_credentials: false,
-                environment: String::new(),
-                account_id_hint: String::new(),
-                user_id: String::new(),
-                account_id: String::new(),
-                base_uri: String::new(),
-                has_integration_key: false,
-                has_jwt_private_key: false,
-            },
-        })
+        Ok(DocuSignPublic::build(data.docusign.as_ref()))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn has_docusign(&self) -> bool {
         self.inner
             .lock()
             .unwrap()
             .as_ref()
             .and_then(|s| s.data.docusign.as_ref())
-            .is_some_and(|e| {
-                !e.integration_key.is_empty()
-                    && !e.jwt_private_key.is_empty()
-                    && !e.account_id.is_empty()
-            })
+            .is_some_and(has_docusign_credentials)
     }
 
     // ---- Practice-management webhooks (spec §14 V1) ----------------------
@@ -707,87 +919,31 @@ impl VaultState {
     /// half-configured one. That is what gives the Configuration screen a
     /// delete affordance without a second command, and it means a disabled
     /// integration does not leave an API key sitting in the vault.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_clio(&self, input: ClioConfigInput) -> Result<(), VaultError> {
-        self.mutate(|data| {
-            let url = input.webhook_url.trim();
-            if url.is_empty() {
-                data.clio = None;
-                return;
-            }
-            let api_key = input
-                .api_key
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| data.clio.as_ref().and_then(|e| e.api_key.clone()));
-            data.clio = Some(ClioConfig {
-                webhook_url: url.to_string(),
-                matter_id: input
-                    .matter_id
-                    .clone()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                api_key,
-            });
-        })
+        self.mutate(|data| data.clio = merge_clio(data.clio.as_ref(), input))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn get_clio_public(&self) -> Result<ClioPublic, VaultError> {
         let guard = self.inner.lock().unwrap();
         let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
-        Ok(match data.clio.as_ref() {
-            Some(e) => ClioPublic {
-                webhook_url: e.webhook_url.clone(),
-                matter_id: e.matter_id.clone().unwrap_or_default(),
-                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
-            },
-            None => ClioPublic {
-                webhook_url: String::new(),
-                matter_id: String::new(),
-                has_api_key: false,
-            },
-        })
+        Ok(ClioPublic::build(data.clio.as_ref()))
     }
 
     /// Store the PracticePanther config. Same clear-on-blank-URL rule as Clio.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn set_practice_panther(&self, input: PracticePantherConfigInput) -> Result<(), VaultError> {
         self.mutate(|data| {
-            let url = input.webhook_url.trim();
-            if url.is_empty() {
-                data.practice_panther = None;
-                return;
-            }
-            let api_key = input
-                .api_key
-                .clone()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| data.practice_panther.as_ref().and_then(|e| e.api_key.clone()));
-            data.practice_panther = Some(PracticePantherConfig {
-                webhook_url: url.to_string(),
-                matter_id: input
-                    .matter_id
-                    .clone()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty()),
-                api_key,
-            });
+            data.practice_panther = merge_practice_panther(data.practice_panther.as_ref(), input)
         })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn get_practice_panther_public(&self) -> Result<PracticePantherPublic, VaultError> {
         let guard = self.inner.lock().unwrap();
         let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
-        Ok(match data.practice_panther.as_ref() {
-            Some(e) => PracticePantherPublic {
-                webhook_url: e.webhook_url.clone(),
-                matter_id: e.matter_id.clone().unwrap_or_default(),
-                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
-            },
-            None => PracticePantherPublic {
-                webhook_url: String::new(),
-                matter_id: String::new(),
-                has_api_key: false,
-            },
-        })
+        Ok(PracticePantherPublic::build(data.practice_panther.as_ref()))
     }
 
     // ---- Blockchain settlement config -----------------------------------
@@ -807,7 +963,7 @@ impl VaultState {
     /// from the submitted password and the stored salt, then compare it against
     /// the live key in constant time. A wrong password derives a different key
     /// and never touches the ciphertext.
-    fn set_blockchain(&self, password: &str, input: BlockchainInput) -> Result<(), VaultError> {
+    pub fn set_blockchain(&self, password: &str, input: BlockchainInput) -> Result<(), VaultError> {
         let mut guard = self.inner.lock().unwrap();
         let state = guard.as_mut().ok_or(VaultError::Locked)?;
         let candidate = derive_key(password, &state.salt);
@@ -815,81 +971,35 @@ impl VaultState {
             return Err(VaultError::WrongPassword);
         }
 
-        let existing = state.data.blockchain.as_ref();
-        let keep = |submitted: &str, current: Option<&String>| -> String {
-            if submitted.is_empty() {
-                current.cloned().unwrap_or_default()
-            } else {
-                submitted.to_string()
-            }
-        };
-
-        state.data.blockchain = Some(BlockchainConfig {
-            rpc_url: keep(input.rpc_url.trim(), existing.map(|e| &e.rpc_url)),
-            chain_id: input.chain_id,
-            contract_address: input.contract_address.trim().to_string(),
-            deployer_address: input.deployer_address.trim().to_string(),
-            deployer_private_key: keep(
-                input.deployer_private_key.trim(),
-                existing.map(|e| &e.deployer_private_key),
-            ),
-            usdc_address: input.usdc_address.trim().to_string(),
-            forwarder_address: input.forwarder_address.trim().to_string(),
-            network_name: input.network_name.trim().to_string(),
-        });
+        state.data.blockchain = Some(merge_blockchain(state.data.blockchain.as_ref(), input));
         persist(&state.data, &state.key, &state.salt, &self.path)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn get_blockchain_public(&self) -> Result<BlockchainPublic, VaultError> {
         let guard = self.inner.lock().unwrap();
         let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
-        Ok(match data.blockchain.as_ref() {
-            Some(e) => BlockchainPublic {
-                has_config: has_network_config(e),
-                network_name: e.network_name.clone(),
-                chain_id: e.chain_id,
-                contract_address: e.contract_address.clone(),
-                deployer_address: e.deployer_address.clone(),
-                usdc_address: e.usdc_address.clone(),
-                forwarder_address: e.forwarder_address.clone(),
-                rpc_url_hint: url_host(&e.rpc_url),
-                has_private_key: !e.deployer_private_key.is_empty(),
-            },
-            None => BlockchainPublic {
-                has_config: false,
-                network_name: String::new(),
-                chain_id: 0,
-                contract_address: String::new(),
-                deployer_address: String::new(),
-                usdc_address: String::new(),
-                forwarder_address: String::new(),
-                rpc_url_hint: String::new(),
-                has_private_key: false,
-            },
-        })
+        Ok(BlockchainPublic::build(data.blockchain.as_ref()))
     }
 
-    /// Can this install actually settle on-chain?
-    ///
-    /// Stricter than `has_config`, and for the same reason `has_docusign`
-    /// insists on a PEM: network settings with no signing key describe a chain
-    /// this install can read but not write. The settle button gates on this,
-    /// so "configured" has to mean "a settlement submitted now would succeed".
+    #[cfg_attr(not(test), allow(dead_code))]
     fn has_blockchain(&self) -> bool {
         self.inner
             .lock()
             .unwrap()
             .as_ref()
             .and_then(|s| s.data.blockchain.as_ref())
-            .is_some_and(|e| has_network_config(e) && !e.deployer_private_key.is_empty())
+            .is_some_and(can_settle)
     }
 
-    fn delete_group(&self, group: &str) -> Result<(), VaultError> {
+    pub fn delete_group(&self, group: &str) -> Result<(), VaultError> {
         self.mutate(|data| match group {
             "ai" => data.ai = None,
             "smtp" => data.smtp = None,
             "twilio" => data.twilio = None,
             "docusign" => data.docusign = None,
+            "clio" => data.clio = None,
+            "practice-panther" => data.practice_panther = None,
             "blockchain" => data.blockchain = None,
             // "seal" is intentionally absent. It is not a user credential, and
             // dropping it would orphan every AnchorReceipt seal this install
@@ -899,7 +1009,7 @@ impl VaultState {
         })
     }
 
-    fn change_password(&self, current: &str, next: &str) -> Result<(), VaultError> {
+    pub fn change_password(&self, current: &str, next: &str) -> Result<(), VaultError> {
         if next.is_empty() {
             return Err(VaultError::Crypto);
         }
@@ -920,20 +1030,24 @@ impl VaultState {
 
     // ---- internal resolvers (never cross IPC) ----------------------------
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_ai(&self) -> Option<AiEntry> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.ai.clone())
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_smtp(&self) -> Option<SmtpEntry> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.smtp.clone())
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_twilio(&self) -> Option<TwilioEntry> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.twilio.clone())
     }
 
     /// DocuSign credentials for `docusign.rs`. The returned clone zeroizes
     /// itself on drop, so the caller must not stash it beyond the request.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_docusign(&self) -> Option<DocuSignSecret> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.docusign.clone())
     }
@@ -941,11 +1055,13 @@ impl VaultState {
     /// Clio config for `integrations.rs`. Internal only — the API key is a
     /// bearer token for a firm's matter data, so the webhook POST is made in
     /// the backend and the key never reaches the WebView.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_clio(&self) -> Option<ClioConfig> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.clio.clone())
     }
 
     /// PracticePanther config for `integrations.rs`. Same posture as Clio.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_practice_panther(&self) -> Option<PracticePantherConfig> {
         self.inner
             .lock()
@@ -958,6 +1074,7 @@ impl VaultState {
     /// that hands out the deployer private key, so it exists to serve exactly
     /// one caller: the Rust-side signer. Nothing that can reach the WebView may
     /// call it. The returned clone zeroizes on drop.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_blockchain(&self) -> Option<BlockchainConfig> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.blockchain.clone())
     }
@@ -969,6 +1086,7 @@ impl VaultState {
     /// caller surfaces that as a failed registration step rather than falling
     /// back to some weaker key, which would produce seals that silently do not
     /// match the ones this install issues when unlocked.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_seal_key(&self) -> Option<Zeroizing<[u8; KEY_BYTES]>> {
         let guard = self.inner.lock().unwrap();
         let entry = guard.as_ref()?.data.seal.as_ref()?;
@@ -980,6 +1098,114 @@ impl VaultState {
         key.copy_from_slice(&bytes);
         Some(key)
     }
+
+    // ---- Group-keyed access (the CredentialStore seam) --------------------
+    //
+    // `credential_store::VaultStore` is a thin adapter over these three. They
+    // exist so that adapter can be *only* an adapter: the crypto, the atomic
+    // write and the zeroizing all stay here, and the store layer never sees a
+    // key, a salt or a plaintext envelope. The group vocabulary
+    // ("ai", "practice-panther", "hmac-vault-key", …) is the store's, shared so
+    // the two backends address the same credential by the same name.
+
+    /// Serialize one group. Structured groups come back as JSON; the seal key
+    /// comes back as its bare base64, since it is a scalar and wrapping it in
+    /// JSON quotes would make the two backends disagree on its encoding.
+    pub fn get_group_json(&self, key: &str) -> Result<String, VaultError> {
+        let guard = self.inner.lock().unwrap();
+        let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
+        let json = match key {
+            "ai" => data.ai.as_ref().map(serde_json::to_string).transpose()?,
+            "smtp" => data.smtp.as_ref().map(serde_json::to_string).transpose()?,
+            "twilio" => data.twilio.as_ref().map(serde_json::to_string).transpose()?,
+            "docusign" => data.docusign.as_ref().map(serde_json::to_string).transpose()?,
+            "clio" => data.clio.as_ref().map(serde_json::to_string).transpose()?,
+            "practice-panther" => data
+                .practice_panther
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?,
+            "blockchain" => data.blockchain.as_ref().map(serde_json::to_string).transpose()?,
+            "hmac-vault-key" => data
+                .seal
+                .as_ref()
+                .map(|e| e.key_b64.clone())
+                .filter(|s| !s.is_empty()),
+            other => return Err(VaultError::UnknownKey(other.to_string())),
+        };
+        json.ok_or(VaultError::NotFound)
+    }
+
+    /// Deserialize one group and persist. Parsing happens before the vault lock
+    /// is taken, so a malformed payload is rejected without touching the file.
+    pub fn set_group_json(&self, key: &str, value: &str) -> Result<(), VaultError> {
+        match key {
+            "ai" => {
+                let e: AiEntry = serde_json::from_str(value)?;
+                self.mutate(|d| d.ai = Some(e))
+            }
+            "smtp" => {
+                let e: SmtpEntry = serde_json::from_str(value)?;
+                self.mutate(|d| d.smtp = Some(e))
+            }
+            "twilio" => {
+                let e: TwilioEntry = serde_json::from_str(value)?;
+                self.mutate(|d| d.twilio = Some(e))
+            }
+            "docusign" => {
+                let e: DocuSignSecret = serde_json::from_str(value)?;
+                self.mutate(|d| d.docusign = Some(e))
+            }
+            "clio" => {
+                let e: ClioConfig = serde_json::from_str(value)?;
+                self.mutate(|d| d.clio = Some(e))
+            }
+            "practice-panther" => {
+                let e: PracticePantherConfig = serde_json::from_str(value)?;
+                self.mutate(|d| d.practice_panther = Some(e))
+            }
+            "blockchain" => {
+                let e: BlockchainConfig = serde_json::from_str(value)?;
+                self.mutate(|d| d.blockchain = Some(e))
+            }
+            "hmac-vault-key" => {
+                let b64 = value.to_string();
+                self.mutate(|d| d.seal = Some(SealEntry { key_b64: b64 }))
+            }
+            other => Err(VaultError::UnknownKey(other.to_string())),
+        }
+    }
+
+    /// Clear one group.
+    ///
+    /// `hmac-vault-key` is rejected rather than ignored. `delete_group` can
+    /// afford to silently skip it because its callers pass a fixed set of UI
+    /// group names, but this seam is reached from a generic `delete(key)` — and
+    /// a silent no-op there would report success for an operation that did not
+    /// happen. Dropping the seal orphans every AnchorReceipt this install has
+    /// ever issued, so the honest answer is to refuse.
+    pub fn delete_group_json(&self, key: &str) -> Result<(), VaultError> {
+        match key {
+            "hmac-vault-key" => Err(VaultError::UnknownKey(
+                "hmac-vault-key is not deletable — it anchors every issued AnchorReceipt".into(),
+            )),
+            "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practice-panther" | "blockchain" => {
+                self.delete_group(key)
+            }
+            other => Err(VaultError::UnknownKey(other.to_string())),
+        }
+    }
+}
+
+/// Mint a fresh per-install seal key, base64-encoded.
+///
+/// Public because the OS-keychain backend needs the same 32-random-bytes rule:
+/// the seal must identify the *installation*, and two backends minting it two
+/// different ways is two chances for that property to quietly weaken.
+pub fn new_seal_key_b64() -> String {
+    // Cloned rather than moved out: `SealEntry` is `ZeroizeOnDrop`, so the
+    // struct's own copy is wiped when this returns.
+    new_seal_entry().key_b64.clone()
 }
 
 /// Mint a fresh per-install seal key from the OS CSPRNG.
@@ -1091,132 +1317,6 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
-}
-
-// ============================================================================
-// Tauri commands
-// ============================================================================
-
-#[tauri::command]
-pub fn vault_status(state: State<'_, VaultState>) -> VaultStatus {
-    state.status()
-}
-
-#[tauri::command]
-pub fn vault_unlock(state: State<'_, VaultState>, password: String) -> UnlockResult {
-    state.unlock(&password)
-}
-
-#[tauri::command]
-pub fn vault_lock(state: State<'_, VaultState>) {
-    state.lock();
-}
-
-#[tauri::command]
-pub fn vault_get_public(state: State<'_, VaultState>) -> Result<VaultPublic, String> {
-    state.get_public().map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_set_ai(state: State<'_, VaultState>, input: AiInput) -> Result<(), String> {
-    state.set_ai(input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_set_smtp(state: State<'_, VaultState>, input: SmtpInput) -> Result<(), String> {
-    state.set_smtp(input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_set_twilio(state: State<'_, VaultState>, input: TwilioInput) -> Result<(), String> {
-    state.set_twilio(input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_set_docusign(state: State<'_, VaultState>, input: DocuSignInput) -> Result<(), String> {
-    state.set_docusign(input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_get_docusign_public(state: State<'_, VaultState>) -> Result<DocuSignPublic, String> {
-    state.get_docusign_public().map_err(err)
-}
-
-/// Presence flag for the frontend provider resolver. A locked vault reports
-/// `false` rather than erroring — "not available right now" is the honest
-/// answer, and the caller falls back to the mock provider.
-#[tauri::command]
-pub fn vault_has_docusign(state: State<'_, VaultState>) -> bool {
-    state.has_docusign()
-}
-
-#[tauri::command]
-pub fn vault_delete(state: State<'_, VaultState>, group: String) -> Result<(), String> {
-    state.delete_group(&group).map_err(err)
-}
-
-// ---- Practice-management webhooks (spec §14 V1) ---------------------------
-
-#[tauri::command]
-pub fn vault_set_clio(state: State<'_, VaultState>, input: ClioConfigInput) -> Result<(), String> {
-    state.set_clio(input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_get_clio_public(state: State<'_, VaultState>) -> Result<ClioPublic, String> {
-    state.get_clio_public().map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_set_practice_panther(
-    state: State<'_, VaultState>,
-    input: PracticePantherConfigInput,
-) -> Result<(), String> {
-    state.set_practice_panther(input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_get_practice_panther_public(
-    state: State<'_, VaultState>,
-) -> Result<PracticePantherPublic, String> {
-    state.get_practice_panther_public().map_err(err)
-}
-
-// ---- Blockchain settlement config -----------------------------------------
-
-/// Write the blockchain config. Takes the vault password as a second factor —
-/// see `VaultState::set_blockchain` for why this setter alone does.
-#[tauri::command]
-pub fn vault_set_blockchain(
-    state: State<'_, VaultState>,
-    password: String,
-    input: BlockchainInput,
-) -> Result<(), String> {
-    state.set_blockchain(&password, input).map_err(err)
-}
-
-#[tauri::command]
-pub fn vault_get_blockchain_public(
-    state: State<'_, VaultState>,
-) -> Result<BlockchainPublic, String> {
-    state.get_blockchain_public().map_err(err)
-}
-
-/// Presence flag gating the settle button. A locked vault reports `false`
-/// rather than erroring, matching `vault_has_docusign` — "not available right
-/// now" is the honest answer, and the caller degrades instead of failing.
-#[tauri::command]
-pub fn vault_has_blockchain(state: State<'_, VaultState>) -> bool {
-    state.has_blockchain()
-}
-
-#[tauri::command]
-pub fn vault_change_password(
-    state: State<'_, VaultState>,
-    current: String,
-    next: String,
-) -> Result<(), String> {
-    state.change_password(&current, &next).map_err(err)
 }
 
 // ============================================================================

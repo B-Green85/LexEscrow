@@ -52,7 +52,31 @@ function base(): string {
   return (EXPLORERS[chainId] ?? EXPLORERS[SEPOLIA]).base;
 }
 
-/** Explorer URL for a transaction hash. */
+/** A real 32-byte transaction hash: `0x` + exactly 64 hex characters. */
+const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * Is this a value that could actually exist on-chain?
+ *
+ * The app carries several stand-in references that merely *look* like
+ * transaction hashes — `0xanchor-…` (AnchorReceipt), `0xarb-…` / `0xstaged-…`
+ * (Path B/C stubs), truncated demo values — and an explorer link for any of
+ * them lands on "transaction not found", which reads as evidence the money
+ * never moved. Only a well-formed 32-byte hash earns a link; callers must
+ * render everything else as plain monospace text.
+ */
+export function isRealTxHash(hash: string | null | undefined): hash is string {
+  return typeof hash === "string" && TX_HASH_RE.test(hash);
+}
+
+/**
+ * Explorer URL for a transaction hash.
+ *
+ * Callers must gate on `isRealTxHash` before linking — this keeps returning a
+ * string for any input so existing non-tx-hash renderings fail visibly (a dead
+ * link) rather than throwing, but every screen that shows settlement
+ * references guards with the predicate above.
+ */
 export function txUrl(hash: string): string {
   return `${base()}/tx/${hash}`;
 }

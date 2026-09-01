@@ -125,6 +125,7 @@ export function ManualEntryForm({
           >
             <option value={ExecutionPath.DirectSettlement}>Direct Settlement</option>
             <option value={ExecutionPath.ArbitrationEscrow}>Arbitration Escrow</option>
+            <option value={ExecutionPath.StagedRelease}>Staged Release</option>
           </select>
         </div>
 

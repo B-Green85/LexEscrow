@@ -17,7 +17,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::State;
 
-use crate::vault::VaultState;
+use crate::credential_store::CredentialStoreState;
 
 /// Spec Task 2 — abandon the request after ten seconds.
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -61,7 +61,7 @@ impl Vendor {
 /// changing what the frontend meant to send.
 #[tauri::command]
 pub async fn integration_send_webhook(
-    state: State<'_, VaultState>,
+    state: State<'_, CredentialStoreState>,
     vendor: String,
     body: String,
 ) -> Result<WebhookOutcome, String> {

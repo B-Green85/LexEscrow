@@ -203,3 +203,64 @@ export interface AiSecret {
   connectionType: ConnectionType;
   apiKey: string;
 }
+
+// ── Credential store backend selection ───────────────────────────────────────
+
+/**
+ * Which store holds this install's credentials.
+ *
+ * The wire form matches the Rust `StoreBackend` enum and the on-disk config
+ * file, so the string in `lexescrow_store_config.json`, the one crossing IPC,
+ * and the one branched on here are all the same string.
+ */
+export type StoreBackend = "os_keychain" | "app_vault";
+
+/** Display name for a backend. The only place these two strings are spelled. */
+export const BACKEND_LABEL: Record<StoreBackend, string> = {
+  os_keychain: "OS Keychain",
+  app_vault: "App Vault",
+};
+
+/**
+ * A failed backend switch.
+ *
+ * `code` is the machine token; `LIBSECRET_NOT_FOUND` is the only one the UI
+ * treats specially, because it is the sole failure the operator can fix
+ * themselves — hence `installCommand`, which is null when the distro was not
+ * recognised (a wrong `sudo` line being worse than none).
+ */
+export interface StoreBackendError {
+  code: "LIBSECRET_NOT_FOUND" | "UNKNOWN_BACKEND" | "OS_ERROR" | "VAULT_ERROR" | "NOT_FOUND" | "IO_ERROR";
+  message: string;
+  installCommand: string | null;
+}
+
+export interface OsKeychainStatus {
+  available: boolean;
+  installCommand: string | null;
+}
+
+/**
+ * Outcome of a backend migration.
+ *
+ * `newBackend` is authoritative rather than assumed: a run with any failure
+ * deliberately does *not* switch, and reports the backend still in use, so the
+ * caller must read this instead of assuming the target took effect.
+ */
+export interface MigrateResult {
+  migrated: string[];
+  failed: string[];
+  newBackend: StoreBackend;
+}
+
+/** Human-readable name per credential key, for migration results. */
+export const CREDENTIAL_LABEL: Record<string, string> = {
+  ai: "AI provider",
+  smtp: "SMTP",
+  twilio: "Twilio",
+  docusign: "DocuSign",
+  clio: "Clio",
+  "practice-panther": "PracticePanther",
+  blockchain: "Settlement",
+  "hmac-vault-key": "AnchorReceipt seal key",
+};

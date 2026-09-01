@@ -27,6 +27,7 @@ vi.mock("../lib/backend", () => ({
   updateArbitration: vi.fn(),
   getArbitration: vi.fn(),
   sendClientNotification: vi.fn(),
+  executeDirectSettle: vi.fn(),
 }));
 
 const mocked = vi.mocked(backend);
@@ -54,6 +55,13 @@ function installFakes() {
     channel: "email",
     target: "c@example.com",
     status: "delivered",
+  });
+  // Path A now settles through the real backend command; the store must carry
+  // the hash the receipt reports, and must not proceed without one.
+  mocked.executeDirectSettle.mockResolvedValue({
+    txHash: `0x${"ab".repeat(32)}`,
+    blockNumber: 11281180,
+    gasUsed: 77_381,
   });
 
   mocked.createMilestone.mockImplementation(async (args) => {
@@ -195,7 +203,7 @@ beforeEach(() => {
 });
 
 describe("proceedToExecution — path routing", () => {
-  it("Path A settles directly, unchanged", async () => {
+  it("Path A settles directly through the real directSettle command", async () => {
     seedApprovedSession(ExecutionPath.DirectSettlement);
     await useSession.getState().proceedToExecution();
 
@@ -206,6 +214,17 @@ describe("proceedToExecution — path routing", () => {
     // Unearned balance to the client, earned fees to the firm.
     expect(execution.clientCents).toBe(500_000n);
     expect(execution.firmCents).toBe(100_000n);
+    // The settlement went through the backend command, converting USD cents
+    // to USDC base units (1¢ = 10,000 units), and the hash on the execution
+    // record is the one the receipt reported — never derived locally.
+    expect(mocked.executeDirectSettle).toHaveBeenCalledWith({
+      clientWallet: "0xclient",
+      firmWallet: "0xfirm",
+      clientAmountUsdc: "5000000000",
+      firmAmountUsdc: "1000000000",
+      documentHash: "sha256:abcdef0123456789",
+    });
+    expect(execution.txHash).toBe(`0x${"ab".repeat(32)}`);
     expect(mocked.updateSessionState).toHaveBeenCalledWith(SESSION, "EXECUTED");
     expect(execution.notifications).toHaveLength(1);
   });

@@ -1,22 +1,24 @@
 // @vitest-environment jsdom
 /**
- * Launch lock gate — an install that has been set up, started with its vault
- * sealed.
+ * The vault password prompt — an install that has been set up, started with its
+ * vault sealed.
  *
  * Three things are under test and they are not the same thing:
  *
- *   1. `checkWizard` reads the gate off the vault's real status, not a flag.
- *   2. The gate takes a password and lifts, and does not lift on a wrong one.
- *   3. The main UI is *absent* while gated, not merely covered — the point of
- *      the feature. An overlay with the app still mounted behind it would keep
- *      firing screen effects and stay reachable by keyboard, which is a lock
- *      screen in appearance only.
+ *   1. `checkWizard` reads the vault's real status, not a flag.
+ *   2. The prompt takes a password and clears, and does not clear on a wrong
+ *      one.
+ *   3. A sealed vault no longer gates *launch*. The app opens straight into the
+ *      workflow; the password is asked for at the moment a credential is
+ *      actually needed. An operator who only fingerprints a document never
+ *      touches a credential and is never asked — which is the whole point of
+ *      moving the prompt off the launch path.
  *
  * Run against the real browser vault rather than a mocked `vaultStatus`: a mock
  * would return whatever shape this file expected and prove nothing about the
- * condition the gate actually keys on. The first-run half of the decision —
- * *no* vault, so no gate — cannot be asserted here, because this file has to
- * create a vault to have one to lock. It lives in
+ * condition the prompt actually keys on. The first-run half of the decision —
+ * *no* vault, so nothing to unlock — cannot be asserted here, because this file
+ * has to create a vault to have one to lock. It lives in
  * `setup-wizard-first-run.test.tsx`, the one file that never creates one.
  */
 
@@ -55,7 +57,16 @@ beforeEach(() => {
   // vault takes its in-memory fallback. Vitest's per-file module registry is
   // the reset — the cell starts empty in this file and persists across its
   // tests, which is exactly what "an install that has been set up" needs.
-  useSession.setState({ vaultLocked: false, showWizard: false, wizardComplete: false });
+  useSession.setState({
+    vaultLocked: false,
+    showWizard: false,
+    wizardComplete: false,
+    credentialPromptOpen: false,
+    // A backend is already chosen, so the first-launch selector stays down and
+    // these cases exercise the vault path rather than the selection flow.
+    storeBackend: "app_vault",
+    storeBackendChecked: true,
+  });
 });
 
 afterEach(() => {
@@ -168,23 +179,40 @@ describe("App at launch, vault sealed", () => {
     });
   }
 
-  it("shows the lock screen instead of the app, not on top of it", async () => {
+  it("opens into the app rather than a lock screen", async () => {
     await sealedVault();
     await launch();
 
-    await waitFor(() => expect(screen.getByText("Unlock LexEscrow")).toBeTruthy());
-
-    // The main UI is not rendered at all — no header, no workflow chrome. A
-    // covered-but-mounted app would still answer these.
-    expect(screen.queryByLabelText("Configuration")).toBeNull();
-    expect(screen.queryByLabelText("Batch Processing")).toBeNull();
-    expect(screen.queryByText(/AI parses\. LexGuard validates\./)).toBeNull();
+    // The password moved off the launch path. A sealed vault is no longer a
+    // reason to withhold the whole application: the operator may only want to
+    // fingerprint a document, which needs no credential at all.
+    await waitFor(() => expect(screen.getByLabelText("Configuration")).toBeTruthy());
+    expect(screen.queryByText("Unlock LexEscrow")).toBeNull();
+    expect(screen.getByLabelText("Batch Processing")).toBeTruthy();
   });
 
-  it("reveals the app once the vault is open", async () => {
+  it("asks for the password at the moment a credential is needed", async () => {
     await sealedVault();
     await launch();
+    await waitFor(() => expect(screen.getByLabelText("Configuration")).toBeTruthy());
+
+    // Nothing has needed a credential yet, so nothing has been asked.
+    expect(screen.queryByText("Unlock LexEscrow")).toBeNull();
+
+    // `ensureCredentials` is the seam every credential-consuming action goes
+    // through. Awaiting it is what an action does; the prompt appears in
+    // response to that, not to launching.
+    let granted: boolean | undefined;
+    void useSession
+      .getState()
+      .ensureCredentials()
+      .then((ok) => {
+        granted = ok;
+      });
+
     await waitFor(() => expect(screen.getByText("Unlock LexEscrow")).toBeTruthy());
+    // The app is still there behind it — this overlays, it does not replace.
+    expect(screen.getByLabelText("Configuration")).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText(/Vault password/i), {
       target: { value: PASSWORD },
@@ -194,6 +222,32 @@ describe("App at launch, vault sealed", () => {
     });
 
     await waitFor(() => expect(screen.queryByText("Unlock LexEscrow")).toBeNull());
+    // The waiting action is released, and released as granted.
+    await waitFor(() => expect(granted).toBe(true));
+  });
+
+  it("lets the operator back out of a prompt they did not mean to raise", async () => {
+    await sealedVault();
+    await launch();
+    await waitFor(() => expect(screen.getByLabelText("Configuration")).toBeTruthy());
+
+    let granted: boolean | undefined;
+    void useSession
+      .getState()
+      .ensureCredentials()
+      .then((ok) => {
+        granted = ok;
+      });
+    await waitFor(() => expect(screen.getByText("Unlock LexEscrow")).toBeTruthy());
+
+    // A misclick on Parse must not trap an operator behind a password. The
+    // waiting action is told it was declined rather than left hanging.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    });
+
+    await waitFor(() => expect(screen.queryByText("Unlock LexEscrow")).toBeNull());
+    await waitFor(() => expect(granted).toBe(false));
     expect(screen.getByLabelText("Configuration")).toBeTruthy();
   });
 });

@@ -8,7 +8,9 @@
 mod adapters;
 mod ai;
 mod artifact_guard;
+mod blockchain_write_auth;
 mod cre;
+mod credential_store;
 mod db;
 mod docusign;
 mod esign_callback;
@@ -16,7 +18,10 @@ mod extractor;
 mod integrations;
 mod menu;
 mod notify;
+mod store_config;
 mod vault;
+
+use std::sync::Arc;
 
 use artifact_guard::ArtifactGuardState;
 use tauri::Manager;
@@ -28,6 +33,7 @@ pub fn run() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ArtifactGuardState::new())
         .setup(|app| {
             // Open (and migrate) the SQLite database under the app data dir.
@@ -37,8 +43,18 @@ pub fn run() {
             let db = tauri::async_runtime::block_on(db::Db::connect_and_migrate(&db_path))?;
             app.manage(db);
 
-            // Credential vault (locked until the user provides a password).
-            app.manage(vault::VaultState::new(&data_dir));
+            // Credential storage. The vault is always constructed — unopened it
+            // is just a path — so switching backends or migrating away from one
+            // an earlier launch created never has to build it mid-flight.
+            //
+            // The active backend comes from the plain config file, which is
+            // readable before any store is open (that is the whole reason it is
+            // not itself a credential). No file means first launch: state stays
+            // unselected and the frontend runs `CredentialStoreSelector`.
+            let store_state =
+                credential_store::CredentialStoreState::new(Arc::new(vault::VaultState::new(&data_dir)));
+            credential_store::init_from_config(&store_state, &data_dir);
+            app.manage(store_state);
 
             // Loopback listener for DocuSign's embedded-signing return URL.
             // Bound to 127.0.0.1 only — the sole client is a WebView on this
@@ -59,6 +75,7 @@ pub fn run() {
             artifact_guard::final_verify_before_execution,
             artifact_guard::normalize_text,
             artifact_guard::compute_hmac_seal,
+            artifact_guard::save_audit_report,
             // Persistence + audit
             db::create_session,
             db::update_session_state,
@@ -86,29 +103,44 @@ pub fn run() {
             db::verify_audit_chain,
             // Notifications
             notify::send_client_notification,
-            // Credential vault
-            vault::vault_status,
-            vault::vault_unlock,
-            vault::vault_lock,
-            vault::vault_get_public,
-            vault::vault_set_ai,
-            vault::vault_set_smtp,
-            vault::vault_set_twilio,
-            vault::vault_set_docusign,
-            vault::vault_get_docusign_public,
-            vault::vault_has_docusign,
-            vault::vault_delete,
-            vault::vault_change_password,
-            // Blockchain settlement config (vault-held; replaces contracts/.env)
-            vault::vault_set_blockchain,
-            vault::vault_get_blockchain_public,
-            vault::vault_has_blockchain,
+            // Credential store — backend selection and migration
+            credential_store::get_store_backend,
+            credential_store::set_store_backend,
+            credential_store::check_os_keychain,
+            credential_store::migrate_credentials,
+            credential_store::get_credential_masked,
+            credential_store::set_credential,
+            credential_store::delete_credential,
+            // Vault lifecycle (App Vault backend)
+            credential_store::vault_status,
+            credential_store::vault_unlock,
+            credential_store::vault_lock,
+            credential_store::vault_change_password,
+            // Credentials — routed through whichever backend is active
+            credential_store::vault_get_public,
+            credential_store::vault_set_ai,
+            credential_store::vault_set_smtp,
+            credential_store::vault_set_twilio,
+            credential_store::vault_set_docusign,
+            credential_store::vault_get_docusign_public,
+            credential_store::vault_has_docusign,
+            credential_store::vault_delete,
+            // Blockchain settlement config (replaces contracts/.env).
+            // The write goes through one gated command — `set_credential`
+            // refuses this group, so there is no ungated path to the key.
+            credential_store::set_blockchain_credential,
+            credential_store::has_blockchain_write_auth,
+            credential_store::change_blockchain_write_auth,
+            credential_store::vault_get_blockchain_public,
+            credential_store::vault_has_blockchain,
             cre::get_cre_config,
+            cre::execute_direct_settle,
+            cre::get_usdc_price,
             // Practice-management integrations (Clio / PracticePanther)
-            vault::vault_set_clio,
-            vault::vault_get_clio_public,
-            vault::vault_set_practice_panther,
-            vault::vault_get_practice_panther_public,
+            credential_store::vault_set_clio,
+            credential_store::vault_get_clio_public,
+            credential_store::vault_set_practice_panther,
+            credential_store::vault_get_practice_panther_public,
             integrations::integration_send_webhook,
             // External adapter HTTP calls (backend-issued, no WebView CORS)
             adapters::verify_bar_number,

@@ -11,7 +11,8 @@ use tauri::State;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-use crate::vault::{SmtpEntry, TwilioEntry, VaultState};
+use crate::credential_store::CredentialStoreState;
+use crate::vault::{SmtpEntry, TwilioEntry};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -206,7 +207,7 @@ async fn send_sms(req: &NotifyRequest, vault_twilio: Option<TwilioEntry>) -> Not
 /// CRE confirms settlement — never before funds move.
 #[tauri::command]
 pub async fn send_client_notification(
-    vault: State<'_, VaultState>,
+    vault: State<'_, CredentialStoreState>,
     request: NotifyRequest,
 ) -> Result<NotifyResult, String> {
     let smtp = vault.resolve_smtp();

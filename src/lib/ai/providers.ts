@@ -113,7 +113,9 @@ function extractionToPayload(x: AiExtraction): ParsedRetainerPayload {
     recommendedPath:
       x.recommendedPath === "ArbitrationEscrow"
         ? ExecutionPath.ArbitrationEscrow
-        : ExecutionPath.DirectSettlement,
+        : x.recommendedPath === "StagedRelease"
+          ? ExecutionPath.StagedRelease
+          : ExecutionPath.DirectSettlement,
     anomaliesFlagged: x.anomaliesFlagged,
     anomaliesSuppressed: x.anomaliesSuppressed,
     barNumber: "",

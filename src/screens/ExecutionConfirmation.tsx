@@ -27,7 +27,7 @@ import { toast } from "../components/Toast";
 import type { AnchorReceipt } from "../lib/anchor-receipt";
 import type { AssetClass } from "../lib/assetClasses";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
-import { txUrl } from "../lib/explorer";
+import { isRealTxHash, txUrl } from "../lib/explorer";
 import {
   MAX_MILESTONES,
   type ArbitrationSigner,
@@ -41,7 +41,9 @@ import {
 
 const PHASES: { key: string; label: string }[] = [
   { key: "verifying", label: "Verifying attorney & billing (Chainlink Functions)" },
-  { key: "converting", label: "Converting USD → USDC (Chainlink Price Feeds)" },
+  // The converting label carries no number here — a rate is rendered only when
+  // one has actually been read from the feed (see `usdRate` below).
+  { key: "converting", label: "Converting USD → USDC (Chainlink Price Feed)" },
   { key: "settling", label: "Executing settlement on-chain (CRE)" },
   { key: "notifying", label: "Notifying client" },
 ];
@@ -58,9 +60,21 @@ function shortRef(hash: string | null): string {
   return `${hash.slice(0, 6)}…${hash.slice(-4)}`;
 }
 
-/** Truncated, monospace tx reference linking out to Etherscan. */
+/**
+ * Truncated, monospace tx reference — linking out to Etherscan only when the
+ * value is a real 32-byte transaction hash. Stand-in references (the Path B/C
+ * `0xarb-…` / `0xstaged-…` stubs) render as plain text: an explorer link that
+ * lands on "transaction not found" reads as evidence the money never moved.
+ */
 function TxLink({ hash }: { hash: string | null }) {
   if (!hash) return <span className="font-mono text-sm text-text-muted">—</span>;
+  if (!isRealTxHash(hash)) {
+    return (
+      <span className="font-mono text-sm text-text-primary" data-selectable>
+        {shortRef(hash)}
+      </span>
+    );
+  }
   return (
     <a
       className="font-mono text-sm text-brand-fg underline-offset-2 hover:underline"
@@ -119,7 +133,7 @@ export function AuditCard({
             onPrintReport();
           }}
         >
-          Audit report (PDF)
+          Download Audit Report (PDF)
         </button>
         <button className="btn btn-secondary" onClick={onDownload}>
           JSON
@@ -202,6 +216,30 @@ function DirectSettlementView({
   const done = execution.phase === "done";
   const currentIndex = done ? PHASES.length : PHASES.findIndex((p) => p.key === execution.phase);
 
+  // Live USDC/USD rate for the conversion label — display only, fetched when
+  // the Path A view mounts. Settlement math never touches it. Null (feed
+  // unavailable, or no desktop backend) leaves the label without a number:
+  // a figure shown next to "Chainlink Price Feed" must have come from the
+  // feed, never from a hardcoded peg.
+  const [usdRate, setUsdRate] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    backend
+      .getUsdcPrice()
+      .then((p) => {
+        if (cancelled || !p) return;
+        const usdPerUsdc = Number.parseFloat(p.price);
+        if (Number.isFinite(usdPerUsdc) && usdPerUsdc > 0) {
+          // The feed quotes USD per USDC; the label quotes USDC per USD.
+          setUsdRate((1 / usdPerUsdc).toFixed(5));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <>
       <div className="flex items-center justify-between">
@@ -232,7 +270,9 @@ function DirectSettlementView({
                 <div className="h-5 w-5 rounded-full border-2 border-app-border" />
               )}
               <span className={`text-sm ${status === "pending" ? "text-text-muted" : "text-text-primary"}`}>
-                {p.label}
+                {p.key === "converting" && usdRate
+                  ? `Converting USD → USDC via Chainlink Price Feed (1 USD = ${usdRate} USDC)`
+                  : p.label}
               </span>
             </div>
           );

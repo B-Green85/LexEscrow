@@ -4,6 +4,7 @@ import emblem from "./assets/lexescrow-emblem.png";
 import { Splash } from "./components/Splash";
 import { Toaster } from "./components/Toast";
 import { VaultUnlockGate } from "./components/VaultUnlockGate";
+import { CredentialStoreSelector } from "./components/CredentialStoreSelector";
 import { WorkflowRail } from "./components/WorkflowRail";
 import { HeaderIconButton } from "./components/HeaderIconButton";
 import { DocumentLoad } from "./screens/DocumentLoad";
@@ -108,7 +109,12 @@ function App() {
     openRecent,
     showWizard,
     checkWizard,
-    vaultLocked,
+    storeBackend,
+    storeBackendChecked,
+    checkStoreBackend,
+    setStoreBackendLocal,
+    credentialPromptOpen,
+    resolveCredentialPrompt,
   } = useSession();
   const [showSplash, setShowSplash] = useState(true);
   const chromeLabel = CHROMELESS_LABELS[screen];
@@ -131,26 +137,42 @@ function App() {
     };
   }, []);
 
-  // First-run detection. The answer comes from the vault, so this settles well
-  // before the splash finishes and the wizard never flashes in behind it.
+  // Which credential backend is active. Read before first-run detection,
+  // because the answer changes what "first run" means: under the OS keychain an
+  // install with no vault file may still be fully configured.
   useEffect(() => {
-    void checkWizard();
-  }, [checkWizard]);
+    void checkStoreBackend();
+  }, [checkStoreBackend]);
 
-  // A sealed vault *replaces* the app rather than covering it. An overlay would
-  // leave every screen mounted underneath — firing its effects, holding its own
-  // place in the tab order — which is a lock screen in appearance only. Nothing
-  // past this point renders until the vault is open.
+  // First-run detection. Runs once the backend is known, so it asks the right
+  // store. Settles well before the splash finishes, and the wizard never
+  // flashes in behind it.
+  useEffect(() => {
+    if (!storeBackendChecked || storeBackend === null) return;
+    void checkWizard();
+  }, [checkWizard, storeBackendChecked, storeBackend]);
+
+  // No backend chosen yet — first launch. This *replaces* the app rather than
+  // covering it: an overlay would leave every screen mounted underneath, firing
+  // effects and holding its place in the tab order, which is a gate in
+  // appearance only. Nothing past this point renders, and nothing behind it
+  // would work anyway — there is no store to read a credential from.
   //
-  // The gate and the wizard are mutually exclusive by construction (see
-  // `checkWizard`), but the gate is tested first regardless: if the two ever did
-  // collide, an install with saved credentials should be asked to unlock them,
-  // not walked through creating them again.
-  if (vaultLocked) {
+  // Rendered only once the check has actually completed, so a slow IPC round
+  // trip does not flash the selector at an install that chose a backend months
+  // ago.
+  if (storeBackendChecked && storeBackend === null) {
     return (
       <div className="flex min-h-screen flex-col">
         {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
-        <VaultUnlockGate />
+        <CredentialStoreSelector
+          onSelected={(chosen) => {
+            // Recorded locally first so the gate lifts immediately, then the
+            // normal first-run check runs against the store just selected.
+            setStoreBackendLocal(chosen);
+            void checkWizard();
+          }}
+        />
         <Toaster />
       </div>
     );
@@ -241,6 +263,11 @@ function App() {
           AI parses. LexGuard validates. Humans decide. CRE executes.
         </span>
       </footer>
+
+      {/* The lazy unlock prompt. Unlike the first-launch selector this overlays
+          the app instead of replacing it — the operator has work on screen
+          behind it and is being asked about one action, not shut out. */}
+      {credentialPromptOpen && <VaultUnlockGate onCancel={() => resolveCredentialPrompt(false)} />}
 
       {/* Last child, outside every screen: a toast outlives the click that
           raised it and must not unmount when a screen swaps. */}

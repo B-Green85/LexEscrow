@@ -137,7 +137,7 @@ describe("settlement downloads", () => {
       </>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Audit report (PDF)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download Audit Report (PDF)" }));
 
     expect(screen.getByText("Downloading audit report…")).toBeTruthy();
     expect(onPrintReport).toHaveBeenCalledTimes(1);

@@ -19,8 +19,8 @@
  * would not notice them moving.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SetupWizard, StepProgress, passwordStrength, TOTAL_STEPS } from "./SetupWizard";
 import { Configuration } from "./Configuration";
 import { useSession } from "../store/session";
@@ -260,6 +260,86 @@ describe("skipping optional steps", () => {
     expect(value(/^Chain ID$/)).toBe("11155111");
     // The one field a default must never fill.
     expect(value(/^Deployer private key$/)).toBe("");
+  });
+});
+
+// ── Step 4 under the OS keychain — write authorization gate ──────────────────
+//
+// On this backend there is no vault password to carry from step 2, so the
+// blockchain save must open the same write-auth modal Configuration uses —
+// without it, the gated backend command would refuse the write with no way
+// for the operator to answer it.
+
+describe("step 4 — blockchain under the OS keychain", () => {
+  beforeEach(() => {
+    useSession.setState({ storeBackend: "os_keychain", storeBackendChecked: true });
+    vi.spyOn(backend, "setBlockchain").mockResolvedValue(undefined);
+    vi.spyOn(backend, "hasBlockchainWriteAuth").mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    useSession.setState({ storeBackend: null, storeBackendChecked: false });
+    vi.restoreAllMocks();
+  });
+
+  /** Walk to step 4 — no vault password on this backend, AI skipped. */
+  function openBlockchainStep() {
+    fireEvent.click(button(/Get Started/));
+    fireEvent.click(button(/Continue →/)); // keychain step 2 has nothing to type
+    fireEvent.click(button(/Skip — Use Manual Entry/));
+    const contract = document.getElementById("wz-bc-contract") as HTMLInputElement;
+    fireEvent.change(contract, { target: { value: "0xcontract" } });
+  }
+
+  it("gates the save behind the write authorization modal", async () => {
+    render(<SetupWizard />);
+    openBlockchainStep();
+
+    fireEvent.click(button(/Save & Continue/));
+
+    // First save on this install: the modal asks to *set* a password...
+    expect(await screen.findByText(/Set a write authorization password/)).toBeTruthy();
+    // ...and nothing is written until it is satisfied.
+    expect(backend.setBlockchain).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/^Password$/), { target: { value: "auth-pw" } });
+    fireEvent.change(screen.getByLabelText(/^Confirm password$/), { target: { value: "auth-pw" } });
+    fireEvent.click(button(/Set password and save/));
+
+    // The write carries the modal's password — there is no vault password on
+    // this backend — and the wizard advances.
+    await screen.findByText(/Configure DocuSign eSign/);
+    expect(vi.mocked(backend.setBlockchain).mock.calls[0][0]).toBe("auth-pw");
+  });
+
+  it("asks to confirm rather than to set once a password is enrolled", async () => {
+    vi.mocked(backend.hasBlockchainWriteAuth).mockResolvedValue(true);
+    render(<SetupWizard />);
+    openBlockchainStep();
+    fireEvent.click(button(/Save & Continue/));
+
+    expect(await screen.findByText(/Confirm deployer key change/)).toBeTruthy();
+  });
+
+  it("cancelling the modal writes nothing and keeps the step open", async () => {
+    render(<SetupWizard />);
+    openBlockchainStep();
+    fireEvent.click(button(/Save & Continue/));
+    await screen.findByText(/Set a write authorization password/);
+
+    // The wizard shell is itself a dialog, so scope to the modal by its
+    // accessible name before reaching for its Cancel.
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: /Set a write authorization password/ }),
+      ).getByRole("button", { name: "Cancel" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Set a write authorization password/)).toBeNull(),
+    );
+    expect(backend.setBlockchain).not.toHaveBeenCalled();
+    expect(screen.getByText(/Configure Blockchain Settlement/)).toBeTruthy();
   });
 });
 

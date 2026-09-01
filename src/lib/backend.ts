@@ -27,6 +27,10 @@ import type {
   UnlockResult,
   VaultPublic,
   VaultStatus,
+  StoreBackend,
+  StoreBackendError,
+  OsKeychainStatus,
+  MigrateResult,
 } from "./vaultTypes";
 
 export interface LoadedArtifact {
@@ -893,18 +897,52 @@ export async function getBlockchainPublic(): Promise<BlockchainPublic> {
 /**
  * Write the blockchain config.
  *
- * Takes the vault password as a second factor — unlike every other setter here.
- * The deployer private key is the one credential in this application that
- * cannot be revoked after it leaks, so an unlocked vault on an unattended
- * machine is not sufficient authority to write one. See `vault.rs`
- * `set_blockchain`.
+ * Takes a password as a second factor — unlike every other setter here. The
+ * deployer private key is the one credential in this application that cannot be
+ * revoked after it leaks, so an unattended machine is not sufficient authority
+ * to write one.
+ *
+ * Which password depends on the backend, and the caller does not have to know:
+ * under App Vault it is the vault password, re-derived and compared in constant
+ * time; under OS Keychain it is the write authorization password, checked
+ * against a bcrypt hash. One command either way — the generic `setCredential`
+ * refuses this group, so there is no ungated path to the key.
  */
 export async function setBlockchain(password: string, input: BlockchainInput): Promise<void> {
   if (isTauri()) {
-    await invoke("vault_set_blockchain", { password, input });
+    await invoke("set_blockchain_credential", {
+      credentialJson: JSON.stringify(input),
+      confirmationPassword: password,
+    });
     return;
   }
   await browserVault.setBlockchain(password, input);
+}
+
+/**
+ * Has a blockchain write authorization password been enrolled?
+ *
+ * Decides whether the modal asks the operator to *set* a password or to
+ * *confirm* one, and whether Configuration offers a change link. Only ever true
+ * under the OS-keychain backend — App Vault gates on the vault password and
+ * enrols nothing.
+ */
+export async function hasBlockchainWriteAuth(): Promise<boolean> {
+  if (!isTauri()) return false;
+  try {
+    return await invoke<boolean>("has_blockchain_write_auth");
+  } catch {
+    return false;
+  }
+}
+
+/** Replace the write authorization password, proving the current one first. */
+export async function changeBlockchainWriteAuth(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("change_blockchain_write_auth", { currentPassword, newPassword });
 }
 
 /**
@@ -939,6 +977,74 @@ export async function hasBlockchain(): Promise<boolean> {
 export async function getCreConfig(): Promise<CreConfig> {
   if (!isTauri()) throw new Error("CRE configuration requires the desktop backend.");
   return invoke<CreConfig>("get_cre_config");
+}
+
+// ── USDC/USD price feed (Chainlink Data Feed, read-only) ─────────────────────
+
+/** Mirrors the Rust `UsdcPrice` — live market data from the mainnet feed. */
+export interface UsdcPrice {
+  /** USD per 1 USDC as a decimal string, e.g. "0.99987". Display data only. */
+  price: string;
+  /** Unix seconds of the feed's last on-chain update. */
+  updatedAt: number;
+}
+
+/**
+ * Live USDC/USD rate from Chainlink's mainnet Data Feed, read by the desktop
+ * backend over a keyless `eth_call` (no credentials, nothing signed).
+ *
+ * Resolves `null` whenever a real rate is unavailable — outside Tauri, RPC
+ * unreachable, a stale or non-positive round. Never a fabricated rate: the
+ * caller's contract is that a number displayed next to "Chainlink Price Feed"
+ * actually came from the feed, so "unavailable" must render as no number.
+ */
+export async function getUsdcPrice(): Promise<UsdcPrice | null> {
+  if (!isTauri()) return null;
+  try {
+    return await invoke<UsdcPrice>("get_usdc_price");
+  } catch {
+    return null;
+  }
+}
+
+// ── On-chain settlement — Path A DirectSettlement ────────────────────────────
+
+export interface DirectSettleArgs {
+  clientWallet: string;
+  firmWallet: string;
+  /**
+   * USDC base units (integer, 6 decimals) as a decimal string — Tauri's JSON
+   * transport cannot carry bigint, and a `number` would silently lose
+   * precision above 2^53 base units.
+   */
+  clientAmountUsdc: string;
+  firmAmountUsdc: string;
+  /** ArtifactGuard hash (`sha256:<64 hex>`) — anchored as the bytes32 documentHash. */
+  documentHash: string;
+}
+
+/** Mirrors the Rust `DirectSettleResult` — all public on-chain data. */
+export interface DirectSettleResult {
+  /** Real transaction hash (`0x` + 64 hex) from the signed, accepted tx. */
+  txHash: string;
+  blockNumber: number | null;
+  gasUsed: number;
+}
+
+/**
+ * Sign, broadcast and confirm a real `directSettle` transaction from the
+ * vault-held deployer key (Rust-side; the key never crosses IPC).
+ *
+ * Rejects on every failure — locked credential store, RPC unreachable,
+ * `onlyWorkflow` rejection, on-chain revert, confirmation timeout. Outside
+ * Tauri there is no signer, so this rejects rather than simulating: a
+ * plausible-looking value here would render as a settlement reference for
+ * money that never moved, which is exactly the failure this seam exists to
+ * make impossible.
+ */
+export async function executeDirectSettle(args: DirectSettleArgs): Promise<DirectSettleResult> {
+  if (!isTauri()) throw new Error("On-chain settlement requires the desktop backend.");
+  return invoke<DirectSettleResult>("execute_direct_settle", { ...args });
 }
 
 // ── Practice-management integrations (spec §14 V1) ───────────────────────────
@@ -1160,4 +1266,86 @@ async function browserAiWs(system: string, user: string): Promise<string> {
       else reject(new Error("AI WebSocket returned no data"));
     };
   });
+}
+
+// ── Credential store backend ─────────────────────────────────────────────────
+//
+// Outside Tauri there is no OS keychain and no config file, so every one of
+// these resolves to the browser vault. That keeps the browser build — and the
+// component tests that run in jsdom — on a single code path instead of needing
+// the selector flow stubbed at each call site.
+
+/**
+ * Which backend is active, or null on first launch.
+ *
+ * Null is what gates `CredentialStoreSelector`. The browser build reports
+ * `app_vault` unconditionally: the browser vault *is* an app vault, so there is
+ * no choice to present and no first-launch selection to make.
+ */
+export async function getStoreBackend(): Promise<StoreBackend | null> {
+  if (!isTauri()) return "app_vault";
+  return invoke<StoreBackend | null>("get_store_backend");
+}
+
+/**
+ * Select a backend and persist the choice.
+ *
+ * Rejects with a `StoreBackendError` rather than a bare string, because the
+ * caller has to distinguish "libsecret is missing, here is the command" from
+ * every other failure. Tauri serializes the Rust error struct through as the
+ * rejection value.
+ */
+export async function setStoreBackend(backend: StoreBackend): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_store_backend", { backend });
+}
+
+export async function checkOsKeychain(): Promise<OsKeychainStatus> {
+  if (!isTauri()) return { available: false, installCommand: null };
+  return invoke<OsKeychainStatus>("check_os_keychain");
+}
+
+/**
+ * Copy every credential to the other backend and switch to it.
+ *
+ * Non-destructive — the source keeps its copy, so a migration into a store that
+ * later proves unreadable is recoverable by switching back. Read `newBackend`
+ * from the result rather than assuming the target took effect: a run with any
+ * failure deliberately stays on the current backend.
+ */
+export async function migrateCredentials(target: StoreBackend): Promise<MigrateResult> {
+  if (!isTauri()) {
+    return { migrated: [], failed: [], newBackend: "app_vault" };
+  }
+  return invoke<MigrateResult>("migrate_credentials", { targetBackend: target });
+}
+
+/**
+ * Masked presence check for one credential key.
+ *
+ * Returns a fixed bullet string when something is stored and null when nothing
+ * is — never a truncation of the real value, since the leading characters of an
+ * API key are a meaningful fraction of it.
+ */
+export async function getCredentialMasked(key: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>("get_credential_masked", { key });
+}
+
+export async function setCredential(key: string, value: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("set_credential", { key, value });
+}
+
+export async function deleteCredential(key: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("delete_credential", { key });
+}
+
+/** Narrow an unknown rejection to the structured backend error, if it is one. */
+export function asStoreBackendError(e: unknown): StoreBackendError | null {
+  if (typeof e === "object" && e !== null && "code" in e && "message" in e) {
+    return e as StoreBackendError;
+  }
+  return null;
 }

@@ -1,20 +1,24 @@
 /**
- * Launch lock screen — the vault password, before anything else.
+ * The vault password prompt.
  *
- * Shown when an install that has been set up starts with its vault sealed. It
- * is a gate, not a dialog: there is no dismiss, no escape, and nothing behind
- * it to reach for, because every credential the app would use on the other side
- * is in the vault it is asking about. Standard password-manager behaviour, and
- * the same reasoning — an app that opens into a working-looking UI backed by
- * credentials it cannot read is worse than one that asks.
+ * Asked at the moment a credential is actually needed rather than at launch —
+ * an operator who only wants to fingerprint a document never touches a
+ * credential and is never asked. Under the OS-keychain backend it never appears
+ * at all: the login session already unlocked the store.
  *
- * A first-run install never sees this. With no vault there is nothing to
- * unlock, and the setup wizard owns that path (see `checkWizard`).
+ * Two shapes, one form:
  *
- * The only way out is the right password. That is deliberate: there is no
- * recovery for a lost vault password by construction — the password *is* the
- * key-derivation input — so a "skip" affordance here would promise a way
- * forward that does not exist.
+ *  * **No `onCancel`** — a hard gate with no way past but the password. This is
+ *    the shape Configuration uses to unlock before showing credential fields.
+ *  * **With `onCancel`** — the lazy prompt raised by `ensureCredentials`. Here
+ *    a way out is required, not optional: the operator arrived by clicking
+ *    Parse or Settle, and an accidental click must not trap them behind a
+ *    password. Cancelling resolves the waiting action as declined.
+ *
+ * There is no "skip" in either shape. A lost vault password cannot be recovered
+ * or reset by construction — the password *is* the key-derivation input — so an
+ * affordance suggesting otherwise would promise a way forward that does not
+ * exist.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -22,7 +26,7 @@ import { useSession } from "../store/session";
 import { SecretInput } from "../screens/Configuration";
 import emblem from "../assets/lexescrow-emblem.png";
 
-export function VaultUnlockGate() {
+export function VaultUnlockGate({ onCancel }: { onCancel?: () => void } = {}) {
   const unlockVault = useSession((s) => s.unlockVault);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -76,8 +80,9 @@ export function VaultUnlockGate() {
         Unlock LexEscrow
       </h1>
       <p className="mt-2 max-w-sm text-center text-sm text-text-muted">
-        This install has a credential vault. Enter its password to reach your AI provider, SMTP and
-        DocuSign settings.
+        {onCancel
+          ? "This step needs a credential from your vault. Enter its password to continue."
+          : "This install has a credential vault. Enter its password to reach your AI provider, SMTP and DocuSign settings."}
       </p>
 
       <div className="card mt-6 w-full max-w-sm p-6">
@@ -113,6 +118,17 @@ export function VaultUnlockGate() {
           <button className="btn btn-primary mt-4 w-full" type="submit" disabled={busy || !password}>
             {busy ? "Unlocking…" : "Unlock"}
           </button>
+
+          {onCancel && (
+            <button
+              className="btn btn-secondary mt-2 w-full"
+              type="button"
+              disabled={busy}
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+          )}
         </form>
       </div>
 

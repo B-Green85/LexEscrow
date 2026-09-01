@@ -32,7 +32,7 @@ import { CREEventLog } from "../components/CREEventLog";
 import type { Condition, ConditionStatus, ConditionSummary } from "../lib/conditions";
 import type { ArbitrationSigner, ArbitrationState } from "../lib/releasePaths";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
-import { txUrl } from "../lib/explorer";
+import { isRealTxHash, txUrl } from "../lib/explorer";
 
 const DAY_MS = 86_400_000;
 
@@ -85,19 +85,33 @@ function shortHash(h: string): string {
   return bare.length <= 18 ? bare : `${bare.slice(0, 10)}…${bare.slice(-6)}`;
 }
 
+/**
+ * Tx reference row — an Etherscan link only for a real 32-byte transaction
+ * hash. Anything else (the dev test-deposit contract address, `0xanchor-…`
+ * stand-ins) renders as plain monospace text: a link to a page that reports
+ * "transaction not found" looks like evidence the money never moved. Manually
+ * pasted deposit hashes are real 66-char hashes and keep their link.
+ */
 function TxLink({ hash, label = "On-chain TX" }: { hash: string; label?: string }) {
+  const display = hash.length <= 24 ? hash : `${hash.slice(0, 12)}…${hash.slice(-8)}`;
   return (
     <div className="flex items-center justify-between gap-3">
       <span className="text-xs text-text-muted">{label}</span>
-      <a
-        href={txUrl(hash)}
-        target="_blank"
-        rel="noreferrer"
-        className="truncate font-mono text-[11px] text-brand-fg hover:underline"
-        title={hash}
-      >
-        {hash.length <= 24 ? hash : `${hash.slice(0, 12)}…${hash.slice(-8)}`}
-      </a>
+      {isRealTxHash(hash) ? (
+        <a
+          href={txUrl(hash)}
+          target="_blank"
+          rel="noreferrer"
+          className="truncate font-mono text-[11px] text-brand-fg hover:underline"
+          title={hash}
+        >
+          {display}
+        </a>
+      ) : (
+        <span className="truncate font-mono text-[11px] text-text-primary" title={hash}>
+          {display}
+        </span>
+      )}
     </div>
   );
 }

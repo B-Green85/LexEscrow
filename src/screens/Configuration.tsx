@@ -11,6 +11,12 @@ import type {
   TwilioPublic,
   VaultPublic,
 } from "../lib/vaultTypes";
+import { toast } from "../components/Toast";
+import { CredentialStorageCard } from "../components/CredentialStorageCard";
+import {
+  BlockchainWriteAuthModal,
+  ChangeBlockchainWriteAuthModal,
+} from "../components/BlockchainWriteAuthModal";
 import {
   sendClioWebhook,
   sendPracticePantherWebhook,
@@ -996,6 +1002,29 @@ export function BlockchainCard({
   /** Drives the escalated private key warning — see `PrivateKeyWarning`. */
   const [keyFocused, setKeyFocused] = useState(false);
 
+  // The write gate differs by backend. App Vault re-derives its encryption key
+  // from the vault password typed inline below; the OS keychain has no such
+  // password, so the confirmation moves into a modal.
+  const storeBackend = useSession((s) => s.storeBackend);
+  const isKeychain = storeBackend === "os_keychain";
+  const [authOpen, setAuthOpen] = useState(false);
+  const [changeAuthOpen, setChangeAuthOpen] = useState(false);
+  const [authEnrolled, setAuthEnrolled] = useState(false);
+
+  useEffect(() => {
+    if (!isKeychain) {
+      setAuthEnrolled(false);
+      return;
+    }
+    let cancelled = false;
+    void backend.hasBlockchainWriteAuth().then((v) => {
+      if (!cancelled) setAuthEnrolled(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isKeychain, data]);
+
   const configured = !!data?.hasConfig;
 
   const openEdit = () => {
@@ -1027,11 +1056,19 @@ export function BlockchainCard({
     // deployerPrivateKey is deliberately untouched — see SEPOLIA_DEFAULTS.
   };
 
-  const save = async () => {
+  /**
+   * The write. `confirmPassword` is the vault password under App Vault and the
+   * write authorization password under OS Keychain — one command either way,
+   * and the backend decides which check it faces.
+   *
+   * Returns an error message rather than throwing, because the modal needs to
+   * distinguish "wrong password, stay open and retry" from success.
+   */
+  const write = async (confirmPassword: string): Promise<string | null> => {
     setBusy(true);
     setErr(null);
     try {
-      await backend.setBlockchain(password, {
+      await backend.setBlockchain(confirmPassword, {
         networkName,
         chainId,
         rpcUrl,
@@ -1044,12 +1081,33 @@ export function BlockchainCard({
       setDeployerPrivateKey("");
       setRpcUrl("");
       setPassword("");
+      setAuthOpen(false);
       setEditing(false);
+      // A first write enrols the authorization password, so what the change
+      // link should say has just changed.
+      if (isKeychain) setAuthEnrolled(true);
+      toast("Settlement configuration saved.");
       refresh();
+      return null;
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setBusy(false);
+      return message;
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
+  };
+
+  const save = async () => {
+    // Under the OS keychain the confirmation is the modal, not the inline
+    // field — there is no vault password to type here.
+    if (isKeychain) {
+      setErr(null);
+      setAuthOpen(true);
+      return;
+    }
+    const message = await write(password);
+    if (message) setErr(message);
   };
 
   const del = async () => {
@@ -1210,24 +1268,31 @@ export function BlockchainCard({
               placeholder="0x…"
             />
           </div>
-          <div>
-            <label className="label" htmlFor="bc-vault-password">Vault password</label>
-            <SecretInput
-              id="bc-vault-password"
-              value={password}
-              onChange={setPassword}
-              placeholder="confirm to save"
-            />
-            <p className="mt-1 text-[11px] text-text-muted">
-              Re-entered because this is the one credential here that cannot be revoked after it
-              leaks.
+          {!isKeychain ? (
+            <div>
+              <label className="label" htmlFor="bc-vault-password">Vault password</label>
+              <SecretInput
+                id="bc-vault-password"
+                value={password}
+                onChange={setPassword}
+                placeholder="confirm to save"
+              />
+              <p className="mt-1 text-[11px] text-text-muted">
+                Re-entered because this is the one credential here that cannot be revoked after it
+                leaks.
+              </p>
+            </div>
+          ) : (
+            <p className="text-[11px] text-text-muted">
+              Saving asks for your write authorization password — this is the one credential here
+              that cannot be revoked after it leaks.
             </p>
-          </div>
+          )}
           <Err msg={err} />
           <div className="flex flex-wrap gap-2">
             <button
               className="btn btn-primary"
-              disabled={busy || !password || !contractAddress}
+              disabled={busy || (!isKeychain && !password) || !contractAddress}
               onClick={save}
             >
               Save
@@ -1240,6 +1305,43 @@ export function BlockchainCard({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Only once a password exists — before that there is nothing to change,
+          and the first save is what enrols one. */}
+      {isKeychain && authEnrolled && (
+        <button
+          type="button"
+          className="mt-3 text-xs font-medium text-text-muted underline"
+          onClick={() => setChangeAuthOpen(true)}
+        >
+          Change write authorization password
+        </button>
+      )}
+
+      {authOpen && (
+        <BlockchainWriteAuthModal
+          enrolled={authEnrolled}
+          busy={busy}
+          onConfirm={write}
+          onCancel={() => setAuthOpen(false)}
+        />
+      )}
+
+      {changeAuthOpen && (
+        <ChangeBlockchainWriteAuthModal
+          onSubmit={async (current, next) => {
+            try {
+              await backend.changeBlockchainWriteAuth(current, next);
+              setChangeAuthOpen(false);
+              toast("Write authorization password changed.");
+              return null;
+            } catch (e) {
+              return e instanceof Error ? e.message : String(e);
+            }
+          }}
+          onCancel={() => setChangeAuthOpen(false)}
+        />
       )}
     </CardShell>
   );
@@ -1321,6 +1423,7 @@ export function Configuration() {
   const openWizard = useSession((s) => s.openWizard);
   const lockVault = useSession((s) => s.lockVault);
   const unlockVault = useSession((s) => s.unlockVault);
+  const storeBackend = useSession((s) => s.storeBackend);
   const [exists, setExists] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [pub, setPub] = useState<VaultPublic | null>(null);
@@ -1333,10 +1436,14 @@ export function Configuration() {
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
+    // Under the OS keychain there is nothing to unlock: the login session
+    // already opened the store, so the credential cards are always reachable
+    // and the vault's own status is irrelevant to whether they render.
     const status = await backend.vaultStatus();
     setExists(status.exists);
-    setUnlocked(status.unlocked);
-    if (status.unlocked) {
+    const readable = storeBackend === "os_keychain" || status.unlocked;
+    setUnlocked(readable);
+    if (readable) {
       // DocuSign and the two webhook integrations live outside VaultPublic —
       // each has its own deliberately narrower public shape.
       const [vaultPub, dsPub, clioPub, ppPub, chainPub] = await Promise.all([
@@ -1356,7 +1463,9 @@ export function Configuration() {
 
   useEffect(() => {
     void refresh();
-  }, []);
+    // Re-read on a backend change: a migration swaps which store answers these
+    // reads, and stale cards would describe the one just migrated away from.
+  }, [storeBackend]);
 
   const onUnlock = async () => {
     setBusy(true);
@@ -1402,9 +1511,12 @@ export function Configuration() {
         </button>
       </div>
       <p className="mt-1 text-sm text-text-muted">
-        Credentials are held in an AES-256-GCM encrypted vault. Secrets never leave the backend — this
-        screen only ever shows public metadata.
+        Secrets never leave the backend — this screen only ever shows public metadata.
       </p>
+
+      <div className="mt-6">
+        <CredentialStorageCard />
+      </div>
 
       {!unlocked ? (
         <div className="card mx-auto mt-8 max-w-md p-6">

@@ -162,7 +162,7 @@ describe("AnchorReceiptConsole — after registration", () => {
     expect(html).toContain("Copy Receipt Hash");
   });
 
-  it("shows the Registered status, tx link and verified counts", async () => {
+  it("shows the Registered status, plain-text tx reference and verified counts", async () => {
     const receipt = await issue();
     const html = render({
       artifact,
@@ -172,7 +172,11 @@ describe("AnchorReceiptConsole — after registration", () => {
     });
     expect(html).toContain("✅ Registered");
     expect(html).toContain("Verified — all documents");
-    expect(html).toContain("sepolia.etherscan.io/tx/");
+    // The simulated `0xanchor-…` reference is not a real 32-byte tx hash, so
+    // it must render as plain text — an Etherscan link would land on
+    // "transaction not found" and read as a failed registration.
+    expect(html).toContain("0xanchor-");
+    expect(html).not.toContain("sepolia.etherscan.io/tx/");
   });
 
   it("reflects the registered asset class in the receipt card", async () => {

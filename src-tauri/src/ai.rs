@@ -19,7 +19,7 @@ use tauri::State;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::vault::VaultState;
+use crate::credential_store::CredentialStoreState;
 
 /// Map the stored model string to a currently-valid Anthropic model ID.
 ///
@@ -55,7 +55,7 @@ fn request_body(model: &str, system: &str, user: &str) -> String {
 
 #[tauri::command]
 pub async fn ai_request_http(
-    state: State<'_, VaultState>,
+    state: State<'_, CredentialStoreState>,
     system: String,
     user: String,
 ) -> Result<String, String> {
@@ -94,7 +94,7 @@ pub async fn ai_request_http(
 
 #[tauri::command]
 pub async fn ai_request_ws(
-    state: State<'_, VaultState>,
+    state: State<'_, CredentialStoreState>,
     system: String,
     user: String,
 ) -> Result<String, String> {

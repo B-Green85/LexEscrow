@@ -38,7 +38,7 @@ import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 import { fireIntegrationWebhooks } from "../lib/integrations";
 import { setExplorerChain } from "../lib/explorer";
-import type { BlockchainPublic, UnlockResult } from "../lib/vaultTypes";
+import type { BlockchainPublic, StoreBackend, UnlockResult } from "../lib/vaultTypes";
 import { downloadAuditReport as downloadAuditReportPdf } from "../lib/export/audit-pdf-export";
 import {
   buildConditions,
@@ -462,22 +462,34 @@ export interface SessionState {
   /** True once onboarding has been finished, or found to be unnecessary. */
   wizardComplete: boolean;
 
-  // ── Vault lock gate ──────────────────────────────────────────────────────
+  // ── Credential store ─────────────────────────────────────────────────────
   /**
-   * Is a configured vault sitting locked, with the app gated behind it?
+   * Which backend holds this install's credentials, or null on first launch.
    *
-   * Distinct from "the vault is locked": a first-run install has no vault at
-   * all, and gating that operator behind a password for credentials that do not
-   * exist would be a dead end. This is specifically *there are saved
-   * credentials and they are sealed*, which is the only case where the main UI
-   * would otherwise run against an AI provider, an SMTP server and a DocuSign
-   * account that all silently resolve to nothing.
+   * Null gates `CredentialStoreSelector`. It is deliberately not defaulted to a
+   * backend: the whole point of the selector is that the choice is the
+   * operator's, and guessing would silently commit them to one.
+   */
+  storeBackend: StoreBackend | null;
+  /** Has the backend been read yet? Distinguishes "not configured" from "not
+   *  asked yet", so the selector cannot flash before the answer arrives. */
+  storeBackendChecked: boolean;
+
+  // ── Vault lock (App Vault backend only) ──────────────────────────────────
+  /**
+   * Is a configured vault sitting sealed?
    *
-   * Set by `checkWizard` at mount and by `lockVault`. Absent from `reset()` —
-   * starting a new transaction is not a reason to re-authenticate, and locking
-   * is not something a workflow step gets to decide.
+   * No longer a launch gate. The app opens straight into the workflow and the
+   * password is asked for at the moment a credential is actually needed —
+   * which is how every password manager behaves, and which means an operator
+   * who only wants to fingerprint a document never sees a prompt at all.
+   *
+   * Under the OS-keychain backend this is permanently false: the login session
+   * already unlocked the store, so there is nothing to ask for.
    */
   vaultLocked: boolean;
+  /** Is the lazy unlock prompt on screen? Raised by `ensureCredentials`. */
+  credentialPromptOpen: boolean;
 
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
@@ -496,10 +508,26 @@ export interface SessionState {
   /** Re-run onboarding — Configuration's footer link and the File menu. */
   openWizard: () => void;
   completeWizard: () => void;
-  /** Open the vault and lift the gate. Returns the backend's verdict verbatim
-   *  so the caller can show *why* an unlock failed. */
+  /** Read which credential backend is active. Runs at mount, ahead of the
+   *  selector gate. */
+  checkStoreBackend: () => Promise<void>;
+  /** Record a backend selection made by the selector or by Configuration. */
+  setStoreBackendLocal: (backend: StoreBackend) => void;
+  /**
+   * Ensure credentials are readable, prompting for the vault password if not.
+   *
+   * The lazy gate. Resolves true when the active store can be read and false
+   * when the operator dismissed the prompt. Every credential-consuming action
+   * awaits this first, so the password is asked for once, at the moment it is
+   * needed, rather than at launch.
+   */
+  ensureCredentials: () => Promise<boolean>;
+  /** Close the lazy unlock prompt, resolving whatever is awaiting it. */
+  resolveCredentialPrompt: (ok: boolean) => void;
+  /** Open the vault. Returns the backend's verdict verbatim so the caller can
+   *  show *why* an unlock failed. */
   unlockVault: (password: string) => Promise<UnlockResult>;
-  /** Seal the vault and re-gate the app. */
+  /** Seal the vault. */
   lockVault: () => Promise<void>;
   downloadAnchorReceipt: () => void;
   returnToBatch: () => void;
@@ -559,6 +587,15 @@ export interface SessionState {
 function stepStatus(steps: ProcessingStep[], key: string, status: StepStatus): ProcessingStep[] {
   return steps.map((s) => (s.key === key ? { ...s, status } : s));
 }
+
+/**
+ * Resolver for the in-flight `ensureCredentials` promise.
+ *
+ * Module-level rather than store state: it is a continuation, not something
+ * anything renders from, and putting a function in the store would make every
+ * subscriber re-render when a prompt opens.
+ */
+let pendingUnlock: ((ok: boolean) => void) | null = null;
 
 export const useSession = create<SessionState>((set, get) => {
   // Sequential audit logger — preserves hash-chain order.
@@ -796,10 +833,13 @@ export const useSession = create<SessionState>((set, get) => {
     blockchainReady: false,
     showWizard: false,
     wizardComplete: false,
-    // Starts down: `checkWizard` raises it at mount if there is a sealed vault.
-    // Defaulting to gated would flash a password prompt at every first-run
-    // operator before the status read comes back.
+    storeBackend: null,
+    storeBackendChecked: false,
+    // Starts down. Under the lazy-unlock flow nothing gates on this at launch —
+    // it is read at the moment a credential is needed, and `ensureCredentials`
+    // re-reads the live status rather than trusting this flag.
     vaultLocked: false,
+    credentialPromptOpen: false,
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
@@ -855,9 +895,10 @@ export const useSession = create<SessionState>((set, get) => {
      * a stored flag, it survives a cleared browser profile and cannot claim an
      * install is configured when its credentials are gone.
      *
-     * Given a vault, whether it is *open* decides the gate. The two outcomes
-     * are mutually exclusive by construction: no vault means onboarding and
-     * nothing to unlock; a vault means no onboarding and possibly a password.
+     * Whether the vault is *open* no longer gates anything at launch. It is
+     * recorded so the lazy prompt knows whether it will need to ask, but the
+     * app renders either way — an operator who only wants to fingerprint a
+     * document never touches a credential and is never asked for a password.
      *
      * A failure here is not fatal, and fails open in both directions: an
      * unreadable vault status is a reason to leave the operator in the app, not
@@ -868,6 +909,19 @@ export const useSession = create<SessionState>((set, get) => {
      */
     checkWizard: async () => {
       try {
+        // Under the OS-keychain backend the vault file is irrelevant to
+        // first-run: credentials live in the keychain, so an install with no
+        // vault may still be fully configured. Asking the store settles it.
+        if (get().storeBackend === "os_keychain") {
+          const pub = await backend.vaultGetPublic().catch(() => null);
+          const configured = Boolean(pub?.ai ?? pub?.smtp ?? pub?.twilio);
+          set({
+            showWizard: !configured,
+            wizardComplete: configured,
+            vaultLocked: false,
+          });
+          return;
+        }
         const status = await backend.vaultStatus();
         if (status.exists) {
           set({
@@ -885,11 +939,67 @@ export const useSession = create<SessionState>((set, get) => {
 
     openWizard: () => set({ showWizard: true }),
 
+    checkStoreBackend: async () => {
+      try {
+        const active = await backend.getStoreBackend();
+        set({ storeBackend: active, storeBackendChecked: true });
+      } catch (e) {
+        // A failed read is not a reason to re-run the selection flow — that
+        // would risk an operator re-picking a backend while their credentials
+        // sit in the other one. Mark it checked and leave the backend null;
+        // every credential read stays independently guarded.
+        console.error("credential store backend check failed", e);
+        set({ storeBackendChecked: true });
+      }
+    },
+
+    setStoreBackendLocal: (b) => set({ storeBackend: b, storeBackendChecked: true }),
+
+    /**
+     * The lazy gate.
+     *
+     * Re-reads the live vault status rather than trusting `vaultLocked`: the
+     * vault can be sealed from Configuration between one action and the next,
+     * and a stale flag here would let a workflow step run against credentials
+     * that have just gone away.
+     */
+    ensureCredentials: async () => {
+      if (get().storeBackend === "os_keychain") return true;
+      try {
+        const status = await backend.vaultStatus();
+        if (status.unlocked) return true;
+        // No vault file means there is nothing sealed to open. Prompting here
+        // would ask an operator to invent a password for a vault that does not
+        // exist yet — vault *creation* belongs to the setup wizard, and the
+        // action they actually clicked should proceed and report whatever
+        // credential it finds missing.
+        if (!status.exists) return true;
+      } catch {
+        // Can't tell — ask. A prompt the operator can dismiss is a better
+        // failure than a workflow step that silently resolves no credentials.
+      }
+      set({ credentialPromptOpen: true, vaultLocked: true });
+      return new Promise<boolean>((resolve) => {
+        pendingUnlock = resolve;
+      });
+    },
+
+    resolveCredentialPrompt: (ok) => {
+      set({ credentialPromptOpen: false });
+      // Resolver cleared before calling, so a handler that synchronously
+      // triggers another prompt cannot resolve this one twice.
+      const resolve = pendingUnlock;
+      pendingUnlock = null;
+      resolve?.(ok);
+    },
+
     unlockVault: async (password) => {
       const result = await backend.vaultUnlock(password);
       if (!result.ok) return result;
 
       set({ vaultLocked: false });
+      // Release whatever action was waiting on the prompt.
+      get().resolveCredentialPrompt(true);
       // The blockchain config read as "not configured" for as long as the vault
       // was sealed, and the settle gate reads it from the store rather than
       // asking the vault each time. Re-read now that there is something to
@@ -1040,6 +1150,13 @@ export const useSession = create<SessionState>((set, get) => {
       const { file, anchors, entryMode, assetClass } = get();
       if (!file) {
         set({ error: "Please add a retainer document before continuing." });
+        return;
+      }
+      // The lazy gate. Asked here rather than at launch because this is the
+      // first step that actually needs a credential — the AI provider key —
+      // and it is also where the AnchorReceipt seal key is first touched.
+      if (!(await get().ensureCredentials())) {
+        set({ error: "Credentials are locked — unlock to run the parse." });
         return;
       }
       const sessionId = newId("wf");
@@ -1237,6 +1354,12 @@ export const useSession = create<SessionState>((set, get) => {
       const { artifact, vdb, sessionId, anchors } = get();
       if (!artifact || !vdb || !sessionId) {
         set({ error: "Manual entry is not ready — reload the document." });
+        return;
+      }
+      // Skips the AI provider but still seals an AnchorReceipt, and the seal
+      // key lives in the same store.
+      if (!(await get().ensureCredentials())) {
+        set({ error: "Credentials are locked — unlock to record this entry." });
         return;
       }
       set({ procPhase: "running", busy: true, error: null });
@@ -1675,6 +1798,13 @@ export const useSession = create<SessionState>((set, get) => {
     proceedToSettlement: async () => {
       const { conditionSummary, fundsDeposited } = get();
 
+      // The deployer key is read Rust-side during settlement; a sealed vault
+      // there fails mid-flight, after the operator has already confirmed.
+      if (!(await get().ensureCredentials())) {
+        set({ error: "Credentials are locked — unlock to settle." });
+        return;
+      }
+
       if (!fundsDeposited) {
         set({ error: "Record the escrow deposit before settling." });
         return;
@@ -1733,6 +1863,10 @@ export const useSession = create<SessionState>((set, get) => {
       const { file, sessionId } = get();
       if (!sessionId) {
         set({ error: "No active session — load a document first." });
+        return;
+      }
+      if (!(await get().ensureCredentials())) {
+        set({ error: "Credentials are locked — unlock to send for signature." });
         return;
       }
       if (!file) {
@@ -2113,7 +2247,7 @@ export const useSession = create<SessionState>((set, get) => {
         return;
       }
 
-      // ── Path A — DirectSettlement (unchanged) ────────────────────────────
+      // ── Path A — DirectSettlement ────────────────────────────────────────
       set({
         screen: "execution",
         releasePathChosen: true,
@@ -2122,16 +2256,50 @@ export const useSession = create<SessionState>((set, get) => {
       await log("cre_execution_started", { workflow_id: sessionId, execution_path: path });
       await sleep(700);
 
-      // CRE execution (simulated end-to-end for a self-contained build).
       const cents = toPayloadCents(payload);
       const clientCents = path === ExecutionPath.DirectSettlement ? cents.unearnedBalanceCents : cents.totalHeldCents;
       const firmCents = path === ExecutionPath.DirectSettlement ? cents.earnedFeesCents : 0n;
-      const txHash = ("0x" + artifact.hash.replace("sha256:", "").slice(0, 64)) as string;
 
-      set({ execution: { ...get().execution, phase: "converting", clientCents, firmCents, txHash, path } });
+      set({ execution: { ...get().execution, phase: "converting", clientCents, firmCents, txHash: null, path } });
       await sleep(700);
+      set({ execution: { ...get().execution, phase: "settling", clientCents, firmCents, txHash: null, path } });
+
+      // Real on-chain settlement: the backend signs a `directSettle` call with
+      // the vault-held deployer key, broadcasts it, and waits for the receipt.
+      // The hash below is real by construction — on any failure the workflow
+      // stops here and says so. Nothing is ever fabricated to look settled.
+      let txHash: string;
+      try {
+        const settled = await backend.executeDirectSettle({
+          clientWallet: payload.clientWallet,
+          firmWallet: payload.lawFirmWallet,
+          // USD cents → USDC base units (6 decimals): 1¢ = 10,000 units.
+          // Exact integer math in bigint; crosses IPC as a decimal string.
+          clientAmountUsdc: (clientCents * 10_000n).toString(),
+          firmAmountUsdc: (firmCents * 10_000n).toString(),
+          documentHash: artifact.hash,
+        });
+        txHash = settled.txHash;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        await log("cre_execution_failed", {
+          workflow_id: sessionId,
+          execution_path: path,
+          error: message,
+        });
+        // Back to the Escrow Monitor, which owns persistent error display and
+        // the retry affordance. The session state is NOT advanced to EXECUTED
+        // and no notification fires — the money did not move.
+        set({
+          screen: "escrow-monitor",
+          error: `On-chain settlement failed — nothing was released. ${message}`,
+          busy: false,
+          execution: { ...get().execution, phase: "idle", clientCents, firmCents, txHash: null, path },
+        });
+        return;
+      }
+
       set({ execution: { ...get().execution, phase: "settling", clientCents, firmCents, txHash, path } });
-      await sleep(900);
 
       await backend.updateSessionState(sessionId, "EXECUTED");
       await log("cre_execution_completed", {

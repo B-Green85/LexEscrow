@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# Native save dialog for the audit-report PDF export (audit-pdf-export.ts).
+tauri-plugin-dialog = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -64,6 +66,11 @@ reqwest = { version = "0.12", default-features = false, features = [
 # Load SMTP/Twilio config from a local .env at startup.
 dotenvy = "0.15"
 
+# OS-native credential store — macOS Keychain, Windows Credential Manager,
+# Linux Secret Service (libsecret). The alternative backend to the AES vault
+# below; the operator picks one at first launch (see credential_store.rs).
+keyring = { version = "2", features = ["linux-secret-service"] }
+
 # Credential vault — scrypt KDF + AES-256-GCM (Node crypto → Rust).
 aes-gcm = "0.10"
 scrypt = { version = "0.11", default-features = false }
@@ -91,6 +98,25 @@ zip = "0.6"
 # `pdftotext` is preferred when installed; this is what lets the built-in
 # fallback read real PDFs rather than only their object structure.
 flate2 = "1"
+
+# Blockchain write-authorization gate — bcrypt over the confirmation password
+# (blockchain_write_auth.rs). Cost 12: ~250ms per verify, which is deliberate
+# friction on a prompt an operator sees only when changing a deployer key.
+bcrypt = "0.19"
+
+# On-chain settlement (Path A) — EIP-1559 signing + broadcast of the real
+# `directSettle` call (cre.rs::execute_direct_settle). Pinned, with only the
+# features that path needs: an HTTP provider over rustls (matching reqwest
+# above), the local private-key signer, and sol-types to ABI-encode the call.
+alloy = { version = "=2.1.1", default-features = false, features = [
+    "std",
+    "provider-http",
+    "reqwest-rustls-tls",
+    "signer-local",
+    "sol-types",
+    "rpc-types",
+    "network",
+] }
 
 [profile.dev]
 # Faster incremental builds during the hackathon.

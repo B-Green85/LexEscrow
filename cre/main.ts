@@ -33,7 +33,9 @@ import {
 import {
   bytesToHex,
   decodeEventLog,
+  decodeFunctionResult,
   encodeAbiParameters,
+  encodeFunctionData,
   parseAbi,
   parseAbiParameters,
 } from "viem";
@@ -52,6 +54,9 @@ const configSchema = z.object({
       retainerReleaseAddress: z.string(),
       chainSelectorName: z.string(),
       gasLimit: z.string(),
+      // Chainlink USDC/USD Data Feed (AggregatorV3 proxy) on this chain.
+      // Optional: when absent the conversion falls back to a 1:1 peg, loudly.
+      usdcUsdFeedAddress: z.string().optional(),
     }),
   ),
 });
@@ -76,9 +81,72 @@ type RetainerPayload = {
 type BarStatus = { active: boolean };
 type PostResponse = { statusCode: number };
 
-// USDC has 6 decimals; 1 cent = 1e4 base units at the USD/USDC 1:1 peg.
-// (Chainlink Price Feeds would supply the exact rate; the peg is exact here.)
-const usdcFromCents = (cents: string): bigint => BigInt(cents) * 10_000n;
+// USDC has 6 decimals; 1 cent = 1e4 base units at an exact 1:1 USD/USDC peg.
+// The live Chainlink USDC/USD rate (8-decimal fixed point) scales that: at
+// rate r USD per USDC, X cents of USD buy X·1e4·1e8/r base units of USDC.
+// All-integer arithmetic — floats are banned from settlement math.
+const E8 = 100_000_000n; // 1.0 in the feed's 8-decimal fixed point
+const usdcFromCents = (cents: string, usdcUsdRateE8: bigint): bigint =>
+  (BigInt(cents) * 10_000n * E8) / usdcUsdRateE8;
+
+// Chainlink AggregatorV3Interface — the only read the conversion needs.
+const aggregatorV3Abi = parseAbi([
+  "function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+]);
+
+/** A round older than this is a stalled feed (the feed's heartbeat is 24h). */
+const MAX_FEED_AGE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Live USDC/USD rate (8-decimal fixed point) from the chain's Chainlink Data
+ * Feed, read through the same EVM client capability the settlement write uses
+ * (a consensus-observed `callContract`, i.e. an on-chain `eth_call`).
+ *
+ * Any failure — no feed configured, unreadable return data, a non-positive
+ * answer, a stale round — logs a warning and falls back to the exact 1:1 peg:
+ * a broken price feed must not break settlement, and with USDC at the peg the
+ * fallback is the conservative choice. The fallback is always labelled as the
+ * peg in the log; nothing downstream presents it as a feed reading.
+ */
+const readUsdcUsdRateE8 = (
+  runtime: Runtime<Config>,
+  evmClient: InstanceType<typeof cre.capabilities.EVMClient>,
+  feedAddress: string | undefined,
+): bigint => {
+  if (!feedAddress) {
+    runtime.log("WARN: no usdcUsdFeedAddress configured — converting at the 1:1 USD/USDC peg");
+    return E8;
+  }
+  try {
+    const reply = evmClient
+      .callContract(runtime, {
+        call: {
+          to: hexToBase64(feedAddress),
+          data: hexToBase64(
+            encodeFunctionData({ abi: aggregatorV3Abi, functionName: "latestRoundData" }),
+          ),
+        },
+      })
+      .result();
+    const [, answer, , updatedAt] = decodeFunctionResult({
+      abi: aggregatorV3Abi,
+      functionName: "latestRoundData",
+      data: bytesToHex(reply.data),
+    });
+    if (answer <= 0n) {
+      throw new Error(`non-positive answer ${answer}`);
+    }
+    const ageMs = runtime.now().getTime() - Number(updatedAt) * 1000;
+    if (ageMs > MAX_FEED_AGE_MS) {
+      throw new Error(`stale round — updated ${Math.round(ageMs / 1000)}s ago`);
+    }
+    runtime.log(`Chainlink USDC/USD feed ${feedAddress}: rate ${answer} (e8)`);
+    return answer;
+  } catch (e) {
+    runtime.log(`WARN: USDC/USD feed read failed (${e}) — converting at the 1:1 USD/USDC peg`);
+    return E8;
+  }
+};
 
 // ── HTTP capability functions (run under DON consensus) ─────────────────────
 
@@ -165,11 +233,25 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
   }
   runtime.log(`Attorney bar ${p.barNumber} verified active`);
 
-  // 2) USD → USDC base units.
-  const clientUsdc = usdcFromCents(p.unearnedBalanceCents);
-  const firmUsdc = usdcFromCents(p.earnedFeesCents);
-  const totalUsdc = usdcFromCents(p.totalHeldCents);
-  const disputedUsdc = usdcFromCents(p.disputedAmountCents);
+  // 2) USD → USDC base units at the live Chainlink USDC/USD rate. The EVM
+  // client is constructed here rather than at step 4 because the price read
+  // and the settlement write share it.
+  const evmConfig = runtime.config.evms[0];
+  const network = getNetwork({
+    chainFamily: "evm",
+    chainSelectorName: evmConfig.chainSelectorName,
+    isTestnet: true,
+  });
+  if (!network) {
+    throw new Error(`Network not found: ${evmConfig.chainSelectorName}`);
+  }
+  const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
+
+  const usdcUsdRateE8 = readUsdcUsdRateE8(runtime, evmClient, evmConfig.usdcUsdFeedAddress);
+  const clientUsdc = usdcFromCents(p.unearnedBalanceCents, usdcUsdRateE8);
+  const firmUsdc = usdcFromCents(p.earnedFeesCents, usdcUsdRateE8);
+  const totalUsdc = usdcFromCents(p.totalHeldCents, usdcUsdRateE8);
+  const disputedUsdc = usdcFromCents(p.disputedAmountCents, usdcUsdRateE8);
 
   // 3) Encode the settlement report. path 0 = DirectSettlement, 1 = Arbitration.
   const path = p.recommendedPath === "DirectSettlement" ? 0 : 1;
@@ -190,17 +272,6 @@ const onHTTPTrigger = (runtime: Runtime<Config>, payload: HTTPPayload): string =
   );
 
   // 4) Sign the report and write it to the RetainerRelease receiver.
-  const evmConfig = runtime.config.evms[0];
-  const network = getNetwork({
-    chainFamily: "evm",
-    chainSelectorName: evmConfig.chainSelectorName,
-    isTestnet: true,
-  });
-  if (!network) {
-    throw new Error(`Network not found: ${evmConfig.chainSelectorName}`);
-  }
-  const evmClient = new cre.capabilities.EVMClient(network.chainSelector.selector);
-
   const reportResponse = runtime
     .report({
       encodedPayload: hexToBase64(reportData),

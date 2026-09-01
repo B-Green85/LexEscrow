@@ -25,6 +25,7 @@ import { useSession } from "../store/session";
 import * as backend from "../lib/backend";
 import emblem from "../assets/lexescrow-emblem.png";
 import { InfoTooltip, type InfoTooltipProps } from "../components/InfoTooltip";
+import { BlockchainWriteAuthModal } from "../components/BlockchainWriteAuthModal";
 import {
   BLOCKCHAIN_TOOLTIPS,
   PrivateKeyWarning,
@@ -193,6 +194,7 @@ function Field({
 
 export function SetupWizard() {
   const completeWizard = useSession((s) => s.completeWizard);
+  const storeBackend = useSession((s) => s.storeBackend);
 
   const [step, setStep] = useState(1);
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
@@ -230,6 +232,12 @@ export function SetupWizard() {
   const [forwarderAddress, setForwarderAddress] = useState("");
   /** Drives the escalated private key warning — see `PrivateKeyWarning`. */
   const [keyFocused, setKeyFocused] = useState(false);
+  // Under the OS keychain there is no vault password to carry from step 2 —
+  // the blockchain write is gated by the write authorization modal instead,
+  // exactly as it is on the Configuration screen.
+  const isKeychain = storeBackend === "os_keychain";
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authEnrolled, setAuthEnrolled] = useState(false);
 
   // Step 5 — DocuSign.
   const [integrationKey, setIntegrationKey] = useState("");
@@ -258,6 +266,22 @@ export function SetupWizard() {
       .then((s) => setVaultExists(s.exists))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    // Decides which shape the write-auth modal takes: enrol a password on the
+    // first blockchain save, confirm the existing one on any save after.
+    if (!isKeychain) {
+      setAuthEnrolled(false);
+      return;
+    }
+    let cancelled = false;
+    void backend.hasBlockchainWriteAuth().then((v) => {
+      if (!cancelled) setAuthEnrolled(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isKeychain]);
 
   const strength = passwordStrength(password);
   const matches = password.length > 0 && password === confirm;
@@ -330,13 +354,18 @@ export function SetupWizard() {
       advance("ai");
     });
 
-  const saveBlockchain = () =>
-    guard(async () => {
-      // The vault password is re-supplied from step 2 rather than re-typed.
-      // Configuration asks for it again because it is re-authorizing an
-      // operator who may have walked away from an unlocked vault; here it was
-      // entered ninety seconds ago by the same person, on the same flow.
-      await backend.setBlockchain(password, {
+  /**
+   * The blockchain write, parameterised on which password confirms it.
+   *
+   * Returns an error message rather than throwing, because the write-auth
+   * modal needs to distinguish "wrong password, stay open and retry" from
+   * success — the same contract Configuration's write uses.
+   */
+  const writeBlockchain = async (confirmPassword: string): Promise<string | null> => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.setBlockchain(confirmPassword, {
         networkName,
         chainId,
         rpcUrl,
@@ -348,8 +377,34 @@ export function SetupWizard() {
       });
       setDeployerPrivateKey("");
       setRpcUrl("");
+      setAuthOpen(false);
+      // A first write enrols the authorization password — a re-opened modal
+      // in this same run must ask to confirm, not to set.
+      if (isKeychain) setAuthEnrolled(true);
       advance("blockchain");
-    });
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveBlockchain = async () => {
+    // Under the OS keychain there is no vault password to re-supply — the
+    // write authorization modal collects the confirmation instead.
+    if (isKeychain) {
+      setErr(null);
+      setAuthOpen(true);
+      return;
+    }
+    // The vault password is re-supplied from step 2 rather than re-typed.
+    // Configuration asks for it again because it is re-authorizing an
+    // operator who may have walked away from an unlocked vault; here it was
+    // entered ninety seconds ago by the same person, on the same flow.
+    const message = await writeBlockchain(password);
+    if (message) setErr(message);
+  };
 
   const saveDocuSign = () =>
     guard(async () => {
@@ -465,6 +520,36 @@ export function SetupWizard() {
   // ── Step 2 — Vault password ───────────────────────────────────────────────
 
   if (step === 2) {
+    // Under the OS keychain there is no vault and no password to choose. The
+    // step is kept rather than removed so the numbering stays fixed at seven
+    // and Back from step 3 lands somewhere coherent — but asking an operator
+    // to invent a vault password moments after they picked "no vault password
+    // required" would contradict the choice they just made.
+    if (storeBackend === "os_keychain") {
+      return (
+        <Shell
+          step={2}
+          title="Credential Storage"
+          subtitle="Your credentials go straight into the system keychain. Everything from here is optional."
+          footer={
+            <button className="btn btn-primary" onClick={() => advance()}>
+              Continue →
+            </button>
+          }
+        >
+          <div className="card flex items-center gap-3 p-5">
+            <span className="text-2xl">🔑</span>
+            <div>
+              <div className="text-sm font-semibold text-emerald-400">✅ OS Keychain in use</div>
+              <div className="text-xs text-text-muted">
+                Unlocked by your login session — no vault password to choose or remember.
+              </div>
+            </div>
+          </div>
+        </Shell>
+      );
+    }
+
     // Reached again by Back from step 3. The vault is open and re-running this
     // step would only ask for a password that has already been accepted, so it
     // reports its own outcome instead of re-offering the form.
@@ -773,6 +858,15 @@ export function SetupWizard() {
             />
           </Field>
           <Err msg={err} />
+
+          {authOpen && (
+            <BlockchainWriteAuthModal
+              enrolled={authEnrolled}
+              busy={busy}
+              onConfirm={writeBlockchain}
+              onCancel={() => setAuthOpen(false)}
+            />
+          )}
         </div>
       </Shell>
     );

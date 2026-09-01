@@ -10,6 +10,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import {
   buildAuditReportData,
   generateAuditReportHtml,
@@ -22,6 +24,12 @@ import {
 } from "./audit-pdf-export";
 import * as backend from "../backend";
 import type { SessionState } from "../../store/session";
+
+// The delivery path talks to the native layer twice: the save dialog picks the
+// destination and the narrow `save_audit_report` command writes the bytes.
+// Both are mocked at the module seam — there is no Tauri runtime under vitest.
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => undefined) }));
 
 const SESSION_ID = "wf-3f9c2a11-0000-4444-8888-abcdefabcdef";
 
@@ -290,41 +298,52 @@ describe("escapeHtml / eventClass / reportFilename", () => {
 
 describe("delivery", () => {
   function stubBackend() {
+    // Clears the module-mocked dialog/invoke call history too — the mocks
+    // outlive `vi.restoreAllMocks()`, which only touches spies.
+    vi.clearAllMocks();
     vi.spyOn(backend, "getAuditTrail").mockResolvedValue([]);
     vi.spyOn(backend, "verifyAuditChain").mockResolvedValue({ valid: true, entries: 0, brokenAt: null });
   }
 
-  it("opens a window and raises the print dialog", async () => {
+  it("saves a real PDF through the native dialog and Rust command under Tauri", async () => {
     stubBackend();
-    const print = vi.fn();
-    const write = vi.fn();
-    const open = vi.fn(() => ({
-      document: { open: vi.fn(), write, close: vi.fn() },
-      focus: vi.fn(),
-      print,
-    }));
-    vi.stubGlobal("window", { open });
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.mocked(save).mockResolvedValue("/exports/audit.pdf");
 
     await downloadAuditReport(SESSION_ID, fakeStore());
 
-    expect(open).toHaveBeenCalledWith("", "_blank");
-    expect(write).toHaveBeenCalledOnce();
-    expect(write.mock.calls[0][0]).toContain(SESSION_ID);
-    expect(print).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledOnce();
+    expect(vi.mocked(save).mock.calls[0][0]).toMatchObject({
+      defaultPath: "lexescrow-audit-wf-3f9c2.pdf",
+    });
+    expect(invoke).toHaveBeenCalledOnce();
+    const [command, args] = vi.mocked(invoke).mock.calls[0] as [string, { path: string; bytes: number[] }];
+    expect(command).toBe("save_audit_report");
+    expect(args.path).toBe("/exports/audit.pdf");
+    // The payload is a real PDF, not HTML wearing a .pdf name.
+    expect(args.bytes.slice(0, 5)).toEqual([0x25, 0x50, 0x44, 0x46, 0x2d]); // "%PDF-"
   });
 
-  it("falls back to a file download when the popup is blocked", async () => {
+  it("cancelling the dialog writes nothing; outside Tauri the PDF downloads as a blob", async () => {
     stubBackend();
+    // Cancelled dialog: a decision, not an error — no bytes leave the app.
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+    vi.mocked(save).mockResolvedValue(null);
+    await downloadAuditReport(SESSION_ID, fakeStore());
+    expect(invoke).not.toHaveBeenCalled();
+
+    // Browser dev mode: same PDF, plain blob download.
     const click = vi.fn();
     const anchor = { href: "", download: "", click };
-    vi.stubGlobal("window", { open: vi.fn(() => null) });
+    vi.stubGlobal("window", {});
     vi.stubGlobal("document", { createElement: vi.fn(() => anchor) });
     vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:x"), revokeObjectURL: vi.fn() });
 
     await downloadAuditReport(SESSION_ID, fakeStore());
 
+    expect(save).toHaveBeenCalledOnce(); // only the cancelled Tauri attempt above
     expect(click).toHaveBeenCalledOnce();
-    expect(anchor.download).toBe("lexescrow-audit-wf-3f9c2.html");
+    expect(anchor.download).toBe("lexescrow-audit-wf-3f9c2.pdf");
   });
 
   it("exportAuditReportHtml writes the HTML directly", async () => {
