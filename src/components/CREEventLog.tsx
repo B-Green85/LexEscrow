@@ -26,6 +26,7 @@ export const CRE_EVENT_TYPES: readonly string[] = [
   "arbitration_locked",
   "staged_release_initiated",
   "milestone_released",
+  "cre_workflow_triggered",
   "cre_execution_started",
   "cre_execution_completed",
   "funds_deposited",
@@ -38,6 +39,7 @@ export const EVENT_LABELS: Record<string, string> = {
   esign_sent: "✍️ Signature request sent",
   esign_completed: "✅ Signatures collected",
   funds_deposited: "💰 Funds deposited to escrow",
+  cre_workflow_triggered: "⚡ CRE workflow triggered",
   cre_execution_started: "⚡ CRE settlement initiated",
   cre_execution_completed: "✅ Settlement complete",
   condition_waived: "〜 Condition waived",
@@ -55,6 +57,25 @@ function formatPayload(payloadJson: string): string {
     return JSON.stringify(JSON.parse(payloadJson), null, 2);
   } catch {
     return payloadJson;
+  }
+}
+
+/**
+ * The DON execution ID an event carries, if any.
+ *
+ * Surfaced on the collapsed row rather than left to the expanded JSON because
+ * this is the one value an officer copies out of this screen — it is what
+ * `cre execution list` and the LexTrace poll match on. Everything else in the
+ * payload is context for when something looks wrong; this is the handle.
+ */
+function executionIdOf(payloadJson: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(payloadJson);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const id = (parsed as Record<string, unknown>).execution_id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch {
+    return null;
   }
 }
 
@@ -116,14 +137,24 @@ export function CREEventLog({ sessionId, maxEvents = 10 }: CREEventLogProps) {
         <ul className="mt-3 space-y-1">
           {events.map((e) => {
             const open = expanded === e.logId;
+            const executionId = executionIdOf(e.payloadJson);
             return (
               <li key={e.logId} className="rounded-lg border border-app-border bg-app-input">
                 <button
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+                  className="flex w-full items-start justify-between gap-3 px-3 py-2 text-left"
                   onClick={() => setExpanded(open ? null : e.logId)}
                   aria-expanded={open}
                 >
-                  <span className="truncate text-xs text-text-primary">{eventLabel(e.eventType)}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs text-text-primary">
+                      {eventLabel(e.eventType)}
+                    </span>
+                    {executionId && (
+                      <span className="mt-0.5 block truncate font-mono text-[11px] text-text-muted">
+                        Execution ID: {executionId}
+                      </span>
+                    )}
+                  </span>
                   <span className="shrink-0 font-mono text-[11px] text-text-muted">
                     {timeOf(e.blockTimestamp)}
                   </span>

@@ -18,6 +18,13 @@
  * whole safety property: "we have not built this yet" and "this attorney is in
  * good standing" must never be the same value, because the caller turns the
  * result into a boolean that gates money.
+ *
+ * `unavailable` is the third thing that is not a verdict: the registry was
+ * never reached at all. It is held apart from `error` because the two call for
+ * different handling upstream — an unreachable registry is a fact about the
+ * network, not about the attorney, and a settlement session should not die on
+ * it. It is still never `active`, so the gate stays shut either way; what
+ * changes is that the officer resolves it by hand instead of losing the run.
  */
 
 import * as backend from "../backend";
@@ -26,7 +33,7 @@ import * as backend from "../backend";
 export interface BarVerifyResult {
   barNumber: string;
   state: string;
-  status: "active" | "inactive" | "suspended" | "not_found" | "error";
+  status: "active" | "inactive" | "suspended" | "not_found" | "error" | "unavailable";
   attorneyName?: string;
   admissionDate?: string;
   firmName?: string;
@@ -49,6 +56,15 @@ export interface StateBarAdapter {
 
 /** Where the CA adapter lives during local demo and CRE simulation. */
 export const CALBAR_DEFAULT_BASE_URL = "http://localhost:3001";
+
+/**
+ * What `detail` leads with when the registry could not be reached.
+ *
+ * Exported so the pipeline and its tests name the same disposition rather than
+ * matching on prose: this string *is* the instruction to the officer, and the
+ * underlying transport error is appended after it as the reason.
+ */
+export const BAR_VERIFY_UNAVAILABLE = "Bar verification unavailable — manual review required.";
 
 /**
  * The full routing table — all 50 states.
@@ -135,6 +151,24 @@ export function resolveState(state: string): StateBarAdapter | null {
 /** The registry's `status` strings, narrowed to the union or rejected. */
 const KNOWN_STATUSES = new Set(["active", "inactive", "suspended", "not_found"]);
 
+/**
+ * The one rejection shape that means the registry *did* answer.
+ *
+ * `backend.verifyBarNumber` rejects for two unrelated reasons, and only one of
+ * them is "we never got there". A non-2xx means the registry or its adapter
+ * responded and refused — something is wrong at the far end, and that is a real
+ * error. Everything else a transport can raise (connection refused, DNS, TLS,
+ * timeout, an offline machine) means no answer came back at all.
+ *
+ * Both transports phrase the non-2xx case identically — the browser `fetch`
+ * path in `lib/backend.ts` and the Rust `verify_bar_number` command both throw
+ * "<state> State Bar lookup failed with HTTP <code>" — which is the seam this
+ * matches on. A rejection it does not recognize is treated as unreachable,
+ * which is the conservative direction: the worst case is that a session
+ * continues to manual review when it could have failed outright.
+ */
+const ANSWERED_WITH_HTTP_ERROR = /lookup failed with HTTP \d+/i;
+
 interface CalBarResponse {
   barNumber?: string;
   status?: string;
@@ -166,10 +200,21 @@ async function verifyBarForState_CA(
   try {
     data = (await backend.verifyBarNumber(barNumber, state, baseUrl)) as CalBarResponse;
   } catch (e) {
-    // Transport failure or non-2xx status — both surface as a rejection and
-    // both mean the same thing to the gate: not verified.
+    // Neither branch is ever `active` — to the gate they mean the same thing.
+    // They differ only in what the *session* should do next, which is why they
+    // are two statuses rather than one.
     const message = e instanceof Error ? e.message : String(e);
-    return { ...base, detail: `Could not reach the California State Bar adapter: ${message}` };
+    const detail = `Could not reach the California State Bar adapter: ${message}`;
+
+    if (ANSWERED_WITH_HTTP_ERROR.test(message)) {
+      return { ...base, detail };
+    }
+
+    // Unreachable. Log it here rather than only upstream: this is the layer
+    // that knows the transport failed, and the console line survives a session
+    // the officer abandons before the audit trail is exported.
+    console.warn("bar verification unreachable", state, message);
+    return { ...base, status: "unavailable", detail: `${BAR_VERIFY_UNAVAILABLE} ${detail}` };
   }
 
   const status = (data.status ?? "").toLowerCase();

@@ -4,7 +4,9 @@ import * as backend from "../lib/backend";
 import type {
   AiPublic,
   BlockchainPublic,
+  ClioConnectionStatus,
   ClioPublic,
+  DebugConsolePublic,
   DocuSignPublic,
   PracticePantherPublic,
   SmtpPublic,
@@ -17,12 +19,9 @@ import {
   BlockchainWriteAuthModal,
   ChangeBlockchainWriteAuthModal,
 } from "../components/BlockchainWriteAuthModal";
-import {
-  sendClioWebhook,
-  sendPracticePantherWebhook,
-  CLIO_TEST_EVENT,
-  PRACTICE_PANTHER_TEST_TRIGGER,
-} from "../lib/integrations";
+import { sendPracticePantherWebhook, PRACTICE_PANTHER_TEST_TRIGGER } from "../lib/integrations";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { CLIO_DEFAULT_REDIRECT_URI } from "../lib/clio";
 import { InfoTooltip, type InfoTooltipProps } from "../components/InfoTooltip";
 import {
   BLOCKCHAIN_TOOLTIPS,
@@ -711,7 +710,7 @@ function WebhookCard({
 }: {
   title: string;
   subtitle: string;
-  data: ClioPublic | PracticePantherPublic | null;
+  data: PracticePantherPublic | null;
   urlPlaceholder: string;
   testLabel: string;
   onSave: (input: { webhookUrl: string; matterId?: string; apiKey?: string }) => Promise<void>;
@@ -876,29 +875,282 @@ function describeTest(result: { success: boolean; statusCode?: number; error?: s
   return `❌ ${result.error ?? `HTTP ${result.statusCode ?? "error"}`}`;
 }
 
-function ClioCard({ data, refresh }: { data: ClioPublic | null; refresh: () => void }) {
+/**
+ * Clio Manage — app registration and the OAuth connection.
+ *
+ * Two states rather than one form. Registering the app (App ID, Client ID,
+ * Client Secret) is something an operator does once, copying values out of the
+ * Clio Developer Portal; connecting is something they do again whenever a
+ * refresh token lapses. Collapsing both into one form would put a "paste your
+ * client secret" field in front of the routine action.
+ *
+ * The redirect URI is shown read-only and pre-filled. It is not a preference —
+ * Clio matches it exactly against the Portal registration, and it is also the
+ * address the loopback listener binds. Showing it is what makes the commonest
+ * setup failure ("redirect_uri mismatch") diagnosable; letting it be edited
+ * here would just be a way to break it.
+ */
+export function ClioCard({ data, refresh }: { data: ClioPublic | null; refresh: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [appId, setAppId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [status, setStatus] = useState<ClioConnectionStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
+
+  const registered = data?.hasCredentials ?? false;
+  const redirectUri = data?.redirectUri || CLIO_DEFAULT_REDIRECT_URI;
+
+  // Validate the stored token upstream whenever the group says it holds one.
+  // `connected` from the vault only means "a refresh token is stored"; whether
+  // Clio still honours it is a question only Clio can answer.
+  useEffect(() => {
+    let cancelled = false;
+    if (!data?.connected) {
+      setStatus(null);
+      return;
+    }
+    void backend.clioCheckConnection().then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [data?.connected, data?.tokenExpiresAt]);
+
+  // The loopback listener reports the redirect; the exchange happens here so a
+  // failure lands on the screen that asked for it.
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void backend
+      .onClioOAuthCallback(({ code, state }) => {
+        void (async () => {
+          try {
+            await backend.clioExchangeCode(code, state);
+            toast("Connected to Clio.");
+            refresh();
+          } catch (e) {
+            setErr(e instanceof Error ? e.message : String(e));
+          }
+          setConnecting(false);
+        })();
+      })
+      .then((off) => {
+        if (cancelled) off();
+        else dispose = off;
+      });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, [refresh]);
+
+  const openEdit = () => {
+    setAppId(data?.appId ?? "");
+    setClientId(data?.clientId ?? "");
+    setClientSecret("");
+    setErr(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.setClio({ appId, clientId, clientSecret: clientSecret || undefined });
+      setEditing(false);
+      setClientSecret("");
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  const connect = async () => {
+    setConnecting(true);
+    setErr(null);
+    try {
+      const url = await backend.clioGetAuthUrl();
+      await openUrl(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setConnecting(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      await backend.clioDisconnect();
+      setStatus(null);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      // A blank client ID clears the whole registration, tokens included.
+      await backend.setClio({ appId: "", clientId: "" });
+      setStatus(null);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
   return (
-    <WebhookCard
-      title="Clio"
-      subtitle="Matter updates posted as escrow events occur"
-      data={data}
-      urlPlaceholder="https://app.clio.com/webhooks/…"
-      testLabel={CLIO_TEST_EVENT}
-      refresh={refresh}
-      onSave={(input) => backend.setClio(input)}
-      onTest={async (input) =>
-        describeTest(
-          await sendClioWebhook(input, {
-            event: CLIO_TEST_EVENT,
-            sessionId: "test",
-            assetClass: "legal",
-            timestamp: new Date().toISOString(),
-            data: { source: "LexEscrow configuration test" },
-          }),
-        )
-      }
-    />
+    <CardShell
+      title="Clio Manage"
+      subtitle="Read-only matter intake. LexEscrow reads matters, clients, bills and trust balances — and never writes to Clio."
+    >
+      {editing ? (
+        <div className="space-y-3">
+          <div>
+            <label className="label" htmlFor="clio-app-id">
+              App ID
+            </label>
+            <input
+              id="clio-app-id"
+              className="input"
+              value={appId}
+              onChange={(e) => setAppId(e.target.value)}
+              placeholder="from the Clio Developer Portal"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="clio-client-id">
+              Client ID
+            </label>
+            <input
+              id="clio-client-id"
+              className="input"
+              value={clientId}
+              onChange={(e) => setClientId(e.target.value)}
+              placeholder="from the Clio Developer Portal"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="clio-client-secret">
+              Client Secret
+            </label>
+            <SecretInput
+              id="clio-client-secret"
+              value={clientSecret}
+              onChange={setClientSecret}
+              placeholder={
+                data?.hasClientSecret ? "leave blank to keep existing" : "from the Developer Portal"
+              }
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="clio-redirect-uri">
+              Redirect URI
+            </label>
+            <input id="clio-redirect-uri" className="input" value={redirectUri} readOnly />
+            <p className="mt-1 text-xs text-text-muted">
+              Register this exact value in the Clio Developer Portal. LexEscrow listens on it
+              locally while you authorise.
+            </p>
+          </div>
+          <Err msg={err} />
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary" disabled={busy || !clientId || !appId} onClick={save}>
+              Save
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <div className="mb-3">
+            <span className={`badge ${data?.connected ? "badge-emerald" : "badge-slate"}`}>
+              {data?.connected ? "Connected" : registered ? "Not connected" : "Not configured"}
+            </span>
+          </div>
+
+          {data?.connected ? (
+            <dl className="space-y-1.5 text-sm">
+              <Row k="Firm" v={status?.firmName ?? "—"} />
+              <Row k="Access token" v={describeExpiry(status, data.tokenExpiresAt)} />
+              <Row k="Client ID" v={data.clientId} mono />
+            </dl>
+          ) : registered ? (
+            <p className="text-sm text-text-muted">
+              App registered. Connect to authorise LexEscrow to read this firm's matters.
+            </p>
+          ) : (
+            <p className="text-sm text-text-muted">
+              Register a Clio app to pull matters, clients and trust balances directly instead of
+              uploading documents.
+            </p>
+          )}
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn btn-secondary" onClick={openEdit}>
+              {registered ? "Edit app" : "Register app"}
+            </button>
+            {registered && !data?.connected && (
+              <button className="btn btn-primary" disabled={connecting} onClick={connect}>
+                {connecting ? "Waiting for Clio…" : "Connect to Clio"}
+              </button>
+            )}
+            {data?.connected && status?.connected === false && (
+              <button className="btn btn-primary" disabled={connecting} onClick={connect}>
+                Reconnect
+              </button>
+            )}
+            {data?.connected && (
+              <button className="btn btn-secondary" disabled={busy} onClick={disconnect}>
+                Disconnect
+              </button>
+            )}
+            {registered && (
+              <button className="btn btn-secondary text-red-600" disabled={busy} onClick={remove}>
+                Delete
+              </button>
+            )}
+          </div>
+
+          {connecting && (
+            <p className="mt-2 text-xs text-text-muted">
+              Finish authorising in your browser. This window updates when Clio redirects back.
+            </p>
+          )}
+          <Err msg={err} />
+        </div>
+      )}
+    </CardShell>
   );
+}
+
+/**
+ * What to say about the access token's life.
+ *
+ * The vault's stored expiry and Clio's own verdict can disagree — a token can
+ * be within its stated hour and still rejected, if the app's authorisation was
+ * revoked upstream. Clio's answer wins when there is one, because it is the
+ * side that decides.
+ */
+function describeExpiry(status: ClioConnectionStatus | null, storedExpiry: string): string {
+  if (status && !status.connected) return "expired — reconnect";
+  const iso = status?.expiresAt || storedExpiry;
+  if (!iso) return "—";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "—";
+  const minutes = Math.round((at.getTime() - Date.now()) / 60_000);
+  if (minutes <= 0) return "expired — refreshes on next use";
+  return `valid for ${minutes} min`;
 }
 
 function PracticePantherCard({
@@ -1360,6 +1612,170 @@ function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
 
 // ── Change password ──────────────────────────────────────────────────────────
 
+// ── LexTrace debug console ───────────────────────────────────────────────────
+
+/**
+ * IT setup for the read-only CRE debug console.
+ *
+ * Unlike every other card on this screen, this one configures a credential
+ * LexEscrow *checks* rather than one it presents. That changes two things about
+ * the form. There is no "test" button — the thing to test is the panel, which
+ * is one click away in the header. And the password is confirmed, because a
+ * mistyped API key fails visibly on first use while a mistyped gate password
+ * fails by locking its owner out of the tool they just configured.
+ *
+ * Both fields can be left blank on a subsequent save, which keeps the stored
+ * hash — the same rule every other secret on this screen follows, and what lets
+ * an operator name be corrected on its own.
+ */
+export function DebugConsoleCard({
+  data,
+  refresh,
+}: {
+  data: DebugConsolePublic | null;
+  refresh: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [operatorId, setOperatorId] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const configured = data?.configured ?? false;
+
+  const openEdit = () => {
+    setOperatorId(data?.operatorId ?? "");
+    setPassword("");
+    setConfirm("");
+    setErr(null);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    if (password !== confirm) {
+      setErr("The two passwords do not match.");
+      return;
+    }
+    // Only on a first setup: an existing console keeps its stored password when
+    // the field is left blank, which is the whole point of leaving it blank.
+    if (!configured && !password) {
+      setErr("Set a password — the console is password-gated.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.setDebugConsole({ operatorId, password: password || undefined });
+      setEditing(false);
+      setPassword("");
+      setConfirm("");
+      refresh();
+      toast("Debug console credentials saved.");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.deleteCredential("debug-console");
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+
+  return (
+    <CardShell
+      title="LexTrace Debug Console"
+      subtitle="Read-only CRE CLI output for IT operators. Every line is recorded in the debug audit trail."
+    >
+      {!editing ? (
+        <div>
+          <div className="mb-3">
+            <span className={`badge ${configured ? "badge-emerald" : "badge-slate"}`}>
+              {configured ? "Configured" : "Not configured"}
+            </span>
+          </div>
+          {configured ? (
+            <dl className="space-y-1.5 text-sm">
+              <Row k="IT operator" v={data?.operatorId ?? ""} />
+              <Row k="Password" v="•••••••• stored" />
+            </dl>
+          ) : (
+            <p className="text-sm text-text-muted">
+              The debug icon is visible but will refuse to open until an operator name and password
+              are set here.
+            </p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className="btn btn-secondary" onClick={openEdit}>
+              {configured ? "Edit" : "Set up"}
+            </button>
+            {configured && (
+              <button className="btn btn-secondary text-red-600" disabled={busy} onClick={remove}>
+                Delete
+              </button>
+            )}
+          </div>
+          <Err msg={err} />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="label" htmlFor="debug-operator-id">
+              IT Operator Name
+            </label>
+            <input
+              id="debug-operator-id"
+              className="input"
+              value={operatorId}
+              onChange={(e) => setOperatorId(e.target.value)}
+              placeholder="the name recorded against every debug entry"
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="debug-password">
+              Password
+            </label>
+            <SecretInput
+              id="debug-password"
+              value={password}
+              onChange={setPassword}
+              placeholder={configured ? "leave blank to keep existing" : "debug console password"}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="debug-password-confirm">
+              Confirm password
+            </label>
+            <SecretInput
+              id="debug-password-confirm"
+              value={confirm}
+              onChange={setConfirm}
+              placeholder={configured ? "leave blank to keep existing" : "re-enter the password"}
+            />
+          </div>
+          <Err msg={err} />
+          <div className="flex flex-wrap gap-2">
+            <button className="btn btn-primary" disabled={busy || !operatorId} onClick={save}>
+              Save
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
 function ChangePassword() {
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState("");
@@ -1431,6 +1847,7 @@ export function Configuration() {
   const [clio, setClio] = useState<ClioPublic | null>(null);
   const [practicePanther, setPracticePanther] = useState<PracticePantherPublic | null>(null);
   const [blockchain, setBlockchain] = useState<BlockchainPublic | null>(null);
+  const [debugConsole, setDebugConsole] = useState<DebugConsolePublic | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1446,18 +1863,20 @@ export function Configuration() {
     if (readable) {
       // DocuSign and the two webhook integrations live outside VaultPublic —
       // each has its own deliberately narrower public shape.
-      const [vaultPub, dsPub, clioPub, ppPub, chainPub] = await Promise.all([
+      const [vaultPub, dsPub, clioPub, ppPub, chainPub, debugPub] = await Promise.all([
         backend.vaultGetPublic(),
         backend.getDocuSignPublic(),
         backend.getClioPublic(),
         backend.getPracticePantherPublic(),
         backend.getBlockchainPublic(),
+        backend.getDebugConsolePublic(),
       ]);
       setPub(vaultPub);
       setDocusign(dsPub);
       setClio(clioPub);
       setPracticePanther(ppPub);
       setBlockchain(chainPub);
+      setDebugConsole(debugPub);
     }
   };
 
@@ -1500,6 +1919,7 @@ export function Configuration() {
     setClio(null);
     setPracticePanther(null);
     setBlockchain(null);
+    setDebugConsole(null);
   };
 
   return (
@@ -1575,6 +1995,17 @@ export function Configuration() {
           </div>
           <ClioCard data={clio} refresh={refresh} />
           <PracticePantherCard data={practicePanther} refresh={refresh} />
+
+          <div className="pt-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+              Operations
+            </div>
+            <p className="mt-1 text-sm text-text-muted">
+              Observation, not action. The debug console runs a fixed pair of read-only CRE
+              commands and can neither send input to them nor run anything else.
+            </p>
+          </div>
+          <DebugConsoleCard data={debugConsole} refresh={refresh} />
 
           <ChangePassword />
         </div>

@@ -1,0 +1,12 @@
+{
+  "aiProviderUrl": "https://api.anthropic.com/v1/messages",
+  "aiProviderSecretId": "AI_PROVIDER_KEY",
+  "hmacSecretId": "HMAC_VAULT_KEY",
+  "scoreThreshold": 600,
+  "authorizedKeys": [
+    {
+      "type": "KEY_TYPE_ECDSA_EVM",
+      "publicKey": "0xREPLACE_WITH_THE_TAURI_SIGNER_ADDRESS"
+    }
+  ]
+}

@@ -16,6 +16,8 @@ import type {
   BlockchainPublic,
   ClioConfigInput,
   ClioPublic,
+  DebugConsoleInput,
+  DebugConsolePublic,
   DocuSignInput,
   DocuSignPublic,
   PracticePantherConfigInput,
@@ -52,11 +54,29 @@ interface DocuSignStored {
   jwtPrivateKey: string;
   environment: string;
 }
-/** Clio / PracticePanther share a shape; the vendors differ only downstream. */
+/** PracticePanther's webhook config. Clio no longer shares this shape — it
+ *  moved to the OAuth registration below. */
 interface WebhookStored {
   webhookUrl: string;
   matterId: string;
   apiKey: string;
+}
+
+/**
+ * Clio Manage OAuth registration, mirroring the Rust `ClioConfig`.
+ *
+ * Every field is optional-with-a-default on read for the same reason the Rust
+ * side gives them `#[serde(default)]`: a browser vault written under the old
+ * placeholder shape must decrypt into "not connected" rather than throwing.
+ */
+interface ClioStored {
+  appId: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  accessToken: string;
+  refreshToken: string;
+  tokenExpiresAt: string;
 }
 /** Mirrors the Rust `BlockchainConfig`. Both secrets stay in this module. */
 interface BlockchainStored {
@@ -69,14 +89,24 @@ interface BlockchainStored {
   forwarderAddress: string;
   networkName: string;
 }
+/**
+ * Mirrors the Rust `DebugConsoleEntry`. The password is stored only as a
+ * PBKDF2 verifier — the browser analogue of the backend's scrypt hash, exactly
+ * as `deriveKey` is the analogue of its scrypt KDF. No plaintext, here either.
+ */
+interface DebugConsoleStored {
+  operatorId: string;
+  passwordHash: string;
+}
 interface VData {
   ai: AiStored | null;
   smtp: SmtpStored | null;
   twilio: TwilioStored | null;
   docusign: DocuSignStored | null;
-  clio: WebhookStored | null;
+  clio: ClioStored | null;
   practicePanther: WebhookStored | null;
   blockchain: BlockchainStored | null;
+  debugConsole: DebugConsoleStored | null;
 }
 
 const STORAGE_KEY = "lexescrow.vault";
@@ -134,6 +164,7 @@ function emptyData(): VData {
     clio: null,
     practicePanther: null,
     blockchain: null,
+    debugConsole: null,
   };
 }
 
@@ -358,8 +389,10 @@ export function hasBlockchain(): boolean {
  * clears the entry rather than storing a half-configured one — so disabling an
  * integration does not leave its token behind.
  */
+// PracticePanther only — Clio moved to the OAuth registration below and no
+// longer shares this shape.
 async function setWebhookGroup(
-  group: "clio" | "practicePanther",
+  group: "practicePanther",
   input: { webhookUrl: string; matterId?: string; apiKey?: string },
 ): Promise<void> {
   const s = requireUnlocked();
@@ -374,7 +407,7 @@ async function setWebhookGroup(
   await persist();
 }
 
-function webhookPublic(stored: WebhookStored | null): ClioPublic {
+function webhookPublic(stored: WebhookStored | null): PracticePantherPublic {
   if (!stored) return { webhookUrl: "", matterId: "", hasApiKey: false };
   return {
     webhookUrl: stored.webhookUrl,
@@ -383,12 +416,174 @@ function webhookPublic(stored: WebhookStored | null): ClioPublic {
   };
 }
 
+// ── Clio Manage (OAuth 2.0) ──────────────────────────────────────────────────
+
+const CLIO_DEFAULT_REDIRECT_URI = "http://127.0.0.1:8080/callback";
+
+/**
+ * A stored Clio group, normalised.
+ *
+ * The `?? ""` on every field is the stale-shape path: an install holding
+ * `{webhookUrl, apiKey}` from before the OAuth migration reads through here as
+ * an all-empty registration, which `hasCredentials` reports as "not connected".
+ * No error, no crash, and the operator is prompted to connect — which is the
+ * required behaviour.
+ */
+function clioStored(raw: Partial<ClioStored> | null | undefined): ClioStored | null {
+  if (!raw) return null;
+  return {
+    appId: raw.appId ?? "",
+    clientId: raw.clientId ?? "",
+    clientSecret: raw.clientSecret ?? "",
+    redirectUri: raw.redirectUri ?? "",
+    accessToken: raw.accessToken ?? "",
+    refreshToken: raw.refreshToken ?? "",
+    tokenExpiresAt: raw.tokenExpiresAt ?? "",
+  };
+}
+
+/**
+ * Save the app registration. A blank client ID clears the entry — the delete
+ * affordance, and what keeps a removed integration from leaving a refresh token
+ * behind. Changing the client ID drops the token set, since a token belongs to
+ * one OAuth client.
+ */
 export async function setClio(input: ClioConfigInput): Promise<void> {
-  await setWebhookGroup("clio", input);
+  const s = requireUnlocked();
+  const clientId = input.clientId.trim();
+  if (!clientId) {
+    s.data.clio = null;
+    await persist();
+    return;
+  }
+  const existing = clioStored(s.data.clio);
+  const sameApp = existing?.clientId === clientId;
+  s.data.clio = {
+    appId: input.appId.trim(),
+    clientId,
+    clientSecret: input.clientSecret?.trim() || (existing?.clientSecret ?? ""),
+    redirectUri: input.redirectUri?.trim() || existing?.redirectUri || CLIO_DEFAULT_REDIRECT_URI,
+    accessToken: sameApp ? (existing?.accessToken ?? "") : "",
+    refreshToken: sameApp ? (existing?.refreshToken ?? "") : "",
+    tokenExpiresAt: sameApp ? (existing?.tokenExpiresAt ?? "") : "",
+  };
+  await persist();
 }
 
 export function getClioPublic(): ClioPublic {
-  return webhookPublic(requireUnlocked().data.clio);
+  const c = clioStored(requireUnlocked().data.clio);
+  const hasCredentials = Boolean(c && c.appId && c.clientId && c.clientSecret);
+  return {
+    appId: c?.appId ?? "",
+    clientId: c?.clientId ?? "",
+    redirectUri: c?.redirectUri ?? "",
+    hasClientSecret: Boolean(c?.clientSecret),
+    hasCredentials,
+    connected: hasCredentials && Boolean(c?.refreshToken),
+    tokenExpiresAt: c?.tokenExpiresAt ?? "",
+  };
+}
+
+// ── LexTrace debug console ───────────────────────────────────────────────────
+//
+// Same contract as the Rust group, same posture: the password is hashed on the
+// way in and never held. PBKDF2 stands in for scrypt for the same reason it
+// does for the vault key itself — it is the KDF Web Crypto actually offers —
+// and the format is self-describing so the two are never confused for each
+// other.
+
+const DEBUG_HASH_ITERATIONS = 200_000;
+
+async function hashDebugPassword(password: string, salt: Uint8Array): Promise<string> {
+  const base = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, [
+    "deriveBits",
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: salt as unknown as BufferSource,
+      iterations: DEBUG_HASH_ITERATIONS,
+      hash: "SHA-256",
+    },
+    base,
+    256,
+  );
+  return `pbkdf2$${DEBUG_HASH_ITERATIONS}$${b64(salt)}$${b64(new Uint8Array(bits))}`;
+}
+
+/** Constant-time comparison, so a wrong password leaks nothing by timing. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * A blank password keeps the stored hash, matching the house rule everywhere
+ * else — so the operator name can be corrected on its own.
+ */
+export async function setDebugConsole(input: DebugConsoleInput): Promise<void> {
+  const { data } = requireUnlocked();
+  const submitted = input.password?.trim() ?? "";
+  const passwordHash = submitted
+    ? await hashDebugPassword(submitted, crypto.getRandomValues(new Uint8Array(16)))
+    : (data.debugConsole?.passwordHash ?? "");
+  data.debugConsole = { operatorId: input.operatorId.trim(), passwordHash };
+  await persist();
+}
+
+export function getDebugConsolePublic(): DebugConsolePublic {
+  const entry = requireUnlocked().data.debugConsole;
+  return {
+    configured: Boolean(entry && entry.operatorId && entry.passwordHash),
+    operatorId: entry?.operatorId ?? "",
+  };
+}
+
+export function hasDebugConsole(): boolean {
+  try {
+    return getDebugConsolePublic().configured;
+  } catch {
+    // A locked vault is "not configured" as far as every caller is concerned.
+    return false;
+  }
+}
+
+/**
+ * Check a submitted password. A locked vault, an unconfigured console and a
+ * malformed stored hash are all `false` — the caller is a gate with one
+ * decision to make.
+ */
+export async function verifyDebugConsole(password: string): Promise<boolean> {
+  let entry: DebugConsoleStored | null;
+  try {
+    entry = requireUnlocked().data.debugConsole;
+  } catch {
+    return false;
+  }
+  if (!entry?.operatorId || !entry.passwordHash) return false;
+
+  const parts = entry.passwordHash.split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
+  const iterations = Number(parts[1]);
+  if (!Number.isInteger(iterations) || iterations <= 0) return false;
+  let salt: Uint8Array;
+  try {
+    salt = unb64(parts[2]);
+  } catch {
+    return false;
+  }
+
+  const base = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, [
+    "deriveBits",
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: salt as unknown as BufferSource, iterations, hash: "SHA-256" },
+    base,
+    256,
+  );
+  return timingSafeEqual(b64(new Uint8Array(bits)), parts[3]);
 }
 
 export async function setPracticePanther(input: PracticePantherConfigInput): Promise<void> {
@@ -407,7 +602,6 @@ export function getPracticePantherPublic(): PracticePantherPublic {
  * equivalent of this function on the IPC surface.
  */
 export function resolveWebhookConfigs(): {
-  clio?: { webhookUrl: string; matterId?: string; apiKey?: string };
   practicePanther?: { webhookUrl: string; matterId?: string; apiKey?: string };
 } {
   const data = state?.data;
@@ -419,8 +613,10 @@ export function resolveWebhookConfigs(): {
           ...(w.apiKey && { apiKey: w.apiKey }),
         }
       : undefined;
+  // Clio is absent: its group is now an OAuth app registration with no webhook
+  // URL and no API key, and the Clio Manage integration is read-only by
+  // contract — there is nothing to deliver with, and nothing it may deliver.
   return {
-    ...(project(data?.clio) && { clio: project(data?.clio)! }),
     ...(project(data?.practicePanther) && { practicePanther: project(data?.practicePanther)! }),
   };
 }

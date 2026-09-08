@@ -269,3 +269,33 @@
 .splash-bar {
   animation: splash-fill 2s ease-out forwards;
 }
+
+/* ============================================================================
+   LexTrace — the debug panel's live indicator.
+   ========================================================================== */
+/* A slow, low-amplitude pulse. The dot reports that polling is still running,
+   which is a background fact — anything faster or brighter would compete with
+   the workflow rail for the operator's attention while saying less. */
+@keyframes lextrace-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0);
+  }
+}
+
+.lextrace-live-dot {
+  animation: lextrace-pulse 2s ease-in-out infinite;
+}
+
+/* Operators who have asked the OS for less motion get a steady dot; it still
+   reports "live", just without the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .lextrace-live-dot {
+    animation: none;
+  }
+}

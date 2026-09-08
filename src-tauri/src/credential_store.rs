@@ -12,7 +12,7 @@
 //!  * [`VaultStore`] wraps the existing AES-256-GCM + scrypt vault. Portable,
 //!    dependency-free, and password-gated.
 //!
-//! Both address the same eight credentials by the same names ([`CREDENTIAL_KEYS`]),
+//! Both address the same nine credentials by the same names ([`CREDENTIAL_KEYS`]),
 //! so migrating between them is a copy, not a translation.
 //!
 //! The IPC rule is unchanged and absolute: credential *values* never cross to
@@ -29,16 +29,17 @@ use zeroize::Zeroizing;
 
 use crate::store_config::{read_store_config, write_store_config, StoreBackend};
 use crate::vault::{
-    can_settle, has_docusign_credentials, merge_ai, merge_blockchain, merge_clio, merge_docusign,
-    merge_practice_panther, merge_smtp, merge_twilio, new_seal_key_b64, AiEntry, AiInput,
-    BlockchainConfig, BlockchainInput, BlockchainPublic, ClioConfig, ClioConfigInput, ClioPublic,
-    DocuSignInput, DocuSignPublic, DocuSignSecret, PracticePantherConfig,
+    can_settle, has_debug_console, has_docusign_credentials, merge_ai, merge_blockchain, merge_clio,
+    merge_debug_console, merge_docusign, merge_practice_panther, merge_smtp, merge_twilio,
+    new_seal_key_b64, verify_debug_password, AiEntry, AiInput, BlockchainConfig, BlockchainInput,
+    BlockchainPublic, ClioConfig, ClioConfigInput, ClioPublic, DebugConsoleEntry, DebugConsoleInput,
+    DebugConsolePublic, DocuSignInput, DocuSignPublic, DocuSignSecret, PracticePantherConfig,
     PracticePantherConfigInput, PracticePantherPublic, SmtpEntry, SmtpInput, TwilioEntry,
     TwilioInput, UnlockResult, VaultError, VaultPublic, VaultState, VaultStatus,
 };
 
 /// Service name for every keyring entry. The username field carries the
-/// credential key, so one LexEscrow install occupies eight entries under one
+/// credential key, so one LexEscrow install occupies nine entries under one
 /// service — which is what makes them findable in Keychain Access and
 /// `secret-tool` without guessing.
 const KEYRING_SERVICE: &str = "lexescrow";
@@ -63,6 +64,7 @@ pub const CREDENTIAL_KEYS: &[&str] = &[
     "clio",
     "practice-panther",
     "blockchain",
+    "debug-console",
     KEY_SEAL,
 ];
 
@@ -451,6 +453,10 @@ impl CredentialStoreState {
         self.resolve("blockchain")
     }
 
+    pub fn resolve_debug_console(&self) -> Option<DebugConsoleEntry> {
+        self.resolve("debug-console")
+    }
+
     /// The per-install AnchorReceipt seal key, minting it on first use.
     ///
     /// Minting here rather than at unlock is what lets the OS-keychain backend
@@ -505,13 +511,25 @@ impl CredentialStoreState {
         self.write("docusign", &merged)
     }
 
-    /// A blank webhook URL clears the entry — the Configuration screen's delete
-    /// affordance, and the reason a disabled integration leaves no token behind.
+    /// A blank client ID clears the entry — the Configuration screen's delete
+    /// affordance, and the reason a removed integration leaves no refresh token
+    /// behind.
     pub fn set_clio(&self, input: ClioConfigInput) -> Result<(), CredentialStoreError> {
         match merge_clio(self.resolve_clio().as_ref(), input) {
             Some(c) => self.write("clio", &c),
             None => self.delete_key("clio"),
         }
+    }
+
+    /// Write a whole Clio config back, tokens included.
+    ///
+    /// The token half of the group is written by the OAuth flow in `clio.rs`
+    /// and by nothing else — it is not something an operator types, so it has
+    /// no place in `ClioConfigInput` and no route in from the WebView. This is
+    /// that flow's one seam, deliberately narrow: read the config, set the
+    /// three token fields, write it back.
+    pub fn write_clio(&self, config: &ClioConfig) -> Result<(), CredentialStoreError> {
+        self.write("clio", config)
     }
 
     pub fn set_practice_panther(
@@ -553,6 +571,19 @@ impl CredentialStoreState {
         self.write("blockchain", &merged)
     }
 
+    /// Write the LexTrace credentials.
+    ///
+    /// No second password gate, unlike `set_blockchain`. The two are not
+    /// comparable: writing a deployer key hands over irrevocable authority to
+    /// move money, whereas this writes the verifier for a read-only console
+    /// whose worst outcome is that somebody watches CLI output they were
+    /// already able to run themselves in a terminal. An unlocked vault is
+    /// sufficient authority for that.
+    pub fn set_debug_console(&self, input: DebugConsoleInput) -> Result<(), CredentialStoreError> {
+        let merged = merge_debug_console(self.resolve_debug_console().as_ref(), input);
+        self.write("debug-console", &merged)
+    }
+
     pub fn delete_key(&self, key: &str) -> Result<(), CredentialStoreError> {
         let store = self
             .current()
@@ -592,6 +623,40 @@ impl CredentialStoreState {
 
     pub fn has_blockchain(&self) -> bool {
         self.resolve_blockchain().as_ref().is_some_and(can_settle)
+    }
+
+    pub fn get_debug_console_public(&self) -> DebugConsolePublic {
+        DebugConsolePublic::build(self.resolve_debug_console().as_ref())
+    }
+
+    pub fn has_debug_console(&self) -> bool {
+        self.resolve_debug_console().as_ref().is_some_and(has_debug_console)
+    }
+
+    /// Check a submitted debug password against the stored hash.
+    ///
+    /// An unconfigured console answers `false` rather than "not found", and it
+    /// takes the same scrypt-shaped time to say so is *not* something this can
+    /// promise — the hash is simply absent, so there is nothing to derive
+    /// against. That is an acceptable oracle here: whether an install has its
+    /// debug console set up is already visible in the Configuration screen and
+    /// in the icon's own refusal message.
+    pub fn verify_debug_console(&self, password: &str) -> bool {
+        match self.resolve_debug_console() {
+            Some(e) if has_debug_console(&e) => verify_debug_password(&e.password_hash, password),
+            _ => false,
+        }
+    }
+
+    /// The operator name recorded against debug audit entries.
+    ///
+    /// `None` when the console is not configured, which is the same condition
+    /// that refuses to run a command at all — so a debug row can never be
+    /// written with an anonymous operator.
+    pub fn debug_operator_id(&self) -> Option<String> {
+        self.resolve_debug_console()
+            .filter(has_debug_console)
+            .map(|e| e.operator_id.clone())
     }
 }
 
@@ -909,6 +974,54 @@ pub fn vault_get_practice_panther_public(
     state: State<'_, CredentialStoreState>,
 ) -> Result<PracticePantherPublic, String> {
     Ok(state.get_practice_panther_public())
+}
+
+// ---- LexTrace debug console -------------------------------------------------
+
+#[tauri::command]
+pub fn vault_set_debug_console(
+    state: State<'_, CredentialStoreState>,
+    input: DebugConsoleInput,
+) -> Result<(), String> {
+    if input.operator_id.trim().is_empty() {
+        return Err("An IT operator name is required.".to_string());
+    }
+    // A first write with no password would store a half-configured group that
+    // `has_debug_console` reports as unconfigured — the operator would press
+    // Save, see success, and still be refused by the icon.
+    let first_write = !state.has_debug_console();
+    let blank_password = input.password.as_deref().map(str::trim).unwrap_or("").is_empty();
+    if first_write && blank_password {
+        return Err("A debug console password is required.".to_string());
+    }
+    state.set_debug_console(input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn vault_get_debug_console_public(
+    state: State<'_, CredentialStoreState>,
+) -> Result<DebugConsolePublic, String> {
+    Ok(state.get_debug_console_public())
+}
+
+#[tauri::command]
+pub fn vault_has_debug_console(state: State<'_, CredentialStoreState>) -> bool {
+    state.has_debug_console()
+}
+
+/// The debug console's password gate.
+///
+/// Returns a bare bool, and deliberately not the operator name or anything else
+/// on success: the panel reads those from `vault_get_debug_console_public`,
+/// which is not gated because it holds nothing secret. Keeping this command's
+/// answer to one bit means a wrong password and a locked vault are
+/// indistinguishable from the WebView, which is what they should be.
+#[tauri::command]
+pub fn debug_console_authenticate(
+    state: State<'_, CredentialStoreState>,
+    password: String,
+) -> bool {
+    state.verify_debug_console(&password)
 }
 
 /// Write the settlement config, through whichever gate the active backend has.
@@ -1286,9 +1399,10 @@ mod tests {
             "smtp" => r#"{"host":"smtp.example.com","port":587,"username":"clerk","password":"smtp-pw"}"#,
             "twilio" => r#"{"accountSid":"AC1","authToken":"twilio-tok","fromNumber":"+15550000000"}"#,
             "docusign" => r#"{"integrationKey":"ik-abc","userId":"u-1","accountId":"acct-987654","baseUri":"https://demo.docusign.net","jwtPrivateKey":"-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----","environment":"sandbox"}"#,
-            "clio" => r#"{"webhookUrl":"https://example.test/clio","matterId":"M-1","apiKey":"clio-tok"}"#,
+            "clio" => r#"{"appId":"app-1234","clientId":"client-abc","clientSecret":"clio-secret","redirectUri":"http://127.0.0.1:8080/callback","accessToken":"at-live","refreshToken":"rt-live","tokenExpiresAt":"2026-09-05T13:00:00Z"}"#,
             "practice-panther" => r#"{"webhookUrl":"https://example.test/pp","matterId":null,"apiKey":"pp-tok"}"#,
             "blockchain" => r#"{"rpcUrl":"https://eth-sepolia.g.alchemy.com/v2/SECRET","chainId":11155111,"contractAddress":"0xc0","deployerAddress":"0xd0","deployerPrivateKey":"0xdeadbeef","usdcAddress":"0xu0","forwarderAddress":"0xf0","networkName":"Ethereum Sepolia"}"#,
+            "debug-console" => r#"{"operatorId":"ops-jordan","passwordHash":"scrypt$15$8$1$AAAAAAAAAAAAAAAAAAAAAA==$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4="}"#,
             KEY_SEAL => "3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=",
             other => panic!("no fixture for {other}"),
         }
@@ -1691,7 +1805,91 @@ mod tests {
         for k in CREDENTIAL_KEYS {
             assert!(seen.insert(*k), "duplicate credential key {k}");
         }
-        assert_eq!(CREDENTIAL_KEYS.len(), 8);
+        assert_eq!(CREDENTIAL_KEYS.len(), 9);
         assert_eq!(*CREDENTIAL_KEYS.last().unwrap(), KEY_SEAL);
+    }
+
+    // ---- LexTrace debug console -------------------------------------------
+
+    /// A store state backed by an unlocked App Vault — the backend the debug
+    /// console is normally configured under.
+    fn vault_backed_state() -> CredentialStoreState {
+        let vault = temp_vault();
+        vault.unlock("vault-pw");
+        let state = CredentialStoreState::new(vault);
+        state.activate(StoreBackend::AppVault).unwrap();
+        state
+    }
+
+    fn debug_input(operator: &str, password: Option<&str>) -> DebugConsoleInput {
+        DebugConsoleInput {
+            operator_id: operator.to_string(),
+            password: password.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_debug_group_routes_through_the_active_store() {
+        let state = vault_backed_state();
+        assert!(!state.has_debug_console());
+        assert!(state.debug_operator_id().is_none());
+
+        state.set_debug_console(debug_input("ops-jordan", Some("console-pw"))).unwrap();
+
+        assert!(state.has_debug_console());
+        assert_eq!(state.debug_operator_id().as_deref(), Some("ops-jordan"));
+        assert!(state.verify_debug_console("console-pw"));
+        assert!(!state.verify_debug_console("wrong"));
+
+        let pubv = state.get_debug_console_public();
+        assert!(pubv.configured);
+        assert_eq!(pubv.operator_id, "ops-jordan");
+    }
+
+    #[test]
+    fn an_unconfigured_console_verifies_nothing_and_names_nobody() {
+        // `debug_operator_id` is what stamps the audit trail, so "not
+        // configured" has to mean "no run, no row" rather than an anonymous one.
+        let state = vault_backed_state();
+        assert!(!state.verify_debug_console(""));
+        assert!(!state.verify_debug_console("anything"));
+        assert!(state.debug_operator_id().is_none());
+    }
+
+    #[test]
+    fn a_half_configured_console_is_not_configured() {
+        // Written straight through the generic setter, which is the one path
+        // that can produce a group the typed setter would have refused.
+        let state = vault_backed_state();
+        state
+            .current()
+            .unwrap()
+            .set("debug-console", r#"{"operatorId":"ops","passwordHash":""}"#)
+            .unwrap();
+
+        assert!(!state.has_debug_console());
+        assert!(state.debug_operator_id().is_none());
+        assert!(!state.verify_debug_console(""));
+    }
+
+    #[test]
+    fn the_debug_group_is_deletable_through_the_store() {
+        let state = vault_backed_state();
+        state.set_debug_console(debug_input("ops", Some("pw"))).unwrap();
+        state.delete_key("debug-console").unwrap();
+        assert!(!state.has_debug_console());
+    }
+
+    #[test]
+    fn the_debug_group_migrates_between_backends_like_any_other() {
+        // The reason it belongs in CREDENTIAL_KEYS at all: an operator who
+        // switches stores should not have to re-enrol the console.
+        let (source, target) = (MemoryStore::named("source"), MemoryStore::named("target"));
+        source.set("debug-console", &fixture("debug-console")).unwrap();
+
+        let (migrated, failed) = copy_all(&source, &target);
+        assert!(failed.is_empty());
+        assert_eq!(migrated, vec!["debug-console".to_string()]);
+        assert_eq!(target.get("debug-console").unwrap(), fixture("debug-console"));
     }
 }

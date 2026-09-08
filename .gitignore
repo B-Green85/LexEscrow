@@ -72,3 +72,4 @@ cre/dist/
 # (tauri.conf.json references ../Assets/*), the bulky originals are not.
 Assets/LexEscrow.png
 Assets/LexEscrow_ICON.png
+cre-templates-new/

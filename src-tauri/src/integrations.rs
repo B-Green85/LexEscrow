@@ -39,17 +39,30 @@ impl WebhookOutcome {
 
 /// Which vendor's stored config to send with. Resolved rather than passed so a
 /// compromised WebView cannot redirect a firm's API key to an arbitrary host.
+///
+/// Clio is deliberately absent. Its credential group is now an OAuth app
+/// registration with no webhook URL and no API key, and the Clio Manage
+/// integration is read-only by contract — outbound delivery has nothing left to
+/// send with, and nothing it would be allowed to send. `parse` still recognises
+/// the name so the refusal can say that, rather than "unknown vendor".
 enum Vendor {
-    Clio,
     PracticePanther,
 }
 
+/// Outcome of naming a vendor: the one that still has a webhook, the one that
+/// deliberately no longer does, or a name this transport does not know.
+enum VendorLookup {
+    Known(Vendor),
+    ClioIsReadOnly,
+    Unknown,
+}
+
 impl Vendor {
-    fn parse(raw: &str) -> Option<Self> {
+    fn parse(raw: &str) -> VendorLookup {
         match raw {
-            "clio" => Some(Self::Clio),
-            "practicePanther" | "practice_panther" => Some(Self::PracticePanther),
-            _ => None,
+            "practicePanther" | "practice_panther" => VendorLookup::Known(Self::PracticePanther),
+            "clio" => VendorLookup::ClioIsReadOnly,
+            _ => VendorLookup::Unknown,
         }
     }
 }
@@ -65,16 +78,21 @@ pub async fn integration_send_webhook(
     vendor: String,
     body: String,
 ) -> Result<WebhookOutcome, String> {
-    let Some(kind) = Vendor::parse(&vendor) else {
-        return Ok(WebhookOutcome::failed(format!("Unknown integration '{vendor}'")));
+    let kind = match Vendor::parse(&vendor) {
+        VendorLookup::Known(k) => k,
+        VendorLookup::ClioIsReadOnly => {
+            return Ok(WebhookOutcome::failed(
+                "Clio is a read-only integration — LexEscrow never writes to it",
+            ))
+        }
+        VendorLookup::Unknown => {
+            return Ok(WebhookOutcome::failed(format!("Unknown integration '{vendor}'")))
+        }
     };
 
     // The config is cloned out and the guard dropped before the await — the
     // vault mutex is a std lock and must not be held across a suspension point.
     let resolved = match kind {
-        Vendor::Clio => state
-            .resolve_clio()
-            .map(|c| (c.webhook_url.clone(), c.api_key.clone())),
         Vendor::PracticePanther => state
             .resolve_practice_panther()
             .map(|c| (c.webhook_url.clone(), c.api_key.clone())),
@@ -124,18 +142,26 @@ mod tests {
 
     #[test]
     fn vendor_parses_both_spellings_and_rejects_others() {
-        assert!(matches!(Vendor::parse("clio"), Some(Vendor::Clio)));
         assert!(matches!(
             Vendor::parse("practicePanther"),
-            Some(Vendor::PracticePanther)
+            VendorLookup::Known(Vendor::PracticePanther)
         ));
         assert!(matches!(
             Vendor::parse("practice_panther"),
-            Some(Vendor::PracticePanther)
+            VendorLookup::Known(Vendor::PracticePanther)
         ));
-        assert!(Vendor::parse("").is_none());
-        assert!(Vendor::parse("clio ").is_none());
-        assert!(Vendor::parse("evil-vendor").is_none());
+        assert!(matches!(Vendor::parse(""), VendorLookup::Unknown));
+        assert!(matches!(Vendor::parse("evil-vendor"), VendorLookup::Unknown));
+    }
+
+    #[test]
+    fn clio_is_recognised_and_refused_rather_than_unknown() {
+        // The distinction is the whole point: "unknown vendor" reads as a typo,
+        // and would send whoever hit it looking for a spelling mistake instead
+        // of finding out that Clio moved to a read-only OAuth integration.
+        assert!(matches!(Vendor::parse("clio"), VendorLookup::ClioIsReadOnly));
+        // Untrimmed input is still not a vendor name.
+        assert!(matches!(Vendor::parse("clio "), VendorLookup::Unknown));
     }
 
     #[test]

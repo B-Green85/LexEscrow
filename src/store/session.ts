@@ -38,6 +38,16 @@ import * as releasePaths from "../lib/releasePaths";
 import { downloadReceipt, issueReceipt, type AnchorReceipt } from "../lib/anchor-receipt";
 import { fireIntegrationWebhooks } from "../lib/integrations";
 import { setExplorerChain } from "../lib/explorer";
+import {
+  clioIntakeIdentifier,
+  clioUserMessage,
+  clioVdbText,
+  type ClioMatterPayload,
+  type IntakeSource,
+} from "../lib/clio";
+// Toast owns its own tiny store and imports nothing from here, so this is a
+// leaf dependency rather than a cycle back into the session.
+import { toast } from "../components/Toast";
 import type { BlockchainPublic, StoreBackend, UnlockResult } from "../lib/vaultTypes";
 import { downloadAuditReport as downloadAuditReportPdf } from "../lib/export/audit-pdf-export";
 import {
@@ -87,6 +97,19 @@ export type Screen =
   | "batch"
   | "anchor-receipt"
   | "recent";
+/**
+ * LexTrace panel position. One click — or Cmd/Ctrl+Shift+D — advances it, and
+ * 2 wraps back to 0.
+ *
+ *  * `0` closed
+ *  * `1` docked bottom, 280px (the VSCode terminal position)
+ *  * `2` split right, 420px (the VSCode side-panel position)
+ *
+ * A number rather than a string union because the cycle *is* arithmetic: the
+ * three states are ordered, and `(n + 1) % 3` is the whole transition table.
+ */
+export type DebugPanelState = 0 | 1 | 2;
+
 export type StepStatus = "pending" | "active" | "done" | "error";
 export type EntryMode = "ai" | "manual";
 export type ProcPhase = "choose" | "running" | "manual";
@@ -370,6 +393,24 @@ export interface SessionState {
   configHint: "locked" | "unconfigured" | null;
   entryMode: EntryMode;
   procPhase: ProcPhase;
+  /**
+   * Which intake path this session came in through.
+   *
+   * `artifact` is the Artifact Loader — a file, hashed and fingerprinted.
+   * `clio` is a matter pulled read-only from Clio Manage. Everything after the
+   * parse is identical; the branch exists because one has a document to hash
+   * and the other does not.
+   */
+  intakeSource: IntakeSource;
+  /**
+   * The matter this session was built from, on the Clio path.
+   *
+   * **Held in memory only.** Clio's ToS §10(e) forbids persisting matter data
+   * beyond session scope, so this lives here for the length of one escrow
+   * transaction and is written to nothing — not SQLite, not the audit trail,
+   * not the AnchorReceipt. `reset()` drops it with the rest of the session.
+   */
+  clioMatter: ClioMatterPayload | null;
   assetClass: AssetClass;
   activeBatchItemId: string | null;
   fromBatch: boolean;
@@ -436,6 +477,15 @@ export interface SessionState {
   /** When the checklist was last re-evaluated (ISO). Drives the refresh line. */
   conditionsUpdatedAt: string | null;
 
+  // ── CRE Confidential Workflow (spec §13) ─────────────────────────────────
+  /**
+   * The DON's execution ID for this session's enclave run, once the gateway
+   * has accepted one. Null when the trigger has not fired or was rejected —
+   * the trigger is not a gate, so null is an ordinary state that says nothing
+   * about whether settlement succeeded.
+   */
+  creExecutionId: string | null;
+
   // ── Blockchain settlement config (vault-held) ────────────────────────────
   /**
    * Public view of the vault's blockchain entry. Null until first read, and on
@@ -491,12 +541,32 @@ export interface SessionState {
   /** Is the lazy unlock prompt on screen? Raised by `ensureCredentials`. */
   credentialPromptOpen: boolean;
 
+  // ── LexTrace debug console ───────────────────────────────────────────────
+  /** Where the debug panel is, if anywhere. */
+  debugPanel: DebugPanelState;
+  /**
+   * Has the operator passed the debug password gate this app session?
+   *
+   * Session-scoped rather than persisted, and deliberately: the gate exists so
+   * that opening the panel is a decision somebody made, and a remembered answer
+   * on the next launch would make it a decision nobody made.
+   */
+  debugAuthenticated: boolean;
+  /** Is the debug password prompt on screen? */
+  debugPromptOpen: boolean;
+  /** The IT operator's name, for the panel header. Empty until authenticated. */
+  debugOperatorId: string;
+
   // actions
   setAnchor: (patch: Partial<TrustAnchors>) => void;
   setRawAnchors: (raw: Record<string, string>) => void;
   runCannaVerify: () => Promise<void>;
   setFile: (file: File | null) => void;
   setEntryMode: (mode: EntryMode) => void;
+  /** Switch intake paths. Clears whichever input the other path was holding. */
+  setIntakeSource: (source: IntakeSource) => void;
+  /** Hold a fetched Clio matter, or drop it when the officer picks another. */
+  setClioMatter: (payload: ClioMatterPayload | null) => void;
   setAssetClass: (cls: AssetClass) => void;
   openConfig: () => void;
   closeConfig: () => void;
@@ -529,6 +599,21 @@ export interface SessionState {
   unlockVault: (password: string) => Promise<UnlockResult>;
   /** Seal the vault. */
   lockVault: () => Promise<void>;
+  /**
+   * Advance the debug panel one position: closed → bottom → right → closed.
+   *
+   * Opening from closed is the only transition with anything in front of it —
+   * the vault has to be readable, the console has to be configured, and the
+   * password has to have been given once this session. The two later
+   * transitions are pure repositioning and are never gated again.
+   */
+  cycleDebugPanel: () => Promise<void>;
+  /** Close the panel outright, whichever position it is in. */
+  closeDebugPanel: () => void;
+  /** Answer the debug password prompt. Resolves false on a wrong password. */
+  submitDebugPassword: (password: string) => Promise<boolean>;
+  /** Dismiss the debug password prompt without opening the panel. */
+  cancelDebugPrompt: () => void;
   downloadAnchorReceipt: () => void;
   returnToBatch: () => void;
   loadBatchItem: (h: BatchHydration) => void;
@@ -597,6 +682,20 @@ function stepStatus(steps: ProcessingStep[], key: string, status: StepStatus): P
  */
 let pendingUnlock: ((ok: boolean) => void) | null = null;
 
+/**
+ * Trim, drop blanks, de-duplicate — the shape the CRE enclave's anchor check
+ * wants. It compares extracted parties and identifiers against these sets, so
+ * an empty string or a repeat is noise that can only widen what matches.
+ */
+function uniqueNonEmpty(values: (string | null | undefined)[]): string[] {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) seen.add(trimmed);
+  }
+  return [...seen];
+}
+
 export const useSession = create<SessionState>((set, get) => {
   // Sequential audit logger — preserves hash-chain order.
   const log = async (event: string, payload: Record<string, unknown>) => {
@@ -631,7 +730,7 @@ export const useSession = create<SessionState>((set, get) => {
   const notifyIntegrations = async (event: string) => {
     try {
       const configs = await backend.getIntegrationConfigs();
-      if (!configs.clio && !configs.practicePanther) return;
+      if (!configs.practicePanther) return;
       await fireIntegrationWebhooks(event, get(), {
         ...configs,
         ...(backend.isTauri() && { transport: backend.sendIntegrationWebhook }),
@@ -782,6 +881,8 @@ export const useSession = create<SessionState>((set, get) => {
     providerLabel: null,
     configHint: null,
     entryMode: "ai",
+    intakeSource: "artifact",
+    clioMatter: null,
     procPhase: "choose",
     assetClass: "legal",
     activeBatchItemId: null,
@@ -829,6 +930,7 @@ export const useSession = create<SessionState>((set, get) => {
     conditionPolling: false,
     conditionPollTimer: null,
     conditionsUpdatedAt: null,
+    creExecutionId: null,
     blockchain: null,
     blockchainReady: false,
     showWizard: false,
@@ -840,11 +942,22 @@ export const useSession = create<SessionState>((set, get) => {
     // re-reads the live status rather than trusting this flag.
     vaultLocked: false,
     credentialPromptOpen: false,
+    debugPanel: 0,
+    debugAuthenticated: false,
+    debugPromptOpen: false,
+    debugOperatorId: "",
 
     setAnchor: (patch) => set((s) => ({ anchors: { ...s.anchors, ...patch } })),
     setRawAnchors: (raw) => set({ rawAnchors: raw }),
     setFile: (file) => set({ file }),
     setEntryMode: (mode) => set({ entryMode: mode }),
+
+    // Switching paths clears the other one's input. Leaving a stale file behind
+    // a Clio selection — or the reverse — is how `beginProcessing` would end up
+    // hashing a document the officer thought they had replaced.
+    setIntakeSource: (source) =>
+      set(source === "clio" ? { intakeSource: source, file: null } : { intakeSource: source, clioMatter: null }),
+    setClioMatter: (payload) => set({ clioMatter: payload }),
     setAssetClass: (cls) => set({ assetClass: cls }),
     openConfig: () =>
       set((s) => {
@@ -1011,12 +1124,79 @@ export const useSession = create<SessionState>((set, get) => {
 
     lockVault: async () => {
       await backend.vaultLock();
-      set({ vaultLocked: true });
+      set({
+        vaultLocked: true,
+        // Sealing the vault takes the debug console with it. The credentials
+        // the panel's gate checked, and the ones its polling reads on every
+        // request, both live in the vault that has just closed — leaving an
+        // authenticated panel open would poll a store it can no longer read and
+        // fill the terminal with failures. The spec's "for the remainder of the
+        // app session" is about not re-prompting on every cycle, not about
+        // outliving an explicit lock.
+        debugPanel: 0,
+        debugAuthenticated: false,
+        debugPromptOpen: false,
+        debugOperatorId: "",
+      });
       // Drops the cached public view with it — leaving settlement config on
       // screen after the vault that backs it is sealed would misreport what
       // this install can currently do.
       await get().refreshBlockchainConfig();
     },
+
+    // ── LexTrace debug console ────────────────────────────────────────────
+
+    cycleDebugPanel: async () => {
+      const { debugPanel, debugAuthenticated } = get();
+
+      // Already open: reposition, then close. Nothing is re-checked — the
+      // operator has been through the gate and is now moving a window.
+      if (debugPanel !== 0) {
+        set({ debugPanel: debugPanel === 1 ? 2 : 0 });
+        return;
+      }
+
+      // Opening. The credentials live in the vault, so a sealed vault has to be
+      // opened first or `hasDebugConsole` would answer "not configured" for an
+      // install that is configured — and send the operator to a Settings screen
+      // where they would find the console already set up.
+      if (!(await get().ensureCredentials())) return;
+
+      if (!(await backend.hasDebugConsole())) {
+        toast("Debug console requires IT setup. Configure in Settings.");
+        return;
+      }
+
+      if (!debugAuthenticated) {
+        set({ debugPromptOpen: true });
+        return;
+      }
+      set({ debugPanel: 1 });
+    },
+
+    closeDebugPanel: () => set({ debugPanel: 0 }),
+
+    submitDebugPassword: async (password) => {
+      if (!(await backend.authenticateDebugConsole(password))) return false;
+      // The operator name is read only now, on the far side of the gate. It is
+      // not a secret, but the header has no business showing it to somebody who
+      // has not been let in.
+      let operatorId = "";
+      try {
+        operatorId = (await backend.getDebugConsolePublic()).operatorId;
+      } catch {
+        // A name the panel cannot read is a cosmetic loss, not a failed unlock.
+      }
+      set({
+        debugAuthenticated: true,
+        debugPromptOpen: false,
+        debugPanel: 1,
+        debugOperatorId: operatorId,
+      });
+      return true;
+    },
+
+    cancelDebugPrompt: () => set({ debugPromptOpen: false }),
 
     completeWizard: () => {
       set({ showWizard: false, wizardComplete: true });
@@ -1082,6 +1262,9 @@ export const useSession = create<SessionState>((set, get) => {
         rawAnchors: {},
         sessionId: null,
         file: null,
+        // Dropped with the rest of the session: ToS §10(e) scopes Clio matter
+        // data to the transaction it was fetched for.
+        clioMatter: null,
         artifact: null,
         vdb: null,
         payload: null,
@@ -1114,6 +1297,7 @@ export const useSession = create<SessionState>((set, get) => {
         conditionPolling: false,
         conditionPollTimer: null,
         conditionsUpdatedAt: null,
+        creExecutionId: null,
       });
     },
 
@@ -1147,9 +1331,14 @@ export const useSession = create<SessionState>((set, get) => {
     // Start button on the Processing screen. Hashes + verifies the attorney,
     // then either runs AI parsing or shows the manual-entry form.
     beginProcessing: async () => {
-      const { file, anchors, entryMode, assetClass } = get();
-      if (!file) {
-        set({ error: "Please add a retainer document before continuing." });
+      const { file, anchors, entryMode, assetClass, intakeSource, clioMatter } = get();
+      const fromClio = intakeSource === "clio";
+      if (fromClio ? !clioMatter : !file) {
+        set({
+          error: fromClio
+            ? "Select a Clio matter before continuing."
+            : "Please add a retainer document before continuing.",
+        });
         return;
       }
       // The lazy gate. Asked here rather than at launch because this is the
@@ -1170,11 +1359,35 @@ export const useSession = create<SessionState>((set, get) => {
       });
 
       try {
-        // 1) Hash + normalize in the backend.
+        // 1) Establish the session's source-of-record identifier.
+        //
+        // Two paths, one column. The Artifact Loader hashes real bytes; Clio
+        // intake has no artifact to hash — the input is a JSON record pulled
+        // from an API, not a file anyone can hand over — so it derives a
+        // deterministic identifier from the matter, the fetch time and the
+        // OAuth client instead. It carries a `clio:` prefix rather than
+        // `sha256:` precisely so nothing downstream mistakes it for evidence
+        // about a document's contents.
         setStep("hash", "active");
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        const artifact = await backend.loadArtifact(file.name, bytes);
-        set({ artifact });
+        let sourceHash: string;
+        let sourceText: string;
+        let artifact: backend.LoadedArtifact | null = null;
+
+        if (fromClio && clioMatter) {
+          sourceHash = await clioIntakeIdentifier(
+            clioMatter.matterId,
+            clioMatter.fetchedAt,
+            (await backend.getClioPublic()).clientId,
+          );
+          sourceText = clioVdbText(clioMatter);
+        } else {
+          const bytes = new Uint8Array(await file!.arrayBuffer());
+          artifact = await backend.loadArtifact(file!.name, bytes);
+          set({ artifact });
+          sourceHash = artifact.hash;
+          sourceText = artifact.normalizedText;
+        }
+
         await backend.createSession({
           sessionId,
           // The anchored party, not the parsed `clientId`. Trust anchors are
@@ -1184,10 +1397,30 @@ export const useSession = create<SessionState>((set, get) => {
           // "pending" in the one column an officer scans by.
           clientId: anchors.clientFullLegalName.trim() || "Unidentified party",
           attorneyBarNumber: anchors.attorneyBarNumber,
-          documentHash: artifact.hash,
+          documentHash: sourceHash,
           assetClass,
         });
-        await log("document_loaded", { filename: artifact.filename, hash: artifact.hash, size: artifact.size });
+
+        // The audit trail records *that* the session came from Clio and which
+        // matter it names — LexEscrow's own derived data. It records none of
+        // the matter's contents: no client details, no bills, no balances.
+        // That distinction is ToS §10(e), and it is why this payload lists
+        // fields rather than spreading the Clio record into it.
+        if (fromClio && clioMatter) {
+          await log("document_loaded", {
+            intake_source: "clio",
+            matter_id: clioMatter.matterId,
+            matter_reference: clioMatter.displayNumber,
+            source_hash: sourceHash,
+          });
+        } else if (artifact) {
+          await log("document_loaded", {
+            intake_source: "artifact",
+            filename: artifact.filename,
+            hash: artifact.hash,
+            size: artifact.size,
+          });
+        }
         await log("trust_anchors_provided", {
           bar_last4: anchors.attorneyBarNumber.slice(-4),
           state: anchors.state,
@@ -1205,41 +1438,54 @@ export const useSession = create<SessionState>((set, get) => {
         // baseline, final blocking re-verify) do not depend on the receipt. The
         // step is marked `error` so the officer can see the provenance claim is
         // missing rather than assuming a receipt exists.
-        setStep("anchor", "active");
-        set({ anchorReceiptIssuing: true });
-        try {
-          const receipt = await issueReceipt({
-            sessionId,
-            assetClass,
-            items: [{ label: artifact.filename, hash: artifact.hash, size: artifact.size }],
-          });
-          set({ anchorReceipt: receipt, anchorReceiptIssuing: false });
-          await log("anchor_receipt_issued", {
-            receipt_id: receipt.receiptId,
-            on_chain_tx: receipt.items[0]?.onChainTx ?? null,
-            hmac: receipt.items[0]?.hmac ?? null,
-            receipt_hash: receipt.receiptHash,
-            overall_status: receipt.summary.overallStatus,
-          });
+        //
+        // Skipped entirely on the Clio path. An AnchorReceipt is a provenance
+        // claim about a *document* — "these exact bytes existed, sealed, at
+        // this time" — and TrueTitle registration puts that fingerprint
+        // on-chain. A Clio matter has no bytes to make that claim about, and
+        // minting a receipt over a JSON snapshot would assert a provenance
+        // nobody can later verify against anything.
+        if (!fromClio && artifact) {
+          setStep("anchor", "active");
+          set({ anchorReceiptIssuing: true });
+          try {
+            const receipt = await issueReceipt({
+              sessionId,
+              assetClass,
+              items: [{ label: artifact.filename, hash: artifact.hash, size: artifact.size }],
+            });
+            set({ anchorReceipt: receipt, anchorReceiptIssuing: false });
+            await log("anchor_receipt_issued", {
+              receipt_id: receipt.receiptId,
+              on_chain_tx: receipt.items[0]?.onChainTx ?? null,
+              hmac: receipt.items[0]?.hmac ?? null,
+              receipt_hash: receipt.receiptHash,
+              overall_status: receipt.summary.overallStatus,
+            });
+            setStep("anchor", "done");
+            await notifyIntegrations("receipt.issued");
+          } catch (e) {
+            // The commonest cause is a locked vault — the seal key is
+            // per-install and lives there, so a locked vault means this install
+            // cannot currently attest anything. Surface the backend's reason on
+            // the step itself rather than the fatal-error banner: processing
+            // genuinely continues, and the officer needs to know *what to do*,
+            // not just that a light went red.
+            const message = e instanceof Error ? e.message : String(e);
+            set((s) => ({
+              anchorReceiptIssuing: false,
+              steps: s.steps.map((step) =>
+                step.key === "anchor"
+                  ? { ...step, status: "error", label: `Registration unavailable — ${message}` }
+                  : step,
+              ),
+            }));
+            await log("anchor_receipt_failed", { error: message });
+          }
+        } else {
+          // Marked done rather than left pending: nothing is outstanding, and a
+          // step stuck on "active" reads as a stall.
           setStep("anchor", "done");
-          await notifyIntegrations("receipt.issued");
-        } catch (e) {
-          // The commonest cause is a locked vault — the seal key is per-install
-          // and lives there, so a locked vault means this install cannot
-          // currently attest anything. Surface the backend's reason on the step
-          // itself rather than the fatal-error banner: processing genuinely
-          // continues, and the officer needs to know *what to do*, not just
-          // that a light went red.
-          const message = e instanceof Error ? e.message : String(e);
-          set((s) => ({
-            anchorReceiptIssuing: false,
-            steps: s.steps.map((step) =>
-              step.key === "anchor"
-                ? { ...step, status: "error", label: `Registration unavailable — ${message}` }
-                : step,
-            ),
-          }));
-          await log("anchor_receipt_failed", { error: message });
         }
 
         // 2) Verify attorney standing via the BarVerify adapter — both modes.
@@ -1255,7 +1501,16 @@ export const useSession = create<SessionState>((set, get) => {
           CALBAR_DEFAULT_BASE_URL,
         );
         const active = barResult.status === "active";
-        set({ barActive: active, barVerifyResult: barResult });
+        // "unavailable" is not a verdict about the attorney — the registry was
+        // never reached, so nothing about their standing is known either way.
+        // `barActive` stays null rather than false for that reason: false is a
+        // claim ("not in good standing") this session is in no position to
+        // make, and it would put a `failureReason` saying so onto the
+        // condition. Null leaves the bar condition `pending`, which blocks the
+        // release just as hard — `allMet` counts only met and waived — while
+        // saying the true thing, that the check still has to be done by hand.
+        const unavailable = barResult.status === "unavailable";
+        set({ barActive: unavailable ? null : active, barVerifyResult: barResult });
         await log("bar_verification_result", {
           active,
           status: barResult.status,
@@ -1269,12 +1524,14 @@ export const useSession = create<SessionState>((set, get) => {
           // are enough to correlate an entry without recording the identifier.
           bar_last4: anchors.attorneyBarNumber.slice(-4),
         });
-        if (!active) {
+        if (!active && !unavailable) {
           setStep("bar", "error");
           set({
             // The adapter's own detail, not a generic message: "scaffold",
-            // "unreachable" and "suspended" call for three different actions
-            // from the officer, and only one of them is the attorney's problem.
+            // "unrecognized status" and "suspended" call for three different
+            // actions from the officer, and only one of them is the attorney's
+            // problem. (An unreachable registry no longer lands here at all —
+            // it is `unavailable`, handled below.)
             // Trailing punctuation is normalized because `detail` comes from
             // fifty different adapters and cannot be assumed to end cleanly.
             error: `Attorney bar verification did not pass — ${barResult.detail.replace(
@@ -1286,11 +1543,35 @@ export const useSession = create<SessionState>((set, get) => {
           await backend.updateSessionState(sessionId, "FAILED");
           return;
         }
-        setStep("bar", "done");
 
-        // 3) Prime the VDB from the artifact (both modes validate against it).
+        if (unavailable) {
+          // The AnchorReceipt shape from step 1b: the step goes red with the
+          // reason on it, and processing continues. Halting here would cost the
+          // officer the parse and every validation after it over a network
+          // fault that says nothing about the transaction — and they would have
+          // to re-run the whole session once the adapter answered again. What
+          // the release actually depends on is the bar *condition*, which stays
+          // unmet until someone verifies standing another way.
+          set((s) => ({
+            steps: s.steps.map((step) =>
+              step.key === "bar"
+                ? { ...step, status: "error", label: "Attorney verification unavailable — manual review required" }
+                : step,
+            ),
+          }));
+        } else {
+          setStep("bar", "done");
+        }
+
+        // 3) Prime the VDB from the source (both modes validate against it).
+        //
+        // On the Clio path the source is a dollar-denominated projection of the
+        // matter rather than the JSON the AI reads. The VDB scans for dollar
+        // figures and their field labels; handing it raw JSON would feed it
+        // `3000000` beside `trustBalanceCents` and make every co-validation
+        // compare dollars against cents. See `clioVdbText`.
         await backend.updateSessionState(sessionId, "PARSING");
-        const vdb = await primeVDB(artifact.normalizedText, artifact.hash, sessionId);
+        const vdb = await primeVDB(sourceText, sourceHash, sessionId);
         set({ vdb });
 
         // Manual entry: stop here and let the human fill the form.
@@ -1320,7 +1601,15 @@ export const useSession = create<SessionState>((set, get) => {
 
         let parsed: ParsedRetainerPayload;
         try {
-          parsed = await provider.parse(artifact.normalizedText, schemaFor(assetClass));
+          // The one difference the intake source makes to the parser: which
+          // system prompt is used, and whether the user message is document
+          // text or the matter's JSON. The output contract and every downstream
+          // validation are identical.
+          parsed = await provider.parse(
+            fromClio && clioMatter ? clioUserMessage(clioMatter) : sourceText,
+            schemaFor(assetClass),
+            intakeSource,
+          );
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e);
           setStep("ai", "error");
@@ -2263,6 +2552,55 @@ export const useSession = create<SessionState>((set, get) => {
       set({ execution: { ...get().execution, phase: "converting", clientCents, firmCents, txHash: null, path } });
       await sleep(700);
       set({ execution: { ...get().execution, phase: "settling", clientCents, firmCents, txHash: null, path } });
+
+      // ── CRE Confidential Workflow — fire and observe ─────────────────────
+      // The deployed workflow validates this escrow and computes an HMAC seal
+      // inside a TEE enclave, then crosses the result to the DON. It settles
+      // nothing and authorises nothing, which is exactly why it is not a gate:
+      // making it one would hand an unreachable gateway a veto over money
+      // movement it plays no part in. A rejection is logged and the settlement
+      // below runs regardless.
+      try {
+        const cre = await backend.triggerCreWorkflow({
+          session_id: sessionId,
+          asset_class: get().assetClass,
+          total_held_cents: Number(cents.totalHeldCents),
+          release_path: path,
+          // The enclave re-extracts the terms from the document itself and
+          // reconciles them against the anchors the officer entered at
+          // Document Load — that cross-check is the whole point of the run, so
+          // a payload without these two fields is rejected by its schema
+          // rather than validated leniently.
+          document_text: artifact.normalizedText,
+          trust_anchors: {
+            parties: uniqueNonEmpty([
+              anchors.clientFullLegalName,
+              payload.clientName,
+              payload.attorneyName,
+            ]),
+            identifiers: uniqueNonEmpty([
+              anchors.attorneyBarNumber,
+              payload.barNumber,
+              payload.extractedBarNumber,
+            ]),
+          },
+        });
+        set({ creExecutionId: cre.executionId });
+        await log("cre_workflow_triggered", {
+          workflow_id: sessionId,
+          execution_id: cre.executionId,
+          cre_workflow_id: cre.workflowId,
+          status: cre.status,
+          execution_path: path,
+        });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        await log("cre_workflow_trigger_failed", {
+          workflow_id: sessionId,
+          execution_path: path,
+          error: message,
+        });
+      }
 
       // Real on-chain settlement: the backend signs a `directSettle` call with
       // the vault-held deployer key, broadcasts it, and waits for the receipt.

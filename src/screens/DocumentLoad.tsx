@@ -1,5 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "../store/session";
+import { ClioIntakePanel } from "../components/ClioIntakePanel";
+import { supportsClioIntake } from "../lib/clio";
 import * as backend from "../lib/backend";
 import { samplesForClass, sampleToFile } from "../lib/samples";
 import {
@@ -131,8 +133,20 @@ function byClass<T>(make: (cls: AssetClass) => T): Record<AssetClass, T> {
 }
 
 export function DocumentLoad() {
-  const { anchors, setAnchor, setRawAnchors, setFile, goToProcessing, error, busy, assetClass, setAssetClass } =
-    useSession();
+  const {
+    anchors,
+    setAnchor,
+    setRawAnchors,
+    setFile,
+    goToProcessing,
+    error,
+    busy,
+    assetClass,
+    setAssetClass,
+    intakeSource,
+    setIntakeSource,
+    clioMatter,
+  } = useSession();
   const inputRef = useRef<HTMLInputElement>(null);
 
   // The screen holds every asset class's work in parallel, keyed by class:
@@ -208,6 +222,49 @@ export function DocumentLoad() {
     setRawByClass(rawRef.current);
   };
 
+  /**
+   * Pre-fill the client trust anchors from a fetched Clio matter.
+   *
+   * This is the whole hand-off into DocuSign and the notification flow, and it
+   * deliberately changes neither. The Legal class's signer descriptor already
+   * routes its envelope to `clientEmail`, and `sendClientNotification` already
+   * reads `clientEmail` / `clientPhone` — so filling those three anchors is
+   * enough for a Clio-sourced client to reach both, with no branch anywhere
+   * downstream.
+   *
+   * Marked *suggested* rather than confirmed. The amber dot already means
+   * "proposed by a machine, verify before relying on it", which is exactly the
+   * status of a contact record pulled out of a firm's practice-management
+   * system — and trust anchors are authoritative precisely because a human
+   * confirmed them. A field the officer has already typed into is left alone.
+   */
+  useEffect(() => {
+    if (!clioMatter || assetClass !== "legal") return;
+    const proposed: Record<string, string> = {
+      clientFullLegalName: clioMatter.clientName,
+      ...(clioMatter.clientEmail && { clientEmail: clioMatter.clientEmail }),
+      ...(clioMatter.clientPhone && { clientPhone: clioMatter.clientPhone }),
+    };
+    const filled = Object.entries(proposed).filter(
+      ([key, value]) => value && !touchedRef.current.legal.has(key),
+    );
+    if (filled.length === 0) return;
+
+    const next = { ...rawRef.current.legal, ...Object.fromEntries(filled) };
+    writeRaw("legal", next);
+    setSuggestedByClass((prev) => {
+      const marked = new Set(prev.legal);
+      for (const [key] of filled) marked.add(key);
+      return { ...prev, legal: marked };
+    });
+    if (useSession.getState().assetClass === "legal") {
+      syncStore("legal", next, filesRef.current.legal);
+    }
+    // Keyed on the matter, not the payload object: re-running on every render
+    // would fight the officer's own edits back into the Clio values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clioMatter?.matterId, clioMatter?.fetchedAt]);
+
   const selectClass = (cls: AssetClass) => {
     if (cls === assetClass) return;
     setAssetClass(cls);
@@ -275,7 +332,14 @@ export function DocumentLoad() {
     if (useSession.getState().assetClass === cls) syncStore(cls, next, f);
   };
 
-  const canContinue = !!file && anchorsComplete(assetClass, raw) && !busy;
+  // Clio intake is only offered on the Legal class — Clio is practice-management
+  // software for law firms, so a matter is a legal engagement by construction.
+  // Selecting another class falls back to the Artifact Loader rather than
+  // leaving a toggle on screen that cannot be honoured.
+  const clioAvailable = supportsClioIntake(assetClass);
+  const fromClio = clioAvailable && intakeSource === "clio";
+  const haveInput = fromClio ? !!clioMatter : !!file;
+  const canContinue = haveInput && anchorsComplete(assetClass, raw) && !busy;
   const samples = samplesForClass(assetClass);
 
   return (
@@ -317,6 +381,49 @@ export function DocumentLoad() {
           })}
         </div>
 
+        {/* Intake source. Only rendered where both paths exist — a single-option
+            toggle is a control that cannot be operated. */}
+        {clioAvailable && (
+          <>
+            <label className="label mt-6" id="intake-source-label">
+              Intake source
+            </label>
+            <div
+              role="radiogroup"
+              aria-labelledby="intake-source-label"
+              className="inline-flex rounded-lg border border-app-border bg-app-bg p-0.5"
+            >
+              {(
+                [
+                  ["artifact", "Upload Documents"],
+                  ["clio", "Pull from Clio"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={intakeSource === value}
+                  onClick={() => setIntakeSource(value)}
+                  className={`cursor-pointer rounded-md px-4 py-1.5 text-xs font-medium transition-colors ${
+                    intakeSource === value
+                      ? "bg-app-card text-text-primary"
+                      : "text-text-muted hover:text-text-primary"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {fromClio ? (
+          <div className="mt-6">
+            <ClioIntakePanel />
+          </div>
+        ) : (
+          <>
         {/* Upload */}
         <label className="label mt-6">{descriptor.uploadLabel}</label>
         <div
@@ -375,6 +482,8 @@ export function DocumentLoad() {
             ))}
           </div>
         </div>
+          </>
+        )}
 
         {/* Trust anchors — rendered dynamically for the selected class */}
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">

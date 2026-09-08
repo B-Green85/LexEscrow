@@ -11,13 +11,17 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import * as browserVault from "./browserVault";
+import type { ClioMatterPayload, ClioMatterSummary } from "./clio";
 import type {
   AiInput,
   BlockchainInput,
   BlockchainPublic,
   ClioConfigInput,
+  ClioConnectionStatus,
   ClioPublic,
   CreConfig,
+  DebugConsoleInput,
+  DebugConsolePublic,
   DocuSignInput,
   DocuSignPublic,
   PracticePantherConfigInput,
@@ -1047,6 +1051,35 @@ export async function executeDirectSettle(args: DirectSettleArgs): Promise<Direc
   return invoke<DirectSettleResult>("execute_direct_settle", { ...args });
 }
 
+// ── CRE Confidential Workflow — HTTPTrigger (spec §13) ───────────────────────
+
+/** Mirrors the Rust `CreTriggerResult` — opaque public identifiers only. */
+export interface CreTriggerResult {
+  /** The DON's ID for this run. What LexTrace matches on when the poll picks it up. */
+  executionId: string;
+  /** `"ACCEPTED"` when the gateway queued the run. */
+  status: string;
+  workflowId: string;
+}
+
+/**
+ * Trigger the deployed CRE Confidential Workflow for an escrow.
+ *
+ * The workflow validates the payload and computes an HMAC seal inside a TEE
+ * enclave; it does not settle and it authorises nothing. Callers treat a
+ * rejection as an observation that did not happen — never as a settlement that
+ * must not — so this is the one backend seam whose failure is deliberately not
+ * allowed to stop the flow that calls it.
+ *
+ * Outside Tauri there is no signer and no gateway, so this rejects rather than
+ * simulating: a fabricated execution ID would surface in the event log as
+ * evidence of an enclave run that never occurred.
+ */
+export async function triggerCreWorkflow(payload: Record<string, unknown>): Promise<CreTriggerResult> {
+  if (!isTauri()) throw new Error("The CRE workflow trigger requires the desktop backend.");
+  return invoke<CreTriggerResult>("trigger_cre_workflow", { payload });
+}
+
 // ── Practice-management integrations (spec §14 V1) ───────────────────────────
 
 export async function setClio(input: ClioConfigInput): Promise<void> {
@@ -1060,6 +1093,95 @@ export async function setClio(input: ClioConfigInput): Promise<void> {
 export async function getClioPublic(): Promise<ClioPublic> {
   if (isTauri()) return invoke<ClioPublic>("vault_get_clio_public");
   return browserVault.getClioPublic();
+}
+
+// ── Clio Manage — OAuth 2.0 and read-only matter intake ──────────────────────
+//
+// Every one of these needs a real HTTP client, a loopback listener and the
+// stored client secret, none of which exist in a browser build. They reject
+// rather than degrade: a fabricated matter in an intake path that feeds an
+// escrow would be far worse than an honest refusal.
+
+const NO_CLIO_OUTSIDE_TAURI = "Clio intake needs the desktop app.";
+
+/**
+ * Start an authorization: returns the URL to open, and opens the loopback
+ * listener behind it.
+ *
+ * The two are one call because a URL without a listener behind it sends the
+ * operator to a consent screen whose redirect lands nowhere — a failure that
+ * would surface minutes later as "nothing happened".
+ */
+export async function clioGetAuthUrl(): Promise<string> {
+  if (!isTauri()) throw new Error(NO_CLIO_OUTSIDE_TAURI);
+  return invoke<string>("clio_get_auth_url");
+}
+
+/** Redeem the authorization code. Rejects if `state` does not match the flow. */
+export async function clioExchangeCode(code: string, state: string): Promise<void> {
+  if (!isTauri()) throw new Error(NO_CLIO_OUTSIDE_TAURI);
+  await invoke("clio_exchange_code", { code, state });
+}
+
+export async function clioRefreshToken(): Promise<void> {
+  if (!isTauri()) throw new Error(NO_CLIO_OUTSIDE_TAURI);
+  await invoke("clio_refresh_token");
+}
+
+/**
+ * Validate the stored token upstream and report who it belongs to.
+ *
+ * Answers "not connected" rather than throwing for every failure — an expired
+ * refresh token, an unreachable Clio, no registration at all. The Configuration
+ * screen renders that state; it does not have to handle it as an error.
+ */
+export async function clioCheckConnection(): Promise<ClioConnectionStatus> {
+  if (!isTauri()) return { connected: false, expiresAt: null, firmName: null };
+  try {
+    return await invoke<ClioConnectionStatus>("clio_check_connection");
+  } catch {
+    return { connected: false, expiresAt: null, firmName: null };
+  }
+}
+
+/** Drop the token set, keeping the app registration. */
+export async function clioDisconnect(): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("clio_disconnect");
+}
+
+export async function clioSearchMatters(query: string): Promise<ClioMatterSummary[]> {
+  if (!isTauri()) throw new Error(NO_CLIO_OUTSIDE_TAURI);
+  return invoke<ClioMatterSummary[]>("clio_search_matters", { query });
+}
+
+/**
+ * Fetch one matter across all five Clio endpoints.
+ *
+ * The returned payload is held in the session store for the length of one
+ * escrow transaction and written nowhere — Clio's ToS §10(e) forbids persisting
+ * it, and the backend command that produces it takes no database handle.
+ */
+export async function clioFetchMatter(matterId: number): Promise<ClioMatterPayload> {
+  if (!isTauri()) throw new Error(NO_CLIO_OUTSIDE_TAURI);
+  return invoke<ClioMatterPayload>("clio_fetch_matter", { matterId });
+}
+
+/**
+ * Subscribe to the OAuth callback the loopback listener emits.
+ *
+ * Returns an unsubscribe function. Outside Tauri there is no listener, so this
+ * is a no-op subscription rather than a throw — the Configuration screen mounts
+ * it unconditionally, and a browser preview should render, not crash.
+ */
+export async function onClioOAuthCallback(
+  handler: (payload: { code: string; state: string }) => void,
+): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ code: string; state: string }>("clio:oauth_callback", (event) =>
+    handler(event.payload),
+  );
 }
 
 export async function setPracticePanther(input: PracticePantherConfigInput): Promise<void> {
@@ -1125,7 +1247,6 @@ export async function sendIntegrationWebhook(
  * hard dependency of settlement.
  */
 export async function getIntegrationConfigs(): Promise<{
-  clio?: { webhookUrl: string; matterId?: string; apiKey?: string };
   practicePanther?: { webhookUrl: string; matterId?: string; apiKey?: string };
 }> {
   if (!isTauri()) {
@@ -1136,11 +1257,12 @@ export async function getIntegrationConfigs(): Promise<{
     }
   }
   try {
-    const [clio, pp] = await Promise.all([getClioPublic(), getPracticePantherPublic()]);
+    // Clio is absent by design. Its credential group is now an OAuth app
+    // registration with no webhook URL and no API key, and the Clio Manage
+    // integration is read-only by contract — LexEscrow reads matters from it
+    // and never writes anything back.
+    const pp = await getPracticePantherPublic();
     return {
-      ...(clio.webhookUrl && {
-        clio: { webhookUrl: clio.webhookUrl, ...(clio.matterId && { matterId: clio.matterId }) },
-      }),
       ...(pp.webhookUrl && {
         practicePanther: {
           webhookUrl: pp.webhookUrl,
@@ -1151,6 +1273,81 @@ export async function getIntegrationConfigs(): Promise<{
   } catch {
     return {};
   }
+}
+
+// ── LexTrace debug console ───────────────────────────────────────────────────
+
+/**
+ * Store the debug-console credentials.
+ *
+ * A blank `password` keeps the stored hash, matching every other group — the
+ * operator name can be corrected on its own. The plaintext is hashed backend
+ * side and is never stored, so there is no read counterpart to this write.
+ */
+export async function setDebugConsole(input: DebugConsoleInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_debug_console", { input });
+    return;
+  }
+  await browserVault.setDebugConsole(input);
+}
+
+export async function getDebugConsolePublic(): Promise<DebugConsolePublic> {
+  if (isTauri()) return invoke<DebugConsolePublic>("vault_get_debug_console_public");
+  return browserVault.getDebugConsolePublic();
+}
+
+/**
+ * Is the console set up at all?
+ *
+ * Answers `false` rather than throwing when the vault is locked or the group is
+ * absent, because the caller is the debug icon deciding between opening the
+ * password prompt and showing "requires IT setup" — and both of those are the
+ * same answer.
+ */
+export async function hasDebugConsole(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      return await invoke<boolean>("vault_has_debug_console");
+    } catch {
+      return false;
+    }
+  }
+  return browserVault.hasDebugConsole();
+}
+
+/**
+ * The password gate. One bit out, by design: a wrong password and a locked
+ * vault are indistinguishable to the WebView, which is what they should be.
+ */
+export async function authenticateDebugConsole(password: string): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      return await invoke<boolean>("debug_console_authenticate", { password });
+    } catch {
+      return false;
+    }
+  }
+  return browserVault.verifyDebugConsole(password);
+}
+
+/**
+ * Run the next CRE CLI command and return its output with ANSI codes intact.
+ *
+ * Which command runs is the backend's decision, not this call's — it alternates
+ * between the two read-only invocations on every call, and nothing here can
+ * name a third. An empty string means a run was already in flight and is not an
+ * error; the panel simply has nothing to append.
+ *
+ * Outside Tauri there is no subprocess to run, so this rejects rather than
+ * pretending: a browser preview has no CRE CLI, and a fabricated transcript in
+ * a debug console would be worse than an honest refusal.
+ */
+export async function runCreDebug(sessionId?: string | null): Promise<string> {
+  if (!isTauri()) {
+    throw new Error("The debug console needs the desktop app — there is no CRE CLI in a browser.");
+  }
+  return invoke<string>("run_cre_debug", { sessionId: sessionId ?? null });
 }
 
 export async function vaultChangePassword(current: string, next: string): Promise<void> {

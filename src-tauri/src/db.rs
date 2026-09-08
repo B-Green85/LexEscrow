@@ -201,6 +201,27 @@ pub struct ChainVerification {
     pub broken_at: Option<i64>,
 }
 
+/// One line of CRE CLI output, as recorded by the LexTrace debug console.
+///
+/// Separate from [`AuditEntry`] rather than a variant of it, because the two
+/// are different records with different keys: an audit entry is *about* a
+/// release session and identifies a person acting on it, while a debug entry is
+/// about a machine and identifies the IT operator watching it. `session_id` is
+/// optional here for the same reason — the console is normally opened with no
+/// escrow session in flight at all.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugAuditEntry {
+    pub log_id: i64,
+    pub session_id: Option<String>,
+    pub operator_id: String,
+    pub command: String,
+    pub output_line: String,
+    pub timestamp: String,
+    pub previous_hash: Option<String>,
+    pub entry_hash: String,
+}
+
 // ============================================================================
 // Db
 // ============================================================================
@@ -210,6 +231,11 @@ pub struct Db {
     /// Serializes audit appends so two concurrent writers can never read the
     /// same `previous_hash` and fork the chain.
     append_lock: Mutex<()>,
+    /// The same guarantee for the debug chain. A second lock rather than a
+    /// shared one: the debug console appends on a three-second poll, and making
+    /// it queue behind — or ahead of — a settlement's audit write would let an
+    /// operational tool add latency to the legal record.
+    debug_append_lock: Mutex<()>,
 }
 
 impl Db {
@@ -258,6 +284,7 @@ impl Db {
         Ok(Self {
             pool,
             append_lock: Mutex::new(()),
+            debug_append_lock: Mutex::new(()),
         })
     }
 
@@ -901,6 +928,143 @@ impl Db {
             broken_at: None,
         })
     }
+
+    // ---- debug audit trail (LexTrace) ------------------------------------
+
+    /// Append every line of one CRE CLI run to the debug chain, in order,
+    /// returning the entries written.
+    ///
+    /// Batched rather than one call per line, and deliberately so. The console
+    /// polls every three seconds and a single `cre execution list` can return
+    /// dozens of lines; appending them one at a time would take the chain lock
+    /// dozens of times per poll and interleave two concurrent runs into a
+    /// chain whose order no longer matches what either operator actually saw.
+    /// One lock, one transaction, one contiguous run of entries.
+    ///
+    /// Blank lines are kept. In CLI output they are structure — the gap
+    /// between a table and its summary — and a record that silently drops them
+    /// does not reproduce what was on the operator's screen.
+    pub async fn append_debug_lines(
+        &self,
+        session_id: Option<&str>,
+        operator_id: &str,
+        command: &str,
+        lines: &[String],
+    ) -> Result<Vec<DebugAuditEntry>, DbError> {
+        if lines.is_empty() {
+            return Ok(Vec::new());
+        }
+        let _guard = self.debug_append_lock.lock().await;
+        let timestamp = chrono::Utc::now().to_rfc3339();
+
+        let mut tx = self.pool.begin().await?;
+
+        let mut previous_hash: Option<String> = sqlx::query_scalar(
+            "SELECT entry_hash FROM debug_audit_trail ORDER BY log_id DESC LIMIT 1",
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let mut written = Vec::with_capacity(lines.len());
+        for line in lines {
+            let entry_hash =
+                compute_debug_entry_hash(operator_id, command, line, &timestamp, previous_hash.as_deref());
+
+            // One INSERT with the hash already computed, unlike `append_audit`.
+            // That function has to insert first because its hash covers the
+            // AUTOINCREMENT `log_id`; this chain's does not, so the round trip
+            // to read the id back would buy nothing and cost a statement per
+            // line.
+            let result: SqliteQueryResult = sqlx::query(
+                "INSERT INTO debug_audit_trail
+                    (session_id, operator_id, command, output_line,
+                     timestamp, previous_hash, entry_hash)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(session_id)
+            .bind(operator_id)
+            .bind(command)
+            .bind(line)
+            .bind(&timestamp)
+            .bind(&previous_hash)
+            .bind(&entry_hash)
+            .execute(&mut *tx)
+            .await?;
+
+            written.push(DebugAuditEntry {
+                log_id: result.last_insert_rowid(),
+                session_id: session_id.map(str::to_string),
+                operator_id: operator_id.to_string(),
+                command: command.to_string(),
+                output_line: line.clone(),
+                timestamp: timestamp.clone(),
+                previous_hash: previous_hash.clone(),
+                entry_hash: entry_hash.clone(),
+            });
+            previous_hash = Some(entry_hash);
+        }
+
+        tx.commit().await?;
+        Ok(written)
+    }
+
+    /// The `limit` most recent debug entries, oldest first within the page.
+    ///
+    /// `limit` is clamped for the same reason `get_recent_sessions` clamps
+    /// its own: this table grows by dozens of rows every three seconds a panel
+    /// is open, so an unbounded read is an unbounded read.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn debug_trail(&self, limit: i64) -> Result<Vec<DebugAuditEntry>, DbError> {
+        let limit = limit.clamp(1, 5_000);
+        let mut rows = sqlx::query_as::<_, DebugAuditEntry>(
+            "SELECT log_id, session_id, operator_id, command, output_line,
+                    timestamp, previous_hash, entry_hash
+             FROM debug_audit_trail ORDER BY log_id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.reverse();
+        Ok(rows)
+    }
+
+    /// Verify the debug chain end to end, exactly as [`Self::verify_chain`]
+    /// does for the cryptographic trail.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn verify_debug_chain(&self) -> Result<ChainVerification, DbError> {
+        let rows = sqlx::query_as::<_, DebugAuditEntry>(
+            "SELECT log_id, session_id, operator_id, command, output_line,
+                    timestamp, previous_hash, entry_hash
+             FROM debug_audit_trail ORDER BY log_id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut prev: Option<String> = None;
+        for e in &rows {
+            let linkage_ok = e.previous_hash.as_deref() == prev.as_deref();
+            let recomputed = compute_debug_entry_hash(
+                &e.operator_id,
+                &e.command,
+                &e.output_line,
+                &e.timestamp,
+                e.previous_hash.as_deref(),
+            );
+            if !linkage_ok || recomputed != e.entry_hash {
+                return Ok(ChainVerification {
+                    valid: false,
+                    entries: rows.len() as i64,
+                    broken_at: Some(e.log_id),
+                });
+            }
+            prev = Some(e.entry_hash.clone());
+        }
+        Ok(ChainVerification {
+            valid: true,
+            entries: rows.len() as i64,
+            broken_at: None,
+        })
+    }
 }
 
 /// entry_hash = `sha256:` + hex(SHA-256(log_id ⋮ session_id ⋮ event_type ⋮
@@ -923,6 +1087,40 @@ fn compute_entry_hash(
         user_identity,
         payload_json,
         block_timestamp,
+        previous_hash.unwrap_or(""),
+    ] {
+        hasher.update(field.as_bytes());
+        hasher.update(FIELD_SEP);
+    }
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+/// entry_hash = `sha256:` + hex(SHA-256(operator_id ⋮ command ⋮ output_line ⋮
+/// timestamp ⋮ previous_hash)), where ⋮ is 0x1F and a NULL previous_hash is
+/// hashed as the empty string.
+///
+/// The delimiter, the `sha256:` prefix and the empty-string treatment of a NULL
+/// predecessor are all lifted from [`compute_entry_hash`], so the two chains
+/// verify by the same rules. The field list is not: this one covers exactly the
+/// five content fields and no `log_id`. That is a real difference, and it means
+/// a debug row's hash does not bind its own position — the `previous_hash`
+/// linkage is what orders the chain here. `verify_debug_chain` checks that
+/// linkage on every entry, so a reordered or excised row is still caught; what
+/// is not caught, and is caught in the cryptographic trail, is a row whose
+/// `log_id` alone was rewritten.
+fn compute_debug_entry_hash(
+    operator_id: &str,
+    command: &str,
+    output_line: &str,
+    timestamp: &str,
+    previous_hash: Option<&str>,
+) -> String {
+    let mut hasher = Sha256::new();
+    for field in [
+        operator_id,
+        command,
+        output_line,
+        timestamp,
         previous_hash.unwrap_or(""),
     ] {
         hasher.update(field.as_bytes());
@@ -1538,5 +1736,194 @@ mod tests {
         let v = db.verify_chain().await.unwrap();
         assert!(!v.valid);
         assert_eq!(v.broken_at, Some(target.log_id));
+    }
+
+    // ---- Debug audit trail (LexTrace) ------------------------------------
+
+    fn lines(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn the_debug_table_exists_after_migration_and_starts_empty() {
+        // The migration is the whole delivery here: an install that never opens
+        // the console still has to come up with the table in place.
+        let db = temp_db().await;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM debug_audit_trail")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn debug_lines_chain_in_order() {
+        let db = temp_db().await;
+        let written = db
+            .append_debug_lines(None, "ops-jordan", "cre execution list", &lines(&["one", "two", "three"]))
+            .await
+            .unwrap();
+
+        assert_eq!(written.len(), 3);
+        assert!(written[0].previous_hash.is_none(), "first entry links to nothing");
+        assert_eq!(written[1].previous_hash.as_deref(), Some(written[0].entry_hash.as_str()));
+        assert_eq!(written[2].previous_hash.as_deref(), Some(written[1].entry_hash.as_str()));
+        assert!(db.verify_debug_chain().await.unwrap().valid);
+    }
+
+    #[tokio::test]
+    async fn a_second_run_continues_the_same_chain() {
+        let db = temp_db().await;
+        let first = db
+            .append_debug_lines(None, "ops", "cre execution list", &lines(&["a"]))
+            .await
+            .unwrap();
+        let second = db
+            .append_debug_lines(None, "ops", "cre workflow get", &lines(&["b"]))
+            .await
+            .unwrap();
+
+        assert_eq!(second[0].previous_hash.as_deref(), Some(first[0].entry_hash.as_str()));
+        assert_eq!(second[0].command, "cre workflow get");
+        assert!(db.verify_debug_chain().await.unwrap().valid);
+    }
+
+    #[tokio::test]
+    async fn tampering_with_a_recorded_line_breaks_the_debug_chain() {
+        let db = temp_db().await;
+        let written = db
+            .append_debug_lines(None, "ops", "cre execution list", &lines(&["one", "two", "three"]))
+            .await
+            .unwrap();
+        let target = &written[1];
+
+        sqlx::query("UPDATE debug_audit_trail SET output_line = ? WHERE log_id = ?")
+            .bind("something else entirely")
+            .bind(target.log_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let v = db.verify_debug_chain().await.unwrap();
+        assert!(!v.valid);
+        assert_eq!(v.broken_at, Some(target.log_id));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_recorded_line_breaks_the_debug_chain() {
+        // Excision is the tampering that matters for a log: the linkage check,
+        // not the per-row hash, is what catches it.
+        let db = temp_db().await;
+        let written = db
+            .append_debug_lines(None, "ops", "cre execution list", &lines(&["one", "two", "three"]))
+            .await
+            .unwrap();
+
+        sqlx::query("DELETE FROM debug_audit_trail WHERE log_id = ?")
+            .bind(written[1].log_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        let v = db.verify_debug_chain().await.unwrap();
+        assert!(!v.valid);
+        assert_eq!(v.broken_at, Some(written[2].log_id));
+    }
+
+    #[tokio::test]
+    async fn blank_output_lines_are_recorded_rather_than_skipped() {
+        // Blank lines are structure in CLI output. A record that drops them
+        // does not reproduce what the operator actually saw.
+        let db = temp_db().await;
+        let written = db
+            .append_debug_lines(None, "ops", "cre workflow get", &lines(&["header", "", "footer"]))
+            .await
+            .unwrap();
+        assert_eq!(written.len(), 3);
+        assert_eq!(written[1].output_line, "");
+        assert!(db.verify_debug_chain().await.unwrap().valid);
+    }
+
+    #[tokio::test]
+    async fn an_empty_run_writes_nothing_and_is_not_an_error() {
+        let db = temp_db().await;
+        assert!(db.append_debug_lines(None, "ops", "cre execution list", &[]).await.unwrap().is_empty());
+        assert_eq!(db.verify_debug_chain().await.unwrap().entries, 0);
+    }
+
+    #[tokio::test]
+    async fn the_debug_trail_reads_back_oldest_first_within_its_page() {
+        let db = temp_db().await;
+        db.append_debug_lines(None, "ops", "cre execution list", &lines(&["one", "two", "three"]))
+            .await
+            .unwrap();
+
+        let page = db.debug_trail(2).await.unwrap();
+        assert_eq!(page.len(), 2, "the limit is honoured");
+        assert_eq!(
+            page.iter().map(|e| e.output_line.as_str()).collect::<Vec<_>>(),
+            ["two", "three"],
+            "the two most recent lines, in the order they were printed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_debug_entry_records_its_operator_and_optional_session() {
+        // No foreign key and no required session: the console is normally open
+        // with no escrow in flight, but a run started during one should say so.
+        let db = temp_db().await;
+        db.append_debug_lines(Some("s-99"), "ops-jordan", "cre execution list", &lines(&["x"]))
+            .await
+            .unwrap();
+        let e = &db.debug_trail(10).await.unwrap()[0];
+        assert_eq!(e.operator_id, "ops-jordan");
+        assert_eq!(e.session_id.as_deref(), Some("s-99"));
+    }
+
+    #[tokio::test]
+    async fn the_two_chains_do_not_interfere() {
+        // The reason for a second table rather than more rows in the first: a
+        // debug run must not be able to break the legal record's chain.
+        let db = temp_db().await;
+        db.create_session(&new_session("s-both")).await.unwrap();
+        db.append_audit("s-both", "document_loaded", "clerk", "{}").await.unwrap();
+        db.append_debug_lines(None, "ops", "cre execution list", &lines(&["a", "b"]))
+            .await
+            .unwrap();
+        db.append_audit("s-both", "cre_execution_started", "clerk", "{}").await.unwrap();
+
+        assert!(db.verify_chain().await.unwrap().valid);
+        assert!(db.verify_debug_chain().await.unwrap().valid);
+        assert_eq!(db.verify_chain().await.unwrap().entries, 2);
+        assert_eq!(db.verify_debug_chain().await.unwrap().entries, 2);
+    }
+
+    #[test]
+    fn the_debug_hash_covers_exactly_the_five_content_fields() {
+        // Pinned because it is the one place LexTrace deliberately differs from
+        // the cryptographic trail's construction — no log_id in the digest.
+        let base = compute_debug_entry_hash("ops", "cre execution list", "line", "T", None);
+        assert!(base.starts_with("sha256:"));
+        assert_eq!(base, compute_debug_entry_hash("ops", "cre execution list", "line", "T", None));
+
+        for altered in [
+            compute_debug_entry_hash("other", "cre execution list", "line", "T", None),
+            compute_debug_entry_hash("ops", "cre workflow get", "line", "T", None),
+            compute_debug_entry_hash("ops", "cre execution list", "other", "T", None),
+            compute_debug_entry_hash("ops", "cre execution list", "line", "U", None),
+            compute_debug_entry_hash("ops", "cre execution list", "line", "T", Some("prev")),
+        ] {
+            assert_ne!(base, altered, "a field change must change the hash");
+        }
+    }
+
+    #[test]
+    fn the_field_separator_stops_adjacent_fields_running_together() {
+        // Without the 0x1F delimiter, ("ab","c") and ("a","bc") would hash the
+        // same — the same property the cryptographic trail relies on.
+        assert_ne!(
+            compute_debug_entry_hash("ab", "c", "l", "T", None),
+            compute_debug_entry_hash("a", "bc", "l", "T", None),
+        );
     }
 }

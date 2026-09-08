@@ -11,6 +11,7 @@ export {
   resolveState,
   STATE_ADAPTER_MAP,
   CALBAR_DEFAULT_BASE_URL,
+  BAR_VERIFY_UNAVAILABLE,
   type BarVerifyResult,
   type StateBarAdapter,
 } from "./bar-verify";

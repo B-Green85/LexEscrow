@@ -1,0 +1,12 @@
+{
+  "aiProviderUrl": "https://api.anthropic.com/v1/messages",
+  "aiProviderSecretId": "AI_PROVIDER_KEY",
+  "hmacSecretId": "HMAC_VAULT_KEY",
+  "scoreThreshold": 600,
+  "authorizedKeys": [
+    {
+      "type": "KEY_TYPE_ECDSA_EVM",
+      "publicKey": "0x0b370090317443afFa8124Af45b7C2FeB5a01810"
+    }
+  ]
+}

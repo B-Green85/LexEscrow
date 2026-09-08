@@ -131,18 +131,64 @@ pub struct SealEntry {
     pub key_b64: String,
 }
 
-/// Clio practice-management webhook config (spec §14 V1).
+/// Clio Manage OAuth 2.0 credentials.
 ///
-/// The URL is not a secret, but the API key is a bearer token for a firm's
-/// matter data — so the whole entry gets the same `Zeroize` treatment as the
-/// DocuSign credential rather than being split across a secret and a plain
-/// half. One struct, one lifetime, nothing left in memory after drop.
+/// Replaces the webhook + API-key placeholder this group used to hold. Clio
+/// Manage authenticates with an Authorization Code flow, so what is stored is
+/// an app registration (`app_id`, `client_id`, `client_secret`, `redirect_uri`)
+/// plus the token set that flow produces.
+///
+/// Three of the seven fields are secrets and the whole entry carries `Zeroize`
+/// on that account: `client_secret` mints tokens, `access_token` reads a firm's
+/// matters right now, and `refresh_token` does so indefinitely. None of them
+/// crosses IPC — `ClioPublic` carries presence flags and the addressing fields
+/// the operator typed.
+///
+/// **Every field is `#[serde(default)]` on purpose.** An install upgraded from
+/// the placeholder shape has `{"webhookUrl":…,"apiKey":…}` sitting in its
+/// vault; without the defaults that JSON fails to deserialize and the whole
+/// group reads as a fault rather than as what it is — a stale registration that
+/// simply needs connecting. With them it lands as an empty config, which
+/// `has_credentials` already reports as "not connected".
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(rename_all = "camelCase")]
 pub struct ClioConfig {
-    pub webhook_url: String,
-    pub matter_id: Option<String>,
-    pub api_key: Option<String>,
+    #[serde(default)]
+    pub app_id: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String, // SENSITIVE — mints tokens
+    #[serde(default)]
+    pub redirect_uri: String,
+    #[serde(default)]
+    pub access_token: String, // SENSITIVE
+    #[serde(default)]
+    pub refresh_token: String, // SENSITIVE
+    /// ISO-8601. Empty when no token has been issued.
+    #[serde(default)]
+    pub token_expires_at: String,
+}
+
+/// LexTrace debug-console credentials.
+///
+/// The odd one out among the vault's entries: every other group stores a
+/// credential this app *presents* to something else, and therefore has to be
+/// able to read back in the clear. This one stores a credential this app
+/// *checks*, so it never needs the plaintext and never keeps it. `password_hash`
+/// is a scrypt digest in the format written by [`hash_debug_password`]; the
+/// password itself exists only for the length of the call that hashes or
+/// verifies it.
+///
+/// `operator_id` is plain text by design — it is the IT operator's name in the
+/// debug audit trail, and a record naming "the operator" would defeat the point
+/// of keeping one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugConsoleEntry {
+    #[zeroize(skip)]
+    pub operator_id: String,
+    pub password_hash: String,
 }
 
 /// PracticePanther webhook config — same shape, different vendor (spec §14 V1).
@@ -200,6 +246,8 @@ struct VaultData {
     practice_panther: Option<PracticePantherConfig>,
     #[serde(default)]
     blockchain: Option<BlockchainConfig>,
+    #[serde(default)]
+    debug_console: Option<DebugConsoleEntry>,
 }
 
 // ============================================================================
@@ -265,15 +313,30 @@ pub struct VaultPublic {
     twilio: Option<TwilioPublic>,
 }
 
-/// Secret-free Clio view. The webhook URL and matter ID are shown in full —
-/// they are addressing information the operator typed and needs to confirm —
-/// while the API key is reduced to a presence flag, as everywhere else.
+/// Secret-free Clio view.
+///
+/// The app registration fields cross in full — they are addressing information
+/// the operator typed into the Clio Developer Portal and needs to confirm here,
+/// and `redirect_uri` in particular has to match the Portal exactly, so hiding
+/// it would make the commonest setup failure undiagnosable. The client secret
+/// and both tokens are reduced to flags.
+///
+/// The two booleans answer different questions and the Configuration screen
+/// needs both: `has_credentials` is "this install could start an OAuth flow",
+/// `connected` is "this install currently holds a token set". An app registered
+/// but never authorised is the first true and the second false.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClioPublic {
-    pub webhook_url: String,
-    pub matter_id: String,
-    pub has_api_key: bool,
+    pub app_id: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub has_client_secret: bool,
+    pub has_credentials: bool,
+    pub connected: bool,
+    /// ISO-8601, or empty when no token has been issued. Not a secret — it is
+    /// what the screen counts down from.
+    pub token_expires_at: String,
 }
 
 /// Secret-free PracticePanther view. Same rules as `ClioPublic`.
@@ -306,6 +369,20 @@ pub struct BlockchainPublic {
     pub forwarder_address: String,
     pub rpc_url_hint: String, // host only, e.g. "eth-sepolia.g.alchemy.com"
     pub has_private_key: bool,
+}
+
+/// Secret-free LexTrace view.
+///
+/// `operator_id` crosses in full — it is a name the operator typed, is printed
+/// in the panel header, and is the identity the debug trail records. The
+/// password is reduced to `configured`, which here means "both halves are
+/// present", because a stored operator name with no password is not something
+/// the console can gate on and must not read as set up.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugConsolePublic {
+    pub configured: bool,
+    pub operator_id: String,
 }
 
 // ============================================================================
@@ -379,14 +456,22 @@ impl ClioPublic {
     pub fn build(entry: Option<&ClioConfig>) -> Self {
         match entry {
             Some(e) => ClioPublic {
-                webhook_url: e.webhook_url.clone(),
-                matter_id: e.matter_id.clone().unwrap_or_default(),
-                has_api_key: e.api_key.as_ref().is_some_and(|k| !k.is_empty()),
+                app_id: e.app_id.clone(),
+                client_id: e.client_id.clone(),
+                redirect_uri: e.redirect_uri.clone(),
+                has_client_secret: !e.client_secret.is_empty(),
+                has_credentials: has_clio_credentials(e),
+                connected: is_clio_connected(e),
+                token_expires_at: e.token_expires_at.clone(),
             },
             None => ClioPublic {
-                webhook_url: String::new(),
-                matter_id: String::new(),
-                has_api_key: false,
+                app_id: String::new(),
+                client_id: String::new(),
+                redirect_uri: String::new(),
+                has_client_secret: false,
+                has_credentials: false,
+                connected: false,
+                token_expires_at: String::new(),
             },
         }
     }
@@ -438,6 +523,21 @@ impl BlockchainPublic {
     }
 }
 
+impl DebugConsolePublic {
+    pub fn build(entry: Option<&DebugConsoleEntry>) -> Self {
+        match entry {
+            Some(e) => DebugConsolePublic {
+                configured: has_debug_console(e),
+                operator_id: e.operator_id.clone(),
+            },
+            None => DebugConsolePublic {
+                configured: false,
+                operator_id: String::new(),
+            },
+        }
+    }
+}
+
 /// Could these credentials actually authenticate against DocuSign? Metadata
 /// with no signing key describes an account this install can name but not act
 /// as, so the provider gate has to insist on all three.
@@ -454,6 +554,42 @@ pub fn has_docusign_credentials(e: &DocuSignSecret) -> bool {
 /// now would succeed".
 pub fn can_settle(e: &BlockchainConfig) -> bool {
     has_network_config(e) && !e.deployer_private_key.is_empty()
+}
+
+/// Could this install start a Clio OAuth flow?
+///
+/// All three of the app registration's own fields, for the same reason
+/// `has_docusign_credentials` insists on a PEM: a client ID with no secret
+/// describes an app this install can name but not authenticate as, and the
+/// "Connect Clio" button gating on anything weaker would open a browser tab
+/// that can only fail.
+///
+/// A stale placeholder registration — the old `{webhookUrl, apiKey}` shape —
+/// deserializes to an all-empty config and lands here as `false`, which is what
+/// makes it read as "not connected" rather than as an error.
+pub fn has_clio_credentials(e: &ClioConfig) -> bool {
+    !e.app_id.is_empty() && !e.client_id.is_empty() && !e.client_secret.is_empty()
+}
+
+/// Does this install hold a usable Clio token set?
+///
+/// The refresh token, not the access token, is what this turns on: an access
+/// token expires hourly and being mid-expiry is not being disconnected. A
+/// refresh token is what makes the next call recoverable without sending the
+/// operator back through a browser.
+pub fn is_clio_connected(e: &ClioConfig) -> bool {
+    has_clio_credentials(e) && !e.refresh_token.is_empty()
+}
+
+/// Is the debug console actually set up?
+///
+/// Both halves, for the same reason `has_docusign_credentials` insists on a
+/// PEM: an operator name with no password hash describes who *would* be
+/// recorded, but leaves nothing to authenticate against. The icon's
+/// "Configured / Not configured" indicator and its "requires IT setup" refusal
+/// both key on this, so "configured" has to mean the gate would actually run.
+pub fn has_debug_console(e: &DebugConsoleEntry) -> bool {
+    !e.operator_id.is_empty() && !e.password_hash.is_empty()
 }
 
 // ============================================================================
@@ -505,18 +641,34 @@ pub struct DocuSignInput {
     environment: String,
 }
 
-/// Clio setter payload. `api_key` follows the same edit semantics as every
-/// other secret in this file: omitted or blank keeps whatever is stored, so an
-/// operator can retarget the webhook URL without re-pasting the token.
+/// Clio app-registration payload.
+///
+/// The three app fields only — the token set is never submitted from the
+/// WebView, because it is not something an operator types. Tokens are written
+/// by the OAuth exchange in `clio.rs` and by nothing else.
+///
+/// `client_secret` follows the house rule: omitted or blank keeps whatever is
+/// stored, so an operator can correct a mistyped App ID without re-pasting a
+/// secret from the Developer Portal.
 #[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(rename_all = "camelCase")]
 pub struct ClioConfigInput {
-    webhook_url: String,
+    pub app_id: String,
+    pub client_id: String,
     #[serde(default)]
-    matter_id: Option<String>,
+    pub client_secret: Option<String>,
+    /// Blank falls back to [`CLIO_DEFAULT_REDIRECT_URI`]. The Developer Portal
+    /// requires an exact match, so this is a field rather than a constant only
+    /// so an install behind a fixed proxy port can say so.
     #[serde(default)]
-    api_key: Option<String>,
+    pub redirect_uri: Option<String>,
 }
+
+/// The loopback address the OAuth callback listener binds, and the value the
+/// Clio Developer Portal must have registered. Spelled once, here, because
+/// three places have to agree on it: this default, the listener's bind
+/// address, and the authorization URL's `redirect_uri` parameter.
+pub const CLIO_DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:8080/callback";
 
 /// PracticePanther setter payload — same shape and same edit semantics.
 #[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -547,6 +699,23 @@ pub struct BlockchainInput {
     usdc_address: String,
     forwarder_address: String,
     network_name: String,
+}
+
+/// LexTrace setter payload.
+///
+/// `password` follows the house rule — omitted or blank keeps the stored hash —
+/// so an operator can correct a misspelled name without re-typing the password
+/// and its confirmation. The field is `Zeroize`d on drop because, uniquely in
+/// this file, it arrives as a plaintext password rather than as an opaque
+/// token: it is hashed inside `merge_debug_console` and must not outlive that
+/// call anywhere in memory.
+#[derive(Debug, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugConsoleInput {
+    #[zeroize(skip)]
+    pub operator_id: String,
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 // ============================================================================
@@ -630,27 +799,51 @@ pub fn merge_docusign(existing: Option<&DocuSignSecret>, input: DocuSignInput) -
     }
 }
 
-/// `None` clears the entry outright — a blank webhook URL is how the
-/// Configuration screen deletes an integration without a second command, and it
-/// means a disabled integration does not leave an API key behind.
+/// Merge a Clio app registration, preserving the token set where it still
+/// belongs to the same app.
+///
+/// `None` clears the entry outright — a blank client ID is how the
+/// Configuration screen deletes the registration without a second command, and
+/// it means a removed integration leaves no refresh token behind.
+///
+/// **Changing the client ID drops the tokens.** A token set is issued to one
+/// OAuth client; keeping it across a client change would leave the screen
+/// reporting a live connection whose very next API call fails with a 401 the
+/// operator has no way to interpret. Dropping them shows "not connected", which
+/// is both true and actionable.
 pub fn merge_clio(existing: Option<&ClioConfig>, input: ClioConfigInput) -> Option<ClioConfig> {
-    let url = input.webhook_url.trim();
-    if url.is_empty() {
+    let client_id = input.client_id.trim();
+    if client_id.is_empty() {
         return None;
     }
-    let api_key = input
-        .api_key
+    let same_app = existing.is_some_and(|e| e.client_id == client_id);
+    let client_secret = input
+        .client_secret
         .clone()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| existing.and_then(|e| e.api_key.clone()));
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.map(|e| e.client_secret.clone()))
+        .unwrap_or_default();
+    let redirect_uri = input
+        .redirect_uri
+        .clone()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.map(|e| e.redirect_uri.clone()).filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| CLIO_DEFAULT_REDIRECT_URI.to_string());
+
     Some(ClioConfig {
-        webhook_url: url.to_string(),
-        matter_id: input
-            .matter_id
-            .clone()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        api_key,
+        app_id: input.app_id.trim().to_string(),
+        client_id: client_id.to_string(),
+        client_secret,
+        redirect_uri,
+        access_token: if same_app { existing.map(|e| e.access_token.clone()).unwrap_or_default() } else { String::new() },
+        refresh_token: if same_app { existing.map(|e| e.refresh_token.clone()).unwrap_or_default() } else { String::new() },
+        token_expires_at: if same_app {
+            existing.map(|e| e.token_expires_at.clone()).unwrap_or_default()
+        } else {
+            String::new()
+        },
     })
 }
 
@@ -695,6 +888,30 @@ pub fn merge_blockchain(
         usdc_address: input.usdc_address.trim().to_string(),
         forwarder_address: input.forwarder_address.trim().to_string(),
         network_name: input.network_name.trim().to_string(),
+    }
+}
+
+/// Merge a LexTrace submission, hashing the password if one was supplied.
+///
+/// This is the only merge in this file that *transforms* its secret rather than
+/// storing it. The blank-keeps-existing rule still applies, but here it keeps
+/// the existing **hash** — there is no plaintext to fall back to, which is the
+/// property that makes it safe to say the password is never stored.
+pub fn merge_debug_console(
+    existing: Option<&DebugConsoleEntry>,
+    input: DebugConsoleInput,
+) -> DebugConsoleEntry {
+    let password_hash = input
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(hash_debug_password)
+        .or_else(|| existing.map(|e| e.password_hash.clone()))
+        .unwrap_or_default();
+    DebugConsoleEntry {
+        operator_id: input.operator_id.trim().to_string(),
+        password_hash,
     }
 }
 
@@ -992,6 +1209,36 @@ impl VaultState {
             .is_some_and(can_settle)
     }
 
+    // ---- LexTrace debug console ------------------------------------------
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn set_debug_console(&self, input: DebugConsoleInput) -> Result<(), VaultError> {
+        self.mutate(|data| {
+            data.debug_console = Some(merge_debug_console(data.debug_console.as_ref(), input))
+        })
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn get_debug_console_public(&self) -> Result<DebugConsolePublic, VaultError> {
+        let guard = self.inner.lock().unwrap();
+        let data = &guard.as_ref().ok_or(VaultError::Locked)?.data;
+        Ok(DebugConsolePublic::build(data.debug_console.as_ref()))
+    }
+
+    /// Check a submitted debug password against the stored hash.
+    ///
+    /// Returns `false` for a locked vault or an unconfigured console, not an
+    /// error: both mean the console cannot be opened, and the caller has one
+    /// decision to make. The plaintext never leaves this frame.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn verify_debug_console(&self, password: &str) -> bool {
+        let guard = self.inner.lock().unwrap();
+        let Some(entry) = guard.as_ref().and_then(|s| s.data.debug_console.as_ref()) else {
+            return false;
+        };
+        has_debug_console(entry) && verify_debug_password(&entry.password_hash, password)
+    }
+
     pub fn delete_group(&self, group: &str) -> Result<(), VaultError> {
         self.mutate(|data| match group {
             "ai" => data.ai = None,
@@ -1001,6 +1248,7 @@ impl VaultState {
             "clio" => data.clio = None,
             "practice-panther" => data.practice_panther = None,
             "blockchain" => data.blockchain = None,
+            "debug-console" => data.debug_console = None,
             // "seal" is intentionally absent. It is not a user credential, and
             // dropping it would orphan every AnchorReceipt seal this install
             // has ever issued — a destructive, irreversible act with no UI
@@ -1079,6 +1327,14 @@ impl VaultState {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.blockchain.clone())
     }
 
+    /// Debug-console credentials for `debug_console.rs`. Internal only — it
+    /// carries the password hash, which is not a secret the WebView has any use
+    /// for and is exactly what an offline cracker would want.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn resolve_debug_console(&self) -> Option<DebugConsoleEntry> {
+        self.inner.lock().unwrap().as_ref().and_then(|s| s.data.debug_console.clone())
+    }
+
     /// AnchorReceipt seal key for `artifact_guard.rs` (spec §8).
     ///
     /// `None` when the vault is locked — sealing is an attestation, and a
@@ -1126,6 +1382,7 @@ impl VaultState {
                 .map(serde_json::to_string)
                 .transpose()?,
             "blockchain" => data.blockchain.as_ref().map(serde_json::to_string).transpose()?,
+            "debug-console" => data.debug_console.as_ref().map(serde_json::to_string).transpose()?,
             "hmac-vault-key" => data
                 .seal
                 .as_ref()
@@ -1168,6 +1425,10 @@ impl VaultState {
                 let e: BlockchainConfig = serde_json::from_str(value)?;
                 self.mutate(|d| d.blockchain = Some(e))
             }
+            "debug-console" => {
+                let e: DebugConsoleEntry = serde_json::from_str(value)?;
+                self.mutate(|d| d.debug_console = Some(e))
+            }
             "hmac-vault-key" => {
                 let b64 = value.to_string();
                 self.mutate(|d| d.seal = Some(SealEntry { key_b64: b64 }))
@@ -1189,9 +1450,8 @@ impl VaultState {
             "hmac-vault-key" => Err(VaultError::UnknownKey(
                 "hmac-vault-key is not deletable — it anchors every issued AnchorReceipt".into(),
             )),
-            "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practice-panther" | "blockchain" => {
-                self.delete_group(key)
-            }
+            "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practice-panther" | "blockchain"
+            | "debug-console" => self.delete_group(key),
             other => Err(VaultError::UnknownKey(other.to_string())),
         }
     }
@@ -1260,6 +1520,79 @@ fn derive_key(password: &str, salt: &[u8]) -> Zeroizing<[u8; KEY_BYTES]> {
     let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     scrypt(password.as_bytes(), salt, &params, key.as_mut()).expect("scrypt derivation");
     key
+}
+
+/// Prefix identifying the LexTrace password-hash format:
+/// `scrypt$<logN>$<r>$<p>$<base64 salt>$<base64 digest>`.
+///
+/// Self-describing rather than positional, so a future parameter bump can be
+/// read back and verified against by hashes written today — the cost parameters
+/// travel with the digest instead of being assumed from the constants above.
+const DEBUG_HASH_PREFIX: &str = "scrypt";
+
+/// Hash a debug-console password for storage.
+///
+/// Same KDF and same cost as the vault's own key derivation, over a fresh
+/// random salt. `derive_key` is not reused directly because its output *is* an
+/// encryption key and is typed to be zeroized and never serialized; this is a
+/// verifier that has to be written to disk, so it is deliberately a separate
+/// function producing a deliberately different type.
+pub fn hash_debug_password(password: &str) -> String {
+    let mut salt = [0u8; SALT_BYTES];
+    OsRng.fill_bytes(&mut salt);
+    let digest = scrypt_digest(password, &salt, SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P);
+    format!(
+        "{DEBUG_HASH_PREFIX}${SCRYPT_LOG_N}${SCRYPT_R}${SCRYPT_P}${}${}",
+        B64.encode(salt),
+        B64.encode(digest.as_ref()),
+    )
+}
+
+/// Check a submitted password against a stored hash, in constant time.
+///
+/// A hash that cannot be parsed returns `false` rather than erroring. The
+/// caller is a login gate, and the only two answers it can act on are "let them
+/// in" and "do not" — a corrupt hash is emphatically the second, and reporting
+/// it as a distinct failure would tell an attacker which installs have a
+/// malformed record to attack.
+pub fn verify_debug_password(stored: &str, candidate: &str) -> bool {
+    let mut parts = stored.split('$');
+    if parts.next() != Some(DEBUG_HASH_PREFIX) {
+        return false;
+    }
+    let (Some(log_n), Some(r), Some(p), Some(salt_b64), Some(hash_b64), None) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) else {
+        return false;
+    };
+    let (Ok(log_n), Ok(r), Ok(p)) = (log_n.parse::<u8>(), r.parse::<u32>(), p.parse::<u32>()) else {
+        return false;
+    };
+    let (Ok(salt), Ok(expected)) = (B64.decode(salt_b64), B64.decode(hash_b64)) else {
+        return false;
+    };
+    if expected.len() != KEY_BYTES {
+        return false;
+    }
+    // Params are validated before use: `log_n >= 64` would panic inside scrypt,
+    // and a stored hash is not a trusted input once the vault file is on disk.
+    if Params::new(log_n, r, p, KEY_BYTES).is_err() {
+        return false;
+    }
+    let actual = scrypt_digest(candidate, &salt, log_n, r, p);
+    ct_eq(actual.as_ref(), &expected)
+}
+
+fn scrypt_digest(password: &str, salt: &[u8], log_n: u8, r: u32, p: u32) -> Zeroizing<[u8; KEY_BYTES]> {
+    let params = Params::new(log_n, r, p, KEY_BYTES).expect("scrypt params validated by caller");
+    let mut out = Zeroizing::new([0u8; KEY_BYTES]);
+    scrypt(password.as_bytes(), salt, &params, out.as_mut()).expect("scrypt derivation");
+    out
 }
 
 fn encrypt(data: &VaultData, key: &[u8; KEY_BYTES], salt: &[u8; SALT_BYTES]) -> Result<VaultEnvelope, VaultError> {
@@ -1614,55 +1947,171 @@ mod tests {
 
     // ---- Practice-management webhooks (spec §14 V1) ----------------------
 
-    fn clio_input(url: &str, key: Option<&str>) -> ClioConfigInput {
+    fn clio_input(client_id: &str, secret: Option<&str>) -> ClioConfigInput {
         ClioConfigInput {
-            webhook_url: url.into(),
-            matter_id: Some("MATTER-0042".into()),
-            api_key: key.map(Into::into),
+            app_id: "app-1234".into(),
+            client_id: client_id.into(),
+            client_secret: secret.map(Into::into),
+            redirect_uri: None,
         }
     }
 
+    /// A connected install: registration saved, then a token set written the
+    /// way `clio.rs` writes one.
+    fn connected_clio(v: &VaultState) {
+        v.set_clio(clio_input("client-abc", Some("secret-xyz"))).unwrap();
+        v.mutate(|d| {
+            let c = d.clio.as_mut().unwrap();
+            c.access_token = "at-live".into();
+            c.refresh_token = "rt-live".into();
+            c.token_expires_at = "2026-09-05T13:00:00Z".into();
+        })
+        .unwrap();
+    }
+
     #[test]
-    fn clio_roundtrip_hides_the_api_key() {
+    fn clio_roundtrip_hides_the_secret_and_both_tokens() {
         let v = temp_state();
         v.unlock("pw");
+        connected_clio(&v);
 
-        v.set_clio(clio_input("https://example.test/hooks/lexescrow", Some("clio-token")))
-            .unwrap();
-
-        // The public shape carries addressing information but not the token.
+        // The public shape carries the app registration — which the operator
+        // typed and has to confirm against the Developer Portal — and nothing
+        // that could authenticate as them.
         let p = v.get_clio_public().unwrap();
-        assert_eq!(p.webhook_url, "https://example.test/hooks/lexescrow");
-        assert_eq!(p.matter_id, "MATTER-0042");
-        assert!(p.has_api_key);
+        assert_eq!(p.app_id, "app-1234");
+        assert_eq!(p.client_id, "client-abc");
+        assert_eq!(p.redirect_uri, CLIO_DEFAULT_REDIRECT_URI);
+        assert!(p.has_client_secret && p.has_credentials && p.connected);
+        assert_eq!(p.token_expires_at, "2026-09-05T13:00:00Z");
+
         let json = serde_json::to_string(&p).unwrap();
-        assert!(!json.contains("clio-token"));
+        for secret in ["secret-xyz", "at-live", "rt-live"] {
+            assert!(!json.contains(secret), "{secret} crossed IPC");
+        }
 
-        // The internal resolver still has it, for the backend-side POST.
-        assert_eq!(v.resolve_clio().unwrap().api_key.as_deref(), Some("clio-token"));
-    }
-
-    #[test]
-    fn clio_blank_key_on_edit_keeps_existing() {
-        let v = temp_state();
-        v.unlock("pw");
-        v.set_clio(clio_input("https://example.test/a", Some("original"))).unwrap();
-        // Retarget the URL without re-pasting the token.
-        v.set_clio(clio_input("https://example.test/b", None)).unwrap();
+        // The internal resolver still has them, for the backend-side calls.
         let c = v.resolve_clio().unwrap();
-        assert_eq!(c.api_key.as_deref(), Some("original"));
-        assert_eq!(c.webhook_url, "https://example.test/b");
+        assert_eq!(c.client_secret, "secret-xyz");
+        assert_eq!(c.refresh_token, "rt-live");
     }
 
     #[test]
-    fn clio_blank_url_clears_the_entry() {
-        // Disabling the integration must not leave the API key behind.
+    fn clio_blank_secret_on_edit_keeps_existing() {
         let v = temp_state();
         v.unlock("pw");
-        v.set_clio(clio_input("https://example.test/a", Some("secret"))).unwrap();
+        v.set_clio(clio_input("client-abc", Some("original"))).unwrap();
+        // Correct the App ID without re-pasting the secret from the Portal.
+        v.set_clio(ClioConfigInput {
+            app_id: "app-corrected".into(),
+            client_id: "client-abc".into(),
+            client_secret: None,
+            redirect_uri: None,
+        })
+        .unwrap();
+
+        let c = v.resolve_clio().unwrap();
+        assert_eq!(c.client_secret, "original");
+        assert_eq!(c.app_id, "app-corrected");
+    }
+
+    #[test]
+    fn re_saving_the_same_app_keeps_the_token_set() {
+        // Editing a registration is not disconnecting. An operator fixing a
+        // typo in the App ID must not have to walk the browser flow again.
+        let v = temp_state();
+        v.unlock("pw");
+        connected_clio(&v);
+        v.set_clio(clio_input("client-abc", None)).unwrap();
+
+        let c = v.resolve_clio().unwrap();
+        assert_eq!(c.refresh_token, "rt-live");
+        assert!(v.get_clio_public().unwrap().connected);
+    }
+
+    #[test]
+    fn changing_the_client_id_drops_the_token_set() {
+        // A token set belongs to one OAuth client. Keeping it across a client
+        // change would show a live connection whose next call 401s, which is a
+        // failure the operator has no way to interpret.
+        let v = temp_state();
+        v.unlock("pw");
+        connected_clio(&v);
+        v.set_clio(clio_input("a-different-client", Some("secret-2"))).unwrap();
+
+        let c = v.resolve_clio().unwrap();
+        assert!(c.access_token.is_empty());
+        assert!(c.refresh_token.is_empty());
+        assert!(c.token_expires_at.is_empty());
+        let p = v.get_clio_public().unwrap();
+        assert!(p.has_credentials, "the new registration is still usable");
+        assert!(!p.connected, "…but it is not connected");
+    }
+
+    #[test]
+    fn clio_blank_client_id_clears_the_entry() {
+        // Removing the integration must not leave a refresh token behind — it
+        // is the credential that reads a firm's matters indefinitely.
+        let v = temp_state();
+        v.unlock("pw");
+        connected_clio(&v);
         v.set_clio(clio_input("   ", None)).unwrap();
+
         assert!(v.resolve_clio().is_none());
-        assert!(!v.get_clio_public().unwrap().has_api_key);
+        let p = v.get_clio_public().unwrap();
+        assert!(!p.connected && !p.has_credentials && !p.has_client_secret);
+    }
+
+    #[test]
+    fn the_redirect_uri_defaults_and_is_overridable() {
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_clio(clio_input("client-abc", Some("s"))).unwrap();
+        assert_eq!(v.resolve_clio().unwrap().redirect_uri, CLIO_DEFAULT_REDIRECT_URI);
+
+        v.set_clio(ClioConfigInput {
+            app_id: "app-1234".into(),
+            client_id: "client-abc".into(),
+            client_secret: None,
+            redirect_uri: Some("http://127.0.0.1:9999/callback".into()),
+        })
+        .unwrap();
+        assert_eq!(v.resolve_clio().unwrap().redirect_uri, "http://127.0.0.1:9999/callback");
+    }
+
+    #[test]
+    fn registration_without_a_secret_is_not_yet_connectable() {
+        // "Connect Clio" gating on anything weaker would open a browser tab
+        // that can only fail at the consent screen.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_clio(clio_input("client-abc", None)).unwrap();
+
+        let p = v.get_clio_public().unwrap();
+        assert!(!p.has_client_secret);
+        assert!(!p.has_credentials);
+        assert!(!p.connected);
+    }
+
+    #[test]
+    fn a_stale_placeholder_registration_reads_as_not_connected() {
+        // The shape this group used to hold. An install upgraded from it has
+        // `{"webhookUrl":…,"apiKey":…}` sitting in its vault, and the required
+        // behaviour is "prompt them to connect" — not an error, and not a crash.
+        let stale = r#"{"webhookUrl":"https://example.test/hooks","matterId":"M-1","apiKey":"old-token"}"#;
+        let parsed: ClioConfig = serde_json::from_str(stale).expect("the old shape must still parse");
+
+        assert!(!has_clio_credentials(&parsed));
+        assert!(!is_clio_connected(&parsed));
+        let p = ClioPublic::build(Some(&parsed));
+        assert!(!p.connected && !p.has_credentials);
+        assert_eq!(p.client_id, "");
+
+        // And it round-trips through the vault's own group seam the same way.
+        let v = temp_state();
+        v.unlock("pw");
+        v.set_group_json("clio", stale).unwrap();
+        assert!(!v.get_clio_public().unwrap().connected);
     }
 
     #[test]
@@ -1867,5 +2316,193 @@ mod tests {
         assert!(!v.unlock("old").ok);
         assert!(v.unlock("new").ok);
         assert_eq!(v.resolve_twilio().unwrap().auth_token, "tok");
+    }
+
+    // ---- LexTrace debug console -------------------------------------------
+
+    fn debug_input(operator: &str, password: Option<&str>) -> DebugConsoleInput {
+        DebugConsoleInput {
+            operator_id: operator.to_string(),
+            password: password.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn the_debug_password_is_never_stored_in_the_clear() {
+        // The single property this group exists to guarantee. Asserted against
+        // the raw ciphertext too, so an accidental plaintext copy anywhere in
+        // `VaultData` fails here rather than in a review.
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops-jordan", Some("s3cr3t-console"))).unwrap();
+
+        let entry = v.resolve_debug_console().unwrap();
+        assert!(!entry.password_hash.contains("s3cr3t-console"));
+        assert!(entry.password_hash.starts_with("scrypt$"));
+
+        let on_disk = std::fs::read_to_string(&v.path).unwrap();
+        assert!(!on_disk.contains("s3cr3t-console"), "password reached the vault file");
+    }
+
+    #[test]
+    fn the_debug_password_verifies_and_a_wrong_one_does_not() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops", Some("correct-horse"))).unwrap();
+
+        assert!(v.verify_debug_console("correct-horse"));
+        assert!(!v.verify_debug_console("Correct-Horse"));
+        assert!(!v.verify_debug_console(""));
+        assert!(!v.verify_debug_console("correct-horse "));
+    }
+
+    #[test]
+    fn a_locked_vault_verifies_nothing() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops", Some("pw"))).unwrap();
+        v.lock();
+        assert!(!v.verify_debug_console("pw"), "a locked vault let a password through");
+    }
+
+    #[test]
+    fn the_same_password_hashes_differently_every_time() {
+        // A per-hash random salt, so two installs — or one install re-enrolling
+        // — never share a digest an attacker could precompute against.
+        let a = hash_debug_password("same");
+        let b = hash_debug_password("same");
+        assert_ne!(a, b);
+        assert!(verify_debug_password(&a, "same"));
+        assert!(verify_debug_password(&b, "same"));
+    }
+
+    #[test]
+    fn a_malformed_stored_hash_is_a_refusal_not_a_panic() {
+        // Stored hashes stop being trusted input the moment the file is on
+        // disk; every one of these would otherwise reach `Params::new` or a
+        // slice index.
+        for stored in [
+            "",
+            "not-a-hash",
+            "bcrypt$15$8$1$AAAA$BBBB",
+            "scrypt$15$8$1$AAAA",                    // too few fields
+            "scrypt$15$8$1$AAAA$BBBB$CCCC",          // too many
+            "scrypt$x$8$1$AAAA$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=", // unparseable cost
+            "scrypt$64$8$1$AAAA$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=", // log_n out of range
+            "scrypt$0$8$1$AAAA$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=", // log_n zero
+            "scrypt$15$0$1$AAAA$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=", // r zero
+            "scrypt$15$8$0$AAAA$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=", // p zero
+            "scrypt$15$8$1$!!!!$BBBB",               // salt is not base64
+            "scrypt$15$8$1$AAAA$QUJD",               // digest is the wrong length
+        ] {
+            assert!(!verify_debug_password(stored, "anything"), "accepted {stored:?}");
+        }
+    }
+
+    #[test]
+    fn a_blank_password_on_edit_keeps_the_stored_hash() {
+        // The house rule, so an operator can fix a misspelled name without
+        // retyping the password and its confirmation.
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops-jordn", Some("keep-me"))).unwrap();
+        let original = v.resolve_debug_console().unwrap().password_hash.clone();
+
+        v.set_debug_console(debug_input("ops-jordan", None)).unwrap();
+        let after = v.resolve_debug_console().unwrap();
+        assert_eq!(after.operator_id, "ops-jordan", "the name was corrected");
+        assert_eq!(after.password_hash, original, "the password was not disturbed");
+        assert!(v.verify_debug_console("keep-me"));
+
+        // Whitespace is blank too.
+        v.set_debug_console(debug_input("ops-jordan", Some("   "))).unwrap();
+        assert_eq!(v.resolve_debug_console().unwrap().password_hash, original);
+    }
+
+    #[test]
+    fn a_new_password_replaces_the_old_one() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops", Some("first"))).unwrap();
+        v.set_debug_console(debug_input("ops", Some("second"))).unwrap();
+
+        assert!(v.verify_debug_console("second"));
+        assert!(!v.verify_debug_console("first"));
+    }
+
+    #[test]
+    fn configured_means_both_halves_are_present() {
+        assert!(has_debug_console(&DebugConsoleEntry {
+            operator_id: "ops".into(),
+            password_hash: "scrypt$…".into(),
+        }));
+        assert!(!has_debug_console(&DebugConsoleEntry {
+            operator_id: String::new(),
+            password_hash: "scrypt$…".into(),
+        }));
+        assert!(!has_debug_console(&DebugConsoleEntry {
+            operator_id: "ops".into(),
+            password_hash: String::new(),
+        }));
+    }
+
+    #[test]
+    fn the_public_shape_carries_the_operator_name_and_no_hash() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops-jordan", Some("pw"))).unwrap();
+
+        let pubv = v.get_debug_console_public().unwrap();
+        assert!(pubv.configured);
+        assert_eq!(pubv.operator_id, "ops-jordan");
+
+        // The hash is what an offline cracker wants; it must not be reachable
+        // through anything that crosses IPC.
+        let json = serde_json::to_string(&pubv).unwrap();
+        assert!(!json.contains("scrypt"));
+        assert!(!json.contains("passwordHash"));
+    }
+
+    #[test]
+    fn an_unconfigured_console_reports_itself_as_such() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        let pubv = v.get_debug_console_public().unwrap();
+        assert!(!pubv.configured);
+        assert_eq!(pubv.operator_id, "");
+        assert!(!v.verify_debug_console(""));
+    }
+
+    #[test]
+    fn debug_credentials_survive_lock_and_unlock() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops", Some("pw"))).unwrap();
+        v.lock();
+        v.unlock("vault-pw");
+        assert!(v.verify_debug_console("pw"));
+        assert_eq!(v.get_debug_console_public().unwrap().operator_id, "ops");
+    }
+
+    #[test]
+    fn the_debug_group_is_deletable_unlike_the_seal() {
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops", Some("pw"))).unwrap();
+        v.delete_group("debug-console").unwrap();
+        assert!(v.resolve_debug_console().is_none());
+        assert!(!v.get_debug_console_public().unwrap().configured);
+    }
+
+    #[test]
+    fn debug_credentials_never_appear_in_the_general_public_shape() {
+        // The same containment every other out-of-band group gets: VaultPublic
+        // is AI + SMTP + Twilio and nothing else.
+        let v = temp_state();
+        v.unlock("vault-pw");
+        v.set_debug_console(debug_input("ops-jordan", Some("pw"))).unwrap();
+        let json = serde_json::to_string(&v.get_public().unwrap()).unwrap();
+        assert!(!json.contains("ops-jordan"));
+        assert!(!json.contains("debug"));
     }
 }

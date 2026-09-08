@@ -14,6 +14,7 @@ import {
   resolveState,
   STATE_ADAPTER_MAP,
   CALBAR_DEFAULT_BASE_URL,
+  BAR_VERIFY_UNAVAILABLE,
   type BarVerifyResult,
 } from "./bar-verify";
 
@@ -51,7 +52,9 @@ function expectResultShape(r: BarVerifyResult): void {
   expect(typeof r.barNumber).toBe("string");
   expect(typeof r.state).toBe("string");
   expect(typeof r.detail).toBe("string");
-  expect(["active", "inactive", "suspended", "not_found", "error"]).toContain(r.status);
+  expect(["active", "inactive", "suspended", "not_found", "error", "unavailable"]).toContain(
+    r.status,
+  );
   for (const key of ["attorneyName", "admissionDate", "firmName"] as const) {
     if (r[key] !== undefined) expect(typeof r[key]).toBe("string");
   }
@@ -119,7 +122,10 @@ describe("verifyBar — California", () => {
     expect(mockFetch).toHaveBeenCalledWith("http://localhost:3001/verify/234567");
   });
 
-  it("reports an error with the message when the adapter is unreachable", async () => {
+  it("reports unavailable, not error, when the adapter is unreachable", async () => {
+    // The registry was never reached, so there is no verdict about the
+    // attorney to report — only a network fact. The distinction is what lets
+    // the pipeline continue instead of failing the session.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -128,17 +134,36 @@ describe("verifyBar — California", () => {
     );
     const result = await verifyBar("234567", "CA", BASE);
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("unavailable");
+    expect(result.detail).toContain(BAR_VERIFY_UNAVAILABLE);
+    // The transport's own reason survives — an officer chasing this needs to
+    // know it was a refused connection and not a 500.
     expect(result.detail).toContain("ECONNREFUSED");
     expectResultShape(result);
   });
 
+  it("never reports active for an unreachable adapter", async () => {
+    // The safety property is untouched by the new status: unreachable is a
+    // reason to review by hand, never a reason to open the gate.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }),
+    );
+    expect((await verifyBar("234567", "CA", BASE)).status).not.toBe("active");
+  });
+
   it("reports an error on a non-OK HTTP response", async () => {
+    // A 503 is the far end *answering* and refusing. Something is wrong at the
+    // registry rather than on the wire, so this stays a hard error and still
+    // halts the session.
     stubFetch({}, false, 503);
     const result = await verifyBar("234567", "CA", BASE);
 
     expect(result.status).toBe("error");
     expect(result.detail).toContain("503");
+    expect(result.detail).not.toContain(BAR_VERIFY_UNAVAILABLE);
   });
 
   it("treats an unrecognized registry status as an error, never as active", async () => {

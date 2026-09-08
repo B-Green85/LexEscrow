@@ -4,14 +4,18 @@
 //! IPC commands. Managed state:
 //!   * `ArtifactGuardState` — session-scoped SHA-256 registry (Phase 2).
 //!   * `Db`                  — SQLite pool + hash-chained audit trail (Phase 3).
+//!   * `DebugConsoleState`   — LexTrace command alternation + run guard.
 
 mod adapters;
 mod ai;
 mod artifact_guard;
 mod blockchain_write_auth;
+mod clio;
 mod cre;
+mod cre_trigger;
 mod credential_store;
 mod db;
+mod debug_console;
 mod docusign;
 mod esign_callback;
 mod extractor;
@@ -60,6 +64,16 @@ pub fn run() {
             // Bound to 127.0.0.1 only — the sole client is a WebView on this
             // machine following a redirect (see esign_callback.rs).
             app.manage(esign_callback::spawn(app.handle().clone()));
+
+            // Clio Manage OAuth. Holds only the pending authorization's CSRF
+            // nonce and the handle that closes its loopback listener — the
+            // tokens live in the credential store like every other secret.
+            app.manage(clio::ClioState::new());
+
+            // LexTrace. Holds only which of the two CRE commands runs next and
+            // a one-run-at-a-time guard — everything the console can actually
+            // reach lives in the Db and credential-store states above.
+            app.manage(debug_console::DebugConsoleState::new());
 
             // Native application menu. The two custom File items emit events
             // the WebView turns into session-store actions (see menu.rs).
@@ -133,12 +147,27 @@ pub fn run() {
             credential_store::change_blockchain_write_auth,
             credential_store::vault_get_blockchain_public,
             credential_store::vault_has_blockchain,
+            // LexTrace debug console (read-only CRE observation)
+            credential_store::vault_set_debug_console,
+            credential_store::vault_get_debug_console_public,
+            credential_store::vault_has_debug_console,
+            credential_store::debug_console_authenticate,
+            debug_console::run_cre_debug,
             cre::get_cre_config,
             cre::execute_direct_settle,
             cre::get_usdc_price,
+            cre_trigger::trigger_cre_workflow,
             // Practice-management integrations (Clio / PracticePanther)
             credential_store::vault_set_clio,
             credential_store::vault_get_clio_public,
+            // Clio Manage — read-only matter intake over OAuth 2.0
+            clio::clio_get_auth_url,
+            clio::clio_exchange_code,
+            clio::clio_refresh_token,
+            clio::clio_check_connection,
+            clio::clio_disconnect,
+            clio::clio_fetch_matter,
+            clio::clio_search_matters,
             credential_store::vault_set_practice_panther,
             credential_store::vault_get_practice_panther_public,
             integrations::integration_send_webhook,

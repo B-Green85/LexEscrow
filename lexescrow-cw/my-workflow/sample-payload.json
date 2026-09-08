@@ -1,0 +1,11 @@
+{
+  "session_id": "sess-0001",
+  "asset_class": "legal",
+  "total_held_cents": 1250000,
+  "release_path": "DirectSettlement",
+  "document_text": "RETAINER AGREEMENT. Ridgeline LLP (Bar CA-284417) holds $12,500.00 in trust for Dana Okonkwo. Earned fees to date: $4,000.00. Unearned balance: $8,500.00. No amounts are in dispute. The unearned balance returns to the client on termination.",
+  "trust_anchors": {
+    "parties": ["Ridgeline LLP", "Dana Okonkwo"],
+    "identifiers": ["CA-284417"]
+  }
+}

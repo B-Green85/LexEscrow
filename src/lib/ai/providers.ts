@@ -23,11 +23,25 @@ import { parseRetainerDocument } from "../aiParse";
 import * as backend from "../backend";
 import { type AssetClass } from "../assetClasses";
 import { systemPromptFor } from "./assetSchemas";
+import { clioSystemPrompt, type IntakeSource } from "../clio";
 import { type ExtractionSchema, type RetainerSchema } from "./schema";
 
 export interface AIParserProvider {
   readonly label: string;
-  parse(documentText: string, schema: RetainerSchema): Promise<ParsedRetainerPayload>;
+  /**
+   * Extract the payload from one input.
+   *
+   * `intake` says what `documentText` *is*, and nothing more: `"artifact"` (the
+   * default) means normalized document text, `"clio"` means the JSON record
+   * pulled from Clio Manage. It selects a system prompt and changes nothing
+   * else — the fields returned, the validation applied to them and the LexGuard
+   * pipeline downstream are identical on both paths.
+   */
+  parse(
+    documentText: string,
+    schema: RetainerSchema,
+    intake?: IntakeSource,
+  ): Promise<ParsedRetainerPayload>;
   /** Nudge: re-extract a single numeric field toward the observed sentinel.
    *  Returns the corrected value (dollars), or null if it could not correct. */
   correct(field: string, currentValue: number, sentinelValue: number): Promise<number | null>;
@@ -177,18 +191,27 @@ export async function parseWithTransport(
   transport: Transport,
   documentText: string,
   assetClass: AssetClass,
+  intake: IntakeSource = "artifact",
 ): Promise<ParsedRetainerPayload> {
-  // Guard: an empty document means the extractor produced nothing (unsupported
-  // format, failed OCR, a blank file). Sending an empty user message just makes
-  // the model invent zeros, so fail here — before the request — with a message
-  // that points at the real cause rather than a downstream validation error.
+  // Guard: an empty input means the extractor produced nothing (unsupported
+  // format, failed OCR, a blank file) or the Clio fetch returned nothing.
+  // Sending an empty user message just makes the model invent zeros, so fail
+  // here — before the request — with a message that points at the real cause
+  // rather than a downstream validation error.
   if (documentText.trim().length === 0) {
     throw new Error(
-      "No text was extracted from the document, so there is nothing for the AI to parse. Execution was not started.",
+      intake === "clio"
+        ? "The Clio matter carried no data for the AI to parse. Execution was not started."
+        : "No text was extracted from the document, so there is nothing for the AI to parse. Execution was not started.",
     );
   }
 
-  const systemPrompt = systemPromptFor(assetClass);
+  // The only thing the intake source changes. The Clio prompt is composed *on
+  // top of* the asset class's own, so the output contract — which fields, in
+  // what shape, in integer cents — is one definition rather than two that can
+  // drift apart.
+  const base = systemPromptFor(assetClass);
+  const systemPrompt = intake === "clio" ? clioSystemPrompt(base) : base;
   // The document text IS the user message (transport → messages: [{ role: 'user',
   // content: documentText }] in ai.rs / the browser fetch). Without it the model
   // has nothing to read, which is the guard above.
@@ -228,7 +251,11 @@ export class HTTPProvider implements AIParserProvider {
   constructor(providerName: string) {
     this.label = `${providerName} (HTTP)`;
   }
-  parse(documentText: string, schema: RetainerSchema): Promise<ParsedRetainerPayload> {
+  parse(
+    documentText: string,
+    schema: RetainerSchema,
+    intake: IntakeSource = "artifact",
+  ): Promise<ParsedRetainerPayload> {
     // Path-identification log (Issue #4) — marks that the request originates in
     // the TypeScript provider layer. Paired with the eprintln! in ai.rs, the
     // next test run shows whether the actual HTTP executed in Rust (this line
@@ -237,7 +264,7 @@ export class HTTPProvider implements AIParserProvider {
     console.log(
       "[ai] HTTP request initiated from TypeScript provider layer (providers.ts -> backend.aiRequestHttp)",
     );
-    return parseWithTransport(backend.aiRequestHttp, documentText, assetClassOf(schema));
+    return parseWithTransport(backend.aiRequestHttp, documentText, assetClassOf(schema), intake);
   }
   correct(field: string, current: number, sentinel: number): Promise<number | null> {
     return correctWithTransport(backend.aiRequestHttp, field, current, sentinel);
@@ -250,8 +277,12 @@ export class WebSocketProvider implements AIParserProvider {
   constructor(providerName: string) {
     this.label = `${providerName} (WebSocket)`;
   }
-  parse(documentText: string, schema: RetainerSchema): Promise<ParsedRetainerPayload> {
-    return parseWithTransport(backend.aiRequestWs, documentText, assetClassOf(schema));
+  parse(
+    documentText: string,
+    schema: RetainerSchema,
+    intake: IntakeSource = "artifact",
+  ): Promise<ParsedRetainerPayload> {
+    return parseWithTransport(backend.aiRequestWs, documentText, assetClassOf(schema), intake);
   }
   correct(field: string, current: number, sentinel: number): Promise<number | null> {
     return correctWithTransport(backend.aiRequestWs, field, current, sentinel);

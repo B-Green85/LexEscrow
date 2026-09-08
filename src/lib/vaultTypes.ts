@@ -71,17 +71,32 @@ export interface VaultPublic {
 }
 
 /**
- * Practice-management webhook public views (spec §14 V1).
+ * Clio Manage OAuth registration — public view.
  *
- * The webhook URL and matter ID are shown in full — they are addressing
- * information the operator typed and needs to confirm — while the API key is a
- * bearer token for a firm's matter data and is reduced to a presence flag, as
- * every other secret in the vault is.
+ * The app registration fields cross in full: the operator typed them into the
+ * Clio Developer Portal and needs to confirm them here, and `redirectUri` in
+ * particular has to match the Portal exactly, so hiding it would make the
+ * commonest setup failure undiagnosable. The client secret and both tokens are
+ * reduced to flags.
+ *
+ * `hasCredentials` and `connected` answer different questions and the
+ * Configuration screen needs both: the first is "this install could start an
+ * OAuth flow", the second is "this install holds a token set". An app registered
+ * but never authorised is the first true and the second false.
+ *
+ * An install still holding the pre-OAuth placeholder shape reads as all-empty
+ * and both-false — the required "prompt them to connect" state, reached without
+ * an error path.
  */
 export interface ClioPublic {
-  webhookUrl: string;
-  matterId: string;
-  hasApiKey: boolean;
+  appId: string;
+  clientId: string;
+  redirectUri: string;
+  hasClientSecret: boolean;
+  hasCredentials: boolean;
+  connected: boolean;
+  /** ISO-8601, or empty when no token has been issued. */
+  tokenExpiresAt: string;
 }
 
 export interface PracticePantherPublic {
@@ -90,12 +105,25 @@ export interface PracticePantherPublic {
   hasApiKey: boolean;
 }
 
-/** Setter payload — a blank `apiKey` keeps the stored one, as elsewhere. A
- *  blank `webhookUrl` clears the entry, which is how the UI disables it. */
+/**
+ * Clio app-registration payload.
+ *
+ * The three app fields only — tokens are written by the OAuth exchange in the
+ * backend and never submitted from here. A blank `clientSecret` keeps the
+ * stored one; a blank `clientId` clears the whole registration.
+ */
 export interface ClioConfigInput {
-  webhookUrl: string;
-  matterId?: string;
-  apiKey?: string;
+  appId: string;
+  clientId: string;
+  clientSecret?: string;
+  redirectUri?: string;
+}
+
+/** What `clio_check_connection` reports after validating the token upstream. */
+export interface ClioConnectionStatus {
+  connected: boolean;
+  expiresAt: string | null;
+  firmName: string | null;
 }
 
 export interface PracticePantherConfigInput {
@@ -253,14 +281,38 @@ export interface MigrateResult {
   newBackend: StoreBackend;
 }
 
+/**
+ * LexTrace debug-console credentials — public view.
+ *
+ * The odd group out: every other entry stores a credential the app presents to
+ * a third party, so its metadata is echoed back for editing. This one stores a
+ * verifier, so there is nothing to echo — `configured` is the whole of what the
+ * password contributes to this shape.
+ *
+ * `operatorId` crosses in full because it is not a secret at all: it is the
+ * name printed in the panel header and written against every line in
+ * `debug_audit_trail`.
+ */
+export interface DebugConsolePublic {
+  configured: boolean;
+  operatorId: string;
+}
+
+/** Setter payload — a blank `password` keeps the stored hash, as elsewhere. */
+export interface DebugConsoleInput {
+  operatorId: string;
+  password?: string;
+}
+
 /** Human-readable name per credential key, for migration results. */
 export const CREDENTIAL_LABEL: Record<string, string> = {
   ai: "AI provider",
   smtp: "SMTP",
   twilio: "Twilio",
   docusign: "DocuSign",
-  clio: "Clio",
+  clio: "Clio Manage",
   "practice-panther": "PracticePanther",
   blockchain: "Settlement",
+  "debug-console": "LexTrace debug console",
   "hmac-vault-key": "AnchorReceipt seal key",
 };

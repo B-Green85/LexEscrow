@@ -28,6 +28,7 @@ vi.mock("../lib/backend", () => ({
   getArbitration: vi.fn(),
   sendClientNotification: vi.fn(),
   executeDirectSettle: vi.fn(),
+  triggerCreWorkflow: vi.fn(),
 }));
 
 const mocked = vi.mocked(backend);
@@ -62,6 +63,11 @@ function installFakes() {
     txHash: `0x${"ab".repeat(32)}`,
     blockNumber: 11281180,
     gasUsed: 77_381,
+  });
+  mocked.triggerCreWorkflow.mockResolvedValue({
+    executionId: "exec-abc123",
+    status: "ACCEPTED",
+    workflowId: `0x${"00ef7d0a".repeat(8)}`,
   });
 
   mocked.createMilestone.mockImplementation(async (args) => {
@@ -178,6 +184,7 @@ function seedApprovedSession(path: ExecutionPath) {
     releasePathChosen: false,
     busy: false,
     error: null,
+    creExecutionId: null,
     execution: {
       phase: "idle",
       path: null,
@@ -227,6 +234,66 @@ describe("proceedToExecution — path routing", () => {
     expect(execution.txHash).toBe(`0x${"ab".repeat(32)}`);
     expect(mocked.updateSessionState).toHaveBeenCalledWith(SESSION, "EXECUTED");
     expect(execution.notifications).toHaveLength(1);
+  });
+
+  it("Path A triggers the CRE workflow before settling and records the execution ID", async () => {
+    seedApprovedSession(ExecutionPath.DirectSettlement);
+    await useSession.getState().proceedToExecution();
+
+    // The enclave run is asked for with the escrow's shape — the total held,
+    // not the client/firm split, because the workflow validates the escrow
+    // rather than the disbursement. All six fields of `escrowPayloadSchema`
+    // are required by the enclave; a four-field payload is rejected outright.
+    expect(mocked.triggerCreWorkflow).toHaveBeenCalledWith({
+      session_id: SESSION,
+      asset_class: "legal",
+      total_held_cents: 600_000,
+      release_path: ExecutionPath.DirectSettlement,
+      document_text: "",
+      trust_anchors: { parties: ["Jane Client"], identifiers: ["123456"] },
+    });
+    // Integer cents, never a float — the enclave's schema is `z.number().int()`
+    // and a rounding artefact here is a rejected payload, not a small error.
+    const sent = mocked.triggerCreWorkflow.mock.calls[0][0] as { total_held_cents: number };
+    expect(Number.isInteger(sent.total_held_cents)).toBe(true);
+    expect(useSession.getState().creExecutionId).toBe("exec-abc123");
+
+    // And it happened before the money moved: the CRE trigger is an
+    // observation of the escrow as it stood going in.
+    const triggerOrder = mocked.triggerCreWorkflow.mock.invocationCallOrder[0];
+    const settleOrder = mocked.executeDirectSettle.mock.invocationCallOrder[0];
+    expect(triggerOrder).toBeLessThan(settleOrder);
+
+    // The execution ID reaches the audit trail, which is what the CRE event
+    // log renders and what LexTrace matches on.
+    const logged = mocked.logEvent.mock.calls.find((c) => c[1] === "cre_workflow_triggered");
+    expect(logged).toBeDefined();
+    expect(JSON.parse(String(logged?.[3]))).toMatchObject({
+      execution_id: "exec-abc123",
+      status: "ACCEPTED",
+    });
+  });
+
+  it("Path A still settles when the CRE trigger fails — it observes, it does not gate", async () => {
+    // An unreachable gateway must not acquire veto power over money movement
+    // it plays no part in. This is the whole contract of the seam.
+    mocked.triggerCreWorkflow.mockRejectedValue(new Error("Could not reach the CRE gateway"));
+    seedApprovedSession(ExecutionPath.DirectSettlement);
+    await useSession.getState().proceedToExecution();
+
+    const { execution, creExecutionId, error } = useSession.getState();
+    expect(execution.phase).toBe("done");
+    expect(execution.txHash).toBe(`0x${"ab".repeat(32)}`);
+    expect(mocked.executeDirectSettle).toHaveBeenCalled();
+    expect(mocked.updateSessionState).toHaveBeenCalledWith(SESSION, "EXECUTED");
+    // No execution ID, and no error surfaced to the officer — settlement
+    // succeeded, and that is what the screen must say.
+    expect(creExecutionId).toBeNull();
+    expect(error).toBeNull();
+    // The failure is not silent, though: it is on the record.
+    expect(
+      mocked.logEvent.mock.calls.some((c) => c[1] === "cre_workflow_trigger_failed"),
+    ).toBe(true);
   });
 
   it("Path B locks the escrow and waits, without executing", async () => {

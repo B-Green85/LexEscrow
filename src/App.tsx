@@ -7,6 +7,8 @@ import { VaultUnlockGate } from "./components/VaultUnlockGate";
 import { CredentialStoreSelector } from "./components/CredentialStoreSelector";
 import { WorkflowRail } from "./components/WorkflowRail";
 import { HeaderIconButton } from "./components/HeaderIconButton";
+import { DebugPanel } from "./components/DebugPanel";
+import { DebugPasswordPrompt } from "./components/DebugPasswordPrompt";
 import { DocumentLoad } from "./screens/DocumentLoad";
 import { Processing } from "./screens/Processing";
 import { ParsedOutputReview } from "./screens/ParsedOutputReview";
@@ -87,6 +89,19 @@ function AnchorReceiptIcon() {
   );
 }
 
+/** Terminal chevron and prompt line — the console mark, for LexTrace. */
+function TerminalIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+      <path
+        fillRule="evenodd"
+        d="M3 3.5A1.5 1.5 0 014.5 2h11A1.5 1.5 0 0117 3.5v13a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 013 16.5v-13zm3.22 3.22a.75.75 0 011.06 0l2.5 2.5a.75.75 0 010 1.06l-2.5 2.5a.75.75 0 11-1.06-1.06L8.19 9.75 6.22 7.78a.75.75 0 010-1.06zM10.75 12a.75.75 0 000 1.5h3a.75.75 0 000-1.5h-3z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
@@ -115,6 +130,9 @@ function App() {
     setStoreBackendLocal,
     credentialPromptOpen,
     resolveCredentialPrompt,
+    debugPanel,
+    debugPromptOpen,
+    cycleDebugPanel,
   } = useSession();
   const [showSplash, setShowSplash] = useState(true);
   const chromeLabel = CHROMELESS_LABELS[screen];
@@ -136,6 +154,25 @@ function App() {
       dispose?.();
     };
   }, []);
+
+  // Cmd+Shift+D (macOS) / Ctrl+Shift+D elsewhere — the same cycle the header
+  // icon runs, so the two can never disagree about which position is next.
+  //
+  // Both modifiers are accepted on every platform rather than branching on the
+  // OS: Ctrl+Shift+D is not bound to anything here, and an operator on a
+  // remote-desktop or non-Apple keyboard should not have to find a Cmd key.
+  // `e.code` rather than `e.key` because Shift changes `key` to "D" and some
+  // layouts change it further; the physical key is what the shortcut names.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.shiftKey || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.code !== "KeyD") return;
+      e.preventDefault();
+      void cycleDebugPanel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cycleDebugPanel]);
 
   // Which credential backend is active. Read before first-run detection,
   // because the answer changes what "first run" means: under the OS keychain an
@@ -178,8 +215,16 @@ function App() {
     );
   }
 
+  // The debug panel bounds the layout while it is open, and only then. Closed,
+  // every class below is exactly what it was before LexTrace existed — the page
+  // grows past the viewport and the window scrolls, which is what all eleven
+  // screens were laid out against. Open, the shell is pinned to the viewport and
+  // the main column scrolls inside it, because a fixed-height panel docked to a
+  // page that scrolls as a whole would slide off the bottom of it.
+  const debugOpen = debugPanel !== 0;
+
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className={`flex flex-col ${debugOpen ? "h-screen" : "min-h-screen"}`}>
       {showSplash && <Splash onFinish={() => setShowSplash(false)} />}
       {/* Sequenced after the splash rather than stacked above it — both are
           full-window overlays at the same depth, and an onboarding flow that
@@ -233,6 +278,12 @@ function App() {
               active={screen === "anchor-receipt"}
             />
             <HeaderIconButton
+              icon={<TerminalIcon />}
+              label="LexTrace Debug Console"
+              onClick={() => void cycleDebugPanel()}
+              active={debugPanel !== 0}
+            />
+            <HeaderIconButton
               icon={<GearIcon />}
               label="Configuration"
               onClick={() => openConfig()}
@@ -242,23 +293,39 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 bg-app-bg">
-        <div className={`mx-auto w-full px-6 py-8 ${WIDE_SCREENS[screen] ? "max-w-6xl" : "max-w-4xl"}`}>
-          {screen === "load" && <DocumentLoad />}
-          {screen === "processing" && <Processing />}
-          {screen === "review" && <ParsedOutputReview />}
-          {screen === "escalation" && <LexGuardEscalation />}
-          {screen === "conditions" && <ConditionDefinition />}
-          {screen === "escrow-monitor" && <EscrowMonitor />}
-          {screen === "execution" && <ExecutionConfirmation />}
-          {screen === "config" && <Configuration />}
-          {screen === "batch" && <BatchProcessing />}
-          {screen === "anchor-receipt" && <AnchorReceiptConsole />}
-          {screen === "recent" && <RecentWorkflows />}
-        </div>
-      </main>
+      {/* The content area. Both docked positions are the *same* flex container
+          with a different axis — column puts the panel under the main column
+          (full window width, above the status bar), row puts it beside it —
+          which keeps the panel at one place in the tree. That is not a
+          stylistic preference: rendering it in two places would unmount and
+          remount the terminal on every reposition, and scrollback is the whole
+          reason to have a console. A plain wrapper when nothing is open, so the
+          closed case is the layout that shipped. */}
+      <div
+        className={`flex ${debugPanel === 1 ? "flex-col" : ""} ${
+          debugOpen ? "min-h-0 flex-1" : "flex-1"
+        }`}
+      >
+        <main className={`min-w-0 flex-1 bg-app-bg ${debugOpen ? "min-h-0 overflow-y-auto" : ""}`}>
+          <div className={`mx-auto w-full px-6 py-8 ${WIDE_SCREENS[screen] ? "max-w-6xl" : "max-w-4xl"}`}>
+            {screen === "load" && <DocumentLoad />}
+            {screen === "processing" && <Processing />}
+            {screen === "review" && <ParsedOutputReview />}
+            {screen === "escalation" && <LexGuardEscalation />}
+            {screen === "conditions" && <ConditionDefinition />}
+            {screen === "escrow-monitor" && <EscrowMonitor />}
+            {screen === "execution" && <ExecutionConfirmation />}
+            {screen === "config" && <Configuration />}
+            {screen === "batch" && <BatchProcessing />}
+            {screen === "anchor-receipt" && <AnchorReceiptConsole />}
+            {screen === "recent" && <RecentWorkflows />}
+          </div>
+        </main>
 
-      <footer className="border-t border-app-border py-3 text-center">
+        {debugOpen && <DebugPanel variant={debugPanel === 1 ? "bottom" : "side"} />}
+      </div>
+
+      <footer className="shrink-0 border-t border-app-border py-3 text-center">
         <span className="text-[11px] text-text-muted">
           AI parses. LexGuard validates. Humans decide. CRE executes.
         </span>
@@ -268,6 +335,11 @@ function App() {
           the app instead of replacing it — the operator has work on screen
           behind it and is being asked about one action, not shut out. */}
       {credentialPromptOpen && <VaultUnlockGate onCancel={() => resolveCredentialPrompt(false)} />}
+
+      {/* The debug gate. Can follow the vault prompt immediately — opening the
+          console needs the vault readable *and* the debug password — and stays
+          a separate dialog because they authorise different things. */}
+      {debugPromptOpen && <DebugPasswordPrompt />}
 
       {/* Last child, outside every screen: a toast outlives the click that
           raised it and must not unmount when a screen swaps. */}
