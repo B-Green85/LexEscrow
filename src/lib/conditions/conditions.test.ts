@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildConditions,
+  CLIO_DOC_WAIVER_REASON,
   evaluateSummary,
   isDateReached,
   updateConditionFromCannaVerify,
@@ -192,6 +193,74 @@ describe("buildConditions", () => {
   it("produces no document conditions without a receipt", () => {
     const conditions = buildConditions(params("legal", { anchorReceipt: null }));
     expect(typesOf(conditions)).not.toContain("document");
+  });
+
+  // ── Clio intake ────────────────────────────────────────────────────────────
+
+  it("waives the document condition on a Clio-sourced session", () => {
+    const conditions = buildConditions(params("legal", { intakeSource: "clio" }));
+
+    const docs = conditions.filter((c) => c.type === "document");
+    expect(docs).toHaveLength(1);
+    expect(docs[0].status).toBe("waived");
+    expect(docs[0].failureReason).toBe("Clio matter intake — document registration not applicable.");
+    expect(docs[0].failureReason).toBe(CLIO_DOC_WAIVER_REASON);
+  });
+
+  it("does not let the waived document condition hold the settlement gate", () => {
+    // The point of waiving rather than leaving it pending: `allMet` is what
+    // opens the settlement gate, and a Clio session has no way to ever satisfy
+    // a document condition.
+    const conditions = buildConditions(
+      params("legal", { intakeSource: "clio", barVerified: true }),
+    );
+
+    const summary = evaluateSummary(conditions);
+    expect(summary.allMet).toBe(true);
+    // Waived sits in none of the three buckets — see ConditionSummary.
+    expect(summary.met + summary.pending + summary.failed).toBe(summary.total - 1);
+  });
+
+  it("gives the waived condition a deterministic id so a poll cannot duplicate it", () => {
+    const first = buildConditions(params("legal", { intakeSource: "clio" }));
+    const second = buildConditions(params("legal", { intakeSource: "clio" }));
+
+    const idOf = (cs: Condition[]) => cs.find((c) => c.type === "document")!.id;
+    expect(idOf(first)).toBe(`${SESSION}-doc-clio`);
+    expect(idOf(second)).toBe(idOf(first));
+  });
+
+  it("touches no other condition type", () => {
+    const artifact = buildConditions(params("legal", { barVerified: true }));
+    const clio = buildConditions(params("legal", { barVerified: true, intakeSource: "clio" }));
+
+    // Everything that is not the document row is identical, status included.
+    const nonDoc = (cs: Condition[]) => cs.filter((c) => c.type !== "document");
+    expect(nonDoc(clio)).toEqual(nonDoc(artifact));
+    expect(nonDoc(clio).find((c) => c.type === "bar_verify")!.status).toBe("met");
+  });
+
+  it("emits no receipt-derived document rows on the Clio path", () => {
+    // A Clio session should never have an AnchorReceipt — `beginProcessing`
+    // skips it. If one ever appeared, the waived row must still be the only
+    // document condition rather than sitting beside a fingerprint claim.
+    const conditions = buildConditions(
+      params("legal", { intakeSource: "clio", anchorReceipt: receipt() }),
+    );
+
+    const docs = conditions.filter((c) => c.type === "document");
+    expect(docs).toHaveLength(1);
+    expect(docs[0].status).toBe("waived");
+    expect(docs[0].documentHash).toBeUndefined();
+  });
+
+  it("leaves the document path untouched when the intake source is not given", () => {
+    // The parameter is optional and defaults to the artifact path — every
+    // existing caller predates it.
+    const conditions = buildConditions(params("legal", { anchorReceipt: receipt() }));
+    const docs = conditions.filter((c) => c.type === "document");
+    expect(docs).toHaveLength(1);
+    expect(docs[0].status).toBe("met");
   });
 
   it("adds one esign condition per envelope", () => {

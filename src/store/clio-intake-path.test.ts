@@ -99,6 +99,7 @@ beforeEach(() => {
   vi.spyOn(backend, "createSession").mockResolvedValue(undefined);
   vi.spyOn(backend, "updateSessionState").mockResolvedValue(undefined);
   vi.spyOn(backend, "getIntegrationConfigs").mockResolvedValue({});
+  vi.spyOn(backend, "saveCondition").mockResolvedValue(undefined);
   vi.spyOn(backend, "getClioPublic").mockResolvedValue({
     appId: "app-1234",
     clientId: "client-abc",
@@ -140,6 +141,11 @@ beforeEach(() => {
   } as never);
 
   useSession.setState({
+    // The store is a module singleton, so the screen and the checklist have to
+    // be put back — the Continue-gate tests assert on whether the screen
+    // advances, and the condition tests count rows.
+    screen: "load",
+    conditions: [],
     intakeSource: "clio",
     clioMatter: MATTER,
     file: null,
@@ -250,6 +256,162 @@ describe("Clio intake through beginProcessing", () => {
     for (const value of CLIO_OWNED_VALUES) {
       expect(written).not.toContain(value);
     }
+  });
+
+  // ── The Continue gate (Document Load → Processing) ─────────────────────────
+
+  it("continues past Document Load with no document uploaded", () => {
+    // The whole point of the path: a Clio matter *is* the intake, so there is
+    // never a retainer file to attach, and the gate that demanded one made the
+    // path unreachable from the UI regardless of what `beginProcessing` could
+    // do with it.
+    useSession.getState().goToProcessing();
+
+    expect(useSession.getState().screen).toBe("processing");
+    expect(useSession.getState().error).toBeNull();
+  });
+
+  it("never asks a Clio session for a retainer document", () => {
+    useSession.setState({ clioMatter: null });
+    useSession.getState().goToProcessing();
+
+    expect(useSession.getState().error).toBe("Select a Clio matter before continuing.");
+    expect(useSession.getState().error).not.toContain("retainer document");
+    expect(useSession.getState().screen).not.toBe("processing");
+  });
+
+  it("still requires a document on the artifact path", () => {
+    useSession.setState({ intakeSource: "artifact", clioMatter: null, file: null });
+    useSession.getState().goToProcessing();
+
+    expect(useSession.getState().error).toBe("Please add a retainer document before continuing.");
+    expect(useSession.getState().screen).not.toBe("processing");
+  });
+
+  // ── Processing screen labels ───────────────────────────────────────────────
+
+  it("labels the first two steps for what the Clio path actually does", () => {
+    useSession.getState().goToProcessing();
+    const labels = Object.fromEntries(useSession.getState().steps.map((s) => [s.key, s.label]));
+
+    // Nothing is hashed and no AnchorReceipt is sealed — see the skip in
+    // `beginProcessing`. Labels claiming otherwise would misdescribe what the
+    // session holds.
+    expect(labels.hash).toBe("Generating session identifier");
+    expect(labels.anchor).toBe("Registering matter reference");
+    expect(labels.bar).toBe("Verifying attorney");
+    expect(labels.ai).toBe("AI parsing");
+    expect(labels.lexguard).toBe("LexGuard validating");
+  });
+
+  it("keeps the Clio labels once processing is running", async () => {
+    await useSession.getState().beginProcessing();
+    const labels = Object.fromEntries(useSession.getState().steps.map((s) => [s.key, s.label]));
+
+    expect(labels.hash).toBe("Generating session identifier");
+    expect(labels.anchor).toBe("Registering matter reference");
+  });
+
+  it("leaves the artifact path's labels alone", () => {
+    useSession.setState({
+      intakeSource: "artifact",
+      clioMatter: null,
+      file: new File(["retainer"], "retainer.pdf", { type: "application/pdf" }),
+    });
+    useSession.getState().goToProcessing();
+    const labels = Object.fromEntries(useSession.getState().steps.map((s) => [s.key, s.label]));
+
+    expect(labels.hash).toBe("Hashing artifacts");
+    expect(labels.anchor).toBe("Registering with AnchorReceipt");
+  });
+
+  // ── VDB priming ────────────────────────────────────────────────────────────
+
+  it("primes the VDB from the matter, keyed by the clio: identifier", async () => {
+    await useSession.getState().beginProcessing();
+
+    const vdb = useSession.getState().vdb;
+    expect(vdb).not.toBeNull();
+    // The VDB is normally tied to an artifact's SHA-256. With no artifact, the
+    // deterministic intake identifier is what binds the store to its source.
+    expect(vdb!.artifactHash.startsWith("clio:")).toBe(true);
+
+    // Dollars, not the cents integers the AI reads. `clioVdbText` does that
+    // conversion precisely so LexGuard's co-validation compares $30,000.00
+    // against $30,000.00 rather than against 3000000 and escalates every Clio
+    // session on what is only an encoding difference.
+    const numerics = vdb!.entries.filter((e) => e.type === "numeric");
+    expect(numerics.some((e) => Number(e.value) === 30_000)).toBe(true);
+    expect(numerics.some((e) => Number(e.value) === 3_000_000)).toBe(false);
+  });
+
+  // ── The condition checklist ────────────────────────────────────────────────
+
+  it("waives the ArtifactGuard document condition when conditions are built", async () => {
+    await useSession.getState().beginProcessing();
+    useSession.getState().navigateToConditions();
+
+    const docs = useSession.getState().conditions.filter((c) => c.type === "document");
+    expect(docs).toHaveLength(1);
+    expect(docs[0].status).toBe("waived");
+    expect(docs[0].failureReason).toBe(
+      "Clio matter intake — document registration not applicable.",
+    );
+  });
+
+  it("does not let the waived document condition block settlement", async () => {
+    await useSession.getState().beginProcessing();
+    useSession.getState().navigateToConditions();
+
+    const { conditions, conditionSummary } = useSession.getState();
+    // Nothing is left pending or failed on account of a document that this
+    // intake path was never going to produce.
+    expect(conditions.some((c) => c.type === "document" && c.status !== "waived")).toBe(false);
+    expect(conditionSummary.pending).toBe(0);
+    expect(conditionSummary.failed).toBe(0);
+    expect(conditionSummary.allMet).toBe(true);
+  });
+
+  it("keeps the waiver across a poll tick", async () => {
+    // `updateConditions` is the 30-second sweep. It re-runs the builder and
+    // merges, and the id is deterministic, so the row must neither duplicate
+    // nor revert.
+    await useSession.getState().beginProcessing();
+    useSession.getState().navigateToConditions();
+    useSession.getState().updateConditions();
+
+    const docs = useSession.getState().conditions.filter((c) => c.type === "document");
+    expect(docs).toHaveLength(1);
+    expect(docs[0].status).toBe("waived");
+  });
+
+  it("persists the waived status and its reason", async () => {
+    await useSession.getState().beginProcessing();
+    useSession.getState().navigateToConditions();
+    // The persistence loop is fire-and-forget; let it drain.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const saved = vi
+      .mocked(backend.saveCondition)
+      .mock.calls.map(([c]) => c)
+      .find((c) => c.conditionType === "document");
+    expect(saved).toBeDefined();
+    expect(saved!.status).toBe("waived");
+    expect(saved!.label).toBe("Document registration — not applicable");
+  });
+
+  it("leaves every other condition type alone", async () => {
+    await useSession.getState().beginProcessing();
+    useSession.getState().navigateToConditions();
+
+    // The bar check still runs and still reports its own verdict — waiving the
+    // document condition must not have waived anything else.
+    const bar = useSession.getState().conditions.find((c) => c.type === "bar_verify");
+    expect(bar).toBeDefined();
+    expect(bar!.status).toBe("met");
+    expect(
+      useSession.getState().conditions.filter((c) => c.status === "waived"),
+    ).toHaveLength(1);
   });
 
   it("drops the matter from memory on reset", async () => {

@@ -209,18 +209,35 @@ const emptyAnchors: TrustAnchors = {
 // AnchorReceipt registration is its own visible stage, not a silent step
 // folded into hashing: it is the moment the document acquires a provenance
 // claim, and the officer needs to see it happen.
-function stepsFor(mode: EntryMode): ProcessingStep[] {
+//
+// The first two labels change with the intake source, because on the Clio path
+// the two steps genuinely do something else. Nothing is hashed — there are no
+// bytes — so step one derives the deterministic `clio:` identifier instead, and
+// step two records which matter the session names rather than sealing an
+// AnchorReceipt over a document (`beginProcessing` skips the receipt entirely).
+// A progress list that said "Hashing artifacts" over a Clio matter would be
+// telling the officer something untrue about what the session holds.
+function stepsFor(mode: EntryMode, source: IntakeSource = "artifact"): ProcessingStep[] {
+  const fromClio = source === "clio";
   return [
-    { key: "hash", label: "Hashing artifacts", status: "pending" },
-    { key: "anchor", label: "Registering with AnchorReceipt", status: "pending" },
+    {
+      key: "hash",
+      label: fromClio ? "Generating session identifier" : "Hashing artifacts",
+      status: "pending",
+    },
+    {
+      key: "anchor",
+      label: fromClio ? "Registering matter reference" : "Registering with AnchorReceipt",
+      status: "pending",
+    },
     { key: "bar", label: "Verifying attorney", status: "pending" },
     { key: "ai", label: mode === "manual" ? "Manual entry" : "AI parsing", status: "pending" },
     { key: "lexguard", label: "LexGuard validating", status: "pending" },
   ];
 }
 
-function initialSteps(): ProcessingStep[] {
-  return stepsFor("ai");
+function initialSteps(source: IntakeSource = "artifact"): ProcessingStep[] {
+  return stepsFor("ai", source);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1304,15 +1321,26 @@ export const useSession = create<SessionState>((set, get) => {
     // DocumentLoad → Processing screen, showing the entry-mode toggle before
     // anything runs.
     goToProcessing: () => {
-      const { file } = get();
-      if (!file) {
-        set({ error: "Please add a retainer document before continuing." });
+      const { file, intakeSource, clioMatter } = get();
+      // Two intakes, two different things to be missing. Clio intake has no
+      // document by construction — the matter record *is* the intake, and the
+      // session identifier is derived from it rather than from a file's bytes —
+      // so demanding a retainer upload here asked the officer for something the
+      // path never produces. The same fork `beginProcessing` makes one screen
+      // later; this is the gate in front of it.
+      const fromClio = intakeSource === "clio";
+      if (fromClio ? !clioMatter : !file) {
+        set({
+          error: fromClio
+            ? "Select a Clio matter before continuing."
+            : "Please add a retainer document before continuing.",
+        });
         return;
       }
       set({
         screen: "processing",
         procPhase: "choose",
-        steps: initialSteps(),
+        steps: initialSteps(intakeSource),
         error: null,
         configHint: null,
         payload: null,
@@ -1352,7 +1380,7 @@ export const useSession = create<SessionState>((set, get) => {
       set({
         sessionId,
         procPhase: "running",
-        steps: stepsFor(entryMode),
+        steps: stepsFor(entryMode, intakeSource),
         error: null,
         configHint: null,
         busy: true,
@@ -1765,6 +1793,7 @@ export const useSession = create<SessionState>((set, get) => {
         cannaVerifyConditions,
         barActive,
         barVerifyResult,
+        intakeSource,
         conditions: previous,
       } = get();
       if (!sessionId || !payload) return;
@@ -1779,6 +1808,7 @@ export const useSession = create<SessionState>((set, get) => {
           eSignEnvelopes,
           cannaVerifyConditions,
           barVerified: barActive,
+          intakeSource,
         }),
         barVerifyResult,
       );
@@ -1827,6 +1857,7 @@ export const useSession = create<SessionState>((set, get) => {
         cannaVerifyConditions,
         barActive,
         barVerifyResult,
+        intakeSource,
         conditions: previous,
       } = get();
       if (!sessionId || !payload || previous.length === 0) return;
@@ -1841,6 +1872,7 @@ export const useSession = create<SessionState>((set, get) => {
           eSignEnvelopes,
           cannaVerifyConditions,
           barVerified: barActive,
+          intakeSource,
         }),
         barVerifyResult,
       );

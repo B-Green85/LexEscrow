@@ -90,6 +90,8 @@ export function ParsedOutputReview() {
     cannaVerifyRunning,
     runCannaVerify,
     applyHumanOverride,
+    intakeSource,
+    clioMatter,
   } = useSession();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -155,6 +157,20 @@ export function ParsedOutputReview() {
         errors in parsing will affect fund distribution.
       </p>
       {providerLabel && <p className="mt-1 text-xs text-text-muted">Parsed via {providerLabel}.</p>}
+
+      {/* Provenance, at the one moment it changes how the officer reads the
+          numbers below. On the Clio path these figures were extracted from a
+          live matter record rather than from a signed retainer, so there is no
+          document to check them against — the matter is the source, and if a
+          total looks wrong the place to correct it is Clio. Naming the matter
+          rather than just the source makes that check actionable. */}
+      {intakeSource === "clio" && clioMatter && (
+        <p className="mt-2">
+          <span className="badge badge-brand" data-testid="clio-source-badge">
+            📋 Data sourced from Clio Manage — matter {clioMatter.displayNumber}
+          </span>
+        </p>
+      )}
 
       {pendingCorrections.length > 0 && (
         <div

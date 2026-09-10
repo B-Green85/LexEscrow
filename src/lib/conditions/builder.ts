@@ -22,10 +22,21 @@ import { formatUsd, toPayloadCents } from "../../lexguard/payload-diff";
 import type { AnchorReceipt } from "../anchor-receipt";
 import type { ESignEnvelope, ESignStatus } from "../esign";
 import type { CannaVerifyConditions } from "../cannaverify/types";
+import type { IntakeSource } from "../clio";
 import type { Condition, ConditionStatus, ConditionSummary } from "./types";
 
 /** Asset classes whose closing turns on human diligence rather than an adapter. */
 const MANUAL_DILIGENCE_CLASSES: AssetClass[] = ["business", "ip", "real_estate"];
+
+/**
+ * Why the document condition is waived on a Clio-sourced session.
+ *
+ * Exported because it is an audit-visible string: it lands in the condition's
+ * `failureReason`, is persisted to SQLite by `initConditions`, and is what an
+ * auditor reading the checklist months later sees in place of a fingerprint.
+ */
+export const CLIO_DOC_WAIVER_REASON =
+  "Clio matter intake — document registration not applicable.";
 
 // ── Status mappers ───────────────────────────────────────────────────────────
 
@@ -99,6 +110,8 @@ export interface BuildConditionsParams {
   eSignEnvelopes: ESignEnvelope[];
   cannaVerifyConditions: CannaVerifyConditions | null;
   barVerified: boolean | null;
+  /** Which intake produced the session. Defaults to the document path. */
+  intakeSource?: IntakeSource;
 }
 
 /**
@@ -118,30 +131,61 @@ export function buildConditions(params: BuildConditionsParams): Condition[] {
     eSignEnvelopes,
     cannaVerifyConditions,
     barVerified,
+    intakeSource = "artifact",
   } = params;
 
   const conditions: Condition[] = [];
   const now = new Date().toISOString();
 
-  // 1 — Document conditions: one per registered AnchorReceipt item. An item
-  // without an on-chain tx was sealed but never anchored, so its provenance
-  // claim is incomplete and the condition stays pending.
-  anchorReceipt?.items.forEach((item, i) => {
-    const registered = Boolean(item.onChainTx);
+  // 1 — Document conditions.
+  //
+  // On the Clio path there is no document and never will be: the matter record
+  // is the intake, `beginProcessing` derives a `clio:` identifier rather than
+  // hashing bytes, and it skips AnchorReceipt entirely because a provenance
+  // claim needs bytes to be about. So the ArtifactGuard integrity baseline is
+  // not *unsatisfied* here — it is inapplicable, and the two are different
+  // facts that must not be shown to an officer as the same one.
+  //
+  // Emitting it waived rather than omitting it is the deliberate choice. An
+  // absent row reads as an oversight ("why is there no document condition?");
+  // a waived row with a reason states, in the checklist and in the persisted
+  // audit record, that this session was never going to have one. `waived`
+  // already means exactly that in this vocabulary — never satisfied, proceeding
+  // anyway — and `evaluateSummary` counts it toward `allMet`, so it does not
+  // hold the settlement gate closed.
+  if (intakeSource === "clio") {
     conditions.push({
-      id: `${sessionId}-doc-${i}`,
+      id: `${sessionId}-doc-clio`,
       type: "document",
-      label: `Document registered — ${item.label}`,
+      label: "Document registration — not applicable",
       description:
-        "The document fingerprint is sealed and anchored in the AnchorReceipt integrity ledger.",
-      status: registered ? "met" : "pending",
+        "Clio matter intake carries no document artifact; the session is identified by its " +
+        "deterministic Clio intake identifier rather than an ArtifactGuard fingerprint.",
+      status: "waived",
       assetClass,
-      documentHash: item.hash,
-      documentLabel: item.label,
-      ...(item.onChainTx && { onChainTx: item.onChainTx }),
-      ...(registered && { metAt: item.registeredAt ?? now }),
+      failureReason: CLIO_DOC_WAIVER_REASON,
     });
-  });
+  } else {
+    // One per registered AnchorReceipt item. An item without an on-chain tx was
+    // sealed but never anchored, so its provenance claim is incomplete and the
+    // condition stays pending.
+    anchorReceipt?.items.forEach((item, i) => {
+      const registered = Boolean(item.onChainTx);
+      conditions.push({
+        id: `${sessionId}-doc-${i}`,
+        type: "document",
+        label: `Document registered — ${item.label}`,
+        description:
+          "The document fingerprint is sealed and anchored in the AnchorReceipt integrity ledger.",
+        status: registered ? "met" : "pending",
+        assetClass,
+        documentHash: item.hash,
+        documentLabel: item.label,
+        ...(item.onChainTx && { onChainTx: item.onChainTx }),
+        ...(registered && { metAt: item.registeredAt ?? now }),
+      });
+    });
+  }
 
   // 2 — eSign conditions: one per envelope in flight.
   for (const envelope of eSignEnvelopes) {

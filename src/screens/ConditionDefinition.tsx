@@ -30,6 +30,7 @@ import type {
 import type { TrustAnchors } from "../lexguard/types";
 import type { CannaVerifyConditions as CannaVerifyConditionsData } from "../lib/cannaverify/types";
 import { txUrl } from "../lib/explorer";
+import type { ClioMatterPayload, IntakeSource } from "../lib/clio";
 
 /** Re-exported so callers of this screen need only one import. */
 export type { EmbeddedSigningTarget } from "../lib/esign";
@@ -363,6 +364,13 @@ function EventConditions({
 export interface ConditionDefinitionViewProps {
   assetClass: AssetClass;
   artifact: { filename: string; hash: string; size: number } | null;
+  /**
+   * Which intake produced the session. Optional, defaulting to the document
+   * path, so every caller that predates Clio intake keeps its exact behavior.
+   */
+  intakeSource?: IntakeSource;
+  /** The fetched matter, when the session came from Clio. */
+  clioMatter?: ClioMatterPayload | null;
   anchors: TrustAnchors;
   rawAnchors: Record<string, string>;
   eSignEnvelopes: ESignEnvelope[];
@@ -398,6 +406,8 @@ export function ConditionDefinition() {
   const {
     assetClass,
     artifact,
+    intakeSource,
+    clioMatter,
     anchors,
     rawAnchors,
     eSignEnvelopes,
@@ -419,6 +429,8 @@ export function ConditionDefinition() {
     <ConditionDefinitionView
       assetClass={assetClass}
       artifact={artifact}
+      intakeSource={intakeSource}
+      clioMatter={clioMatter}
       anchors={anchors}
       rawAnchors={rawAnchors}
       eSignEnvelopes={eSignEnvelopes}
@@ -443,6 +455,8 @@ export function ConditionDefinition() {
 export function ConditionDefinitionView({
   assetClass,
   artifact,
+  intakeSource = "artifact",
+  clioMatter = null,
   anchors,
   rawAnchors,
   eSignEnvelopes,
@@ -505,6 +519,16 @@ export function ConditionDefinitionView({
   );
 
   const documentReady = !!artifact;
+  /**
+   * The Clio path's equivalent of "the intake is registered".
+   *
+   * Kept separate from `documentReady` rather than folded into it, because the
+   * two are not interchangeable: `documentReady` also gates the signature
+   * controls below, and there is genuinely no document to send for signature
+   * here — `onSendForSignature` would dispatch a placeholder filename. Only the
+   * proceed gate takes this as an alternative.
+   */
+  const clioIntakeReady = intakeSource === "clio" && !!clioMatter;
   // Only email-route signers are dispatched by the bulk send; in-app signers
   // sign per-row via "Sign Here".
   const emailSigners = useMemo(() => signers.filter((s) => s.mode === "email"), [signers]);
@@ -517,8 +541,13 @@ export function ConditionDefinitionView({
   // registers the ArtifactGuard baseline, so this is effectively always met —
   // the button exists to make the officer's confirmation an explicit,
   // auditable act rather than a silent pass-through.
+  //
+  // A confirmed Clio matter satisfies the same gate. `artifact` is null on that
+  // path by construction, so without this the officer could only proceed by
+  // setting a release date or raising an envelope they did not want — the
+  // document requirement reappearing one screen later in a different costume.
   const canProceed =
-    documentReady || releaseDate !== "" || eSignEnvelopes.length > 0;
+    documentReady || clioIntakeReady || releaseDate !== "" || eSignEnvelopes.length > 0;
 
   return (
     <div className="mx-auto w-full max-w-2xl">
@@ -542,7 +571,9 @@ export function ConditionDefinitionView({
           status={
             documentReady
               ? { cls: "badge badge-emerald", text: "✅ Registered" }
-              : { cls: "badge badge-slate", text: "⏳ Pending" }
+              : clioIntakeReady
+                ? { cls: "badge badge-slate", text: "➖ Not applicable" }
+                : { cls: "badge badge-slate", text: "⏳ Pending" }
           }
         >
           {artifact ? (
@@ -550,6 +581,20 @@ export function ConditionDefinitionView({
               <Field label="Document" value={artifact.filename} />
               <Field label="AnchorReceipt hash" value={shortHash(artifact.hash)} mono />
               <Field label="Size" value={`${artifact.size.toLocaleString()} bytes`} />
+            </div>
+          ) : clioIntakeReady ? (
+            // "Pending" would be a lie here, and a visible contradiction: the
+            // proceed button below is enabled, and the checklist this screen
+            // hands to Stage 7 already carries this condition as waived. Say
+            // the same thing all three places.
+            <div className="divide-y divide-app-border" data-testid="clio-intake-baseline">
+              <Field label="Intake source" value="Clio Manage" />
+              <Field label="Matter" value={clioMatter!.displayNumber} />
+              <p className="pt-2 text-sm text-text-muted">
+                Clio matter intake — document registration not applicable. The session is identified
+                by its deterministic Clio intake identifier rather than an ArtifactGuard
+                fingerprint.
+              </p>
             </div>
           ) : (
             <p className="text-sm text-text-muted">No document has been registered for this session.</p>

@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import { ConditionDefinitionView, type ConditionDefinitionViewProps } from "./ConditionDefinition";
+import type { ClioMatterPayload } from "../lib/clio";
 import {
   ASSET_CLASS_LIST,
   ASSET_CLASSES,
@@ -58,6 +59,23 @@ function props(
     ...extra,
   };
 }
+
+const CLIO_MATTER: ClioMatterPayload = {
+  matterId: 4321,
+  displayNumber: "00001-Anderson",
+  description: "Anderson v. Wexler",
+  status: "open",
+  billingMethod: "hourly",
+  openDate: "2026-01-15",
+  closeDate: null,
+  clientName: "Jane Anderson",
+  clientEmail: null,
+  clientPhone: null,
+  parties: [],
+  bills: [],
+  trustBalanceCents: 3_000_000,
+  fetchedAt: "2026-09-05T12:00:00Z",
+};
 
 const render = (cls: AssetClass, extra: Partial<ConditionDefinitionViewProps> = {}) =>
   renderToString(createElement(ConditionDefinitionView, props(cls, extra)));
@@ -179,5 +197,58 @@ describe("ConditionDefinition screen", () => {
 
     // A registered document is itself a configured condition.
     expect(render("legal")).not.toContain('class="btn btn-primary btn-lg" disabled=""');
+  });
+
+  // ── Clio intake ────────────────────────────────────────────────────────────
+
+  const clioProps = { artifact: null, intakeSource: "clio" as const, clioMatter: CLIO_MATTER };
+
+  it("lets a confirmed Clio matter satisfy the proceed gate", () => {
+    // `artifact` is null on this path by construction. Without the Clio branch
+    // the officer could only proceed by setting a release date or raising an
+    // envelope they did not want.
+    const html = render("legal", { ...clioProps, eSignEnvelopes: [] });
+    expect(html).not.toContain('class="btn btn-primary btn-lg" disabled=""');
+  });
+
+  it("still blocks a Clio session with no matter fetched", () => {
+    const html = render("legal", {
+      artifact: null,
+      intakeSource: "clio",
+      clioMatter: null,
+      eSignEnvelopes: [],
+    });
+    expect(html).toContain('disabled=""');
+  });
+
+  it("describes the baseline as not applicable rather than pending", () => {
+    const html = render("legal", clioProps);
+    expect(html).toContain("➖ Not applicable");
+    expect(html).toContain("document registration not applicable");
+    expect(html).toContain("00001-Anderson");
+    // The document-path copy would contradict the enabled button beside it.
+    expect(html).not.toContain("No document has been registered");
+    expect(html).not.toContain("⏳ Pending");
+  });
+
+  it("leaves the document path's gate and card untouched", () => {
+    // Explicit intake source, same as the default — the artifact path must not
+    // pick up any Clio wording or a changed badge.
+    const html = render("legal", { intakeSource: "artifact", clioMatter: null });
+    expect(html).toContain("✅ Registered");
+    expect(html).toContain("agreement.pdf");
+    expect(html).not.toContain("Not applicable");
+    expect(html).not.toContain("Clio");
+  });
+
+  it("does not offer to send a Clio session for signature", () => {
+    // There is no document to send — `onSendForSignature` would dispatch a
+    // placeholder filename. The proceed gate is the only thing a Clio matter
+    // satisfies.
+    const html = render("legal", clioProps);
+    // Pinned to the send button's own class, not a bare `disabled=""` anywhere
+    // on the page — the proceed button below it is deliberately enabled.
+    expect(html).toContain('class="btn btn-primary mt-4" disabled=""');
+    expect(html).toContain("Send for Signature");
   });
 });

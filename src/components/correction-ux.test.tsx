@@ -15,8 +15,9 @@ import { OverrideDialog } from "./OverrideDialog";
 import { SourceDocumentViewer } from "./SourceDocumentViewer";
 import { LexGuardEscalationView } from "../screens/LexGuardEscalation";
 import { ParsedOutputReview } from "../screens/ParsedOutputReview";
-import { useSession } from "../store/session";
+import { useSession, type SessionState } from "../store/session";
 import { ExecutionPath, type ParsedRetainerPayload } from "../lexguard/types";
+import type { ClioMatterPayload } from "../lib/clio";
 import type { Escalation, LexGuardCorrection } from "../lexguard/pipeline";
 
 afterEach(cleanup);
@@ -671,7 +672,10 @@ const resolvedCorrection: LexGuardCorrection = {
   timestamp: new Date("2026-07-18T12:00:00Z").toISOString(),
 };
 
-function renderReview(corrections: LexGuardCorrection[]) {
+function renderReview(
+  corrections: LexGuardCorrection[],
+  intake: Partial<Pick<SessionState, "intakeSource" | "clioMatter">> = {},
+) {
   useSession.setState({
     sessionId: "wf-review-test",
     payload: reviewPayload,
@@ -685,9 +689,57 @@ function renderReview(corrections: LexGuardCorrection[]) {
     busy: false,
     error: null,
     vdb: null,
+    // Spelled out rather than inherited: the store is a module singleton, so a
+    // Clio matter left behind by another suite would otherwise decide whether
+    // the provenance badge renders.
+    intakeSource: "artifact",
+    clioMatter: null,
+    ...intake,
   });
   return render(<ParsedOutputReview />);
 }
+
+const REVIEW_MATTER: ClioMatterPayload = {
+  matterId: 4321,
+  displayNumber: "00001-Anderson",
+  description: "Anderson v. Wexler",
+  status: "open",
+  billingMethod: "hourly",
+  openDate: "2026-01-15",
+  closeDate: null,
+  clientName: "Jane Anderson",
+  clientEmail: null,
+  clientPhone: null,
+  parties: [],
+  bills: [],
+  trustBalanceCents: 3_000_000,
+  fetchedAt: "2026-09-05T12:00:00Z",
+};
+
+describe("ParsedOutputReview — intake provenance", () => {
+  it("names the Clio matter the figures were sourced from", () => {
+    renderReview([], { intakeSource: "clio", clioMatter: REVIEW_MATTER });
+
+    const badge = screen.getByTestId("clio-source-badge");
+    expect(badge.textContent).toContain("Data sourced from Clio Manage");
+    // The matter reference, not just the source: an officer who doubts a total
+    // needs to know which record to open.
+    expect(badge.textContent).toContain("00001-Anderson");
+  });
+
+  it("shows no source badge on the document path", () => {
+    renderReview([]);
+    expect(screen.queryByTestId("clio-source-badge")).toBeNull();
+  });
+
+  it("shows no source badge when the toggle says Clio but no matter is held", () => {
+    // Post-`reset` shape: the intake toggle survives, the matter does not.
+    // Claiming a Clio provenance with nothing to name would be worse than
+    // claiming none at all.
+    renderReview([], { intakeSource: "clio", clioMatter: null });
+    expect(screen.queryByTestId("clio-source-badge")).toBeNull();
+  });
+});
 
 describe("ParsedOutputReview — corrected field wiring", () => {
   it("renders a CorrectedField for the field LexGuard corrected", () => {

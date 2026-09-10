@@ -8,6 +8,7 @@
 export * from "./types";
 export {
   buildConditions,
+  CLIO_DOC_WAIVER_REASON,
   evaluateSummary,
   isDateReached,
   statusFromCannaVerify,
