@@ -15,9 +15,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
-import { createElement } from "react";
+import { createElement, StrictMode } from "react";
 import type { EmbeddedSigningResult, eSignProvider } from "../lib/esign";
 
 // Hoisted so the `vi.mock` factories below — which are lifted above the
@@ -347,6 +347,158 @@ describe("EmbeddedSigningPanel — outcomes", () => {
     expect(tauri.unlisten).toHaveBeenCalled();
     expect(tauri.windows[0].closeUnlisten).toHaveBeenCalled();
     expect(tauri.windows[0].close).toHaveBeenCalled();
+  });
+});
+
+// ── StrictMode ───────────────────────────────────────────────────────────────
+
+/**
+ * The regression these guard (the "Preparing signing session…" hang).
+ *
+ * StrictMode double-invokes an effect on mount: setup → teardown → setup. The
+ * teardown cancels the *first* run's closure, so if the second run declines to
+ * start — which is what a `useRef` "have we started?" guard makes it do, since
+ * a ref survives the simulated remount — nobody is left to open the ceremony.
+ * The first run then resolves into a cancelled closure and returns silently,
+ * and the panel sits on its loading state for good. An error does the same,
+ * which is what made the hang indistinguishable from a backend that never
+ * answered.
+ *
+ * Every assertion below is really the same one: under StrictMode the panel must
+ * reach a *terminal* phase — waiting or error — and never stay at loading.
+ */
+function mountStrict() {
+  return render(
+    <StrictMode>
+      <EmbeddedSigningPanel
+        envelopeId={ENVELOPE_ID}
+        signerEmail={SIGNER.email}
+        signerName={SIGNER.name}
+        clientUserId={SIGNER.clientUserId}
+        onComplete={onComplete}
+        onCancel={onCancel}
+      />
+    </StrictMode>,
+  );
+}
+
+describe("EmbeddedSigningPanel — StrictMode double-invoked effect", () => {
+  it("reaches the waiting state instead of staying at loading", async () => {
+    mountStrict();
+
+    await screen.findByText(/complete the signature in the DocuSign window/);
+    expect(screen.queryByText(/Preparing signing session/)).toBeNull();
+  });
+
+  it("opens exactly one signing window", async () => {
+    mountStrict();
+
+    await screen.findByText(/complete the signature in the DocuSign window/);
+    // The superseded run drops the URL it minted rather than opening a second
+    // ceremony with it — recipient views are single-use, so it cannot be
+    // handed to the surviving run and is simply spent.
+    expect(tauri.windows).toHaveLength(1);
+    expect(tauri.windows[0].options.url).toBe(SIGNING_URL);
+  });
+
+  it("does not report a cancellation when the first run is superseded", async () => {
+    mountStrict();
+
+    await screen.findByText(/complete the signature in the DocuSign window/);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a minting failure instead of staying at loading", async () => {
+    esign.provider = {
+      providerName: () => "DocuSign",
+      getEmbeddedSigningUrl: vi.fn<GetUrl>(async () => {
+        throw new Error("DocuSign refused the embedded signing view (HTTP 400)");
+      }),
+    };
+    mountStrict();
+
+    await screen.findByText(/In-app signing unavailable/);
+    expect(screen.getByText(/HTTP 400/)).toBeTruthy();
+    expect(screen.queryByText(/Preparing signing session/)).toBeNull();
+  });
+
+  it("surfaces a provider that cannot host an in-app ceremony", async () => {
+    esign.provider = { providerName: () => "HelloSign" };
+    mountStrict();
+
+    await screen.findByText(/In-app signing unavailable/);
+    expect(screen.queryByText(/Preparing signing session/)).toBeNull();
+  });
+
+  it("opens the ceremony from a Sign Here click", async () => {
+    const props: ConditionDefinitionViewProps = {
+      ...conditionProps("legal", "in_app"),
+      onSignInApp: async (signer) => ({
+        envelopeId: ENVELOPE_ID,
+        clientUserId: SIGNER.clientUserId,
+        signer: { ...signer, clientUserId: SIGNER.clientUserId },
+      }),
+    };
+    render(
+      <StrictMode>
+        <ConditionDefinitionView {...props} />
+      </StrictMode>,
+    );
+
+    fireEvent.click(screen.getAllByText("Sign Here")[0]);
+
+    await screen.findByText(/complete the signature in the DocuSign window/);
+    expect(screen.queryByText(/Preparing signing session/)).toBeNull();
+  });
+});
+
+// ── Teardown mid-request ─────────────────────────────────────────────────────
+
+describe("EmbeddedSigningPanel — torn down before the URL arrives", () => {
+  it("reports an abandoned ceremony rather than returning silently", async () => {
+    let release: (url: string) => void = () => {};
+    getEmbeddedSigningUrl.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const { unmount } = mount();
+    await waitFor(() => expect(getEmbeddedSigningUrl).toHaveBeenCalledOnce());
+    unmount();
+
+    // The URL lands on a panel that is already gone. No successor run exists,
+    // so the envelope was raised and never opened — a cancellation, not a
+    // no-op.
+    await act(async () => {
+      release(SIGNING_URL);
+    });
+
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(tauri.windows).toHaveLength(0);
+  });
+
+  it("reports an abandoned ceremony when the request fails after teardown", async () => {
+    let reject: (e: Error) => void = () => {};
+    getEmbeddedSigningUrl.mockImplementation(
+      () =>
+        new Promise<string>((_, r) => {
+          reject = r;
+        }),
+    );
+
+    const { unmount } = mount();
+    await waitFor(() => expect(getEmbeddedSigningUrl).toHaveBeenCalledOnce());
+    unmount();
+
+    await act(async () => {
+      reject(new Error("DocuSign recipient view request failed: operation timed out"));
+    });
+
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 });
 

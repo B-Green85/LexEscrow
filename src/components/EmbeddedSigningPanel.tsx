@@ -118,7 +118,17 @@ export function EmbeddedSigningPanel({
   const closeUnlistenRef = useRef<Unlisten | null>(null);
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settledRef = useRef(false);
-  const startedRef = useRef(false);
+  /**
+   * Which effect run owns the ceremony.
+   *
+   * Bumped once per run, so a run whose closure has been cancelled can tell
+   * *why* it was cancelled. A higher current id means a successor run is
+   * already opening the ceremony — React's StrictMode remount, which tears the
+   * first run down and immediately starts a second — and this run must get out
+   * of its way silently. An unchanged id means no successor is coming: the
+   * panel is genuinely going away.
+   */
+  const runIdRef = useRef(0);
 
   /** Drop every subscription and pending timer. Safe to call more than once. */
   const releaseListeners = useCallback(() => {
@@ -161,14 +171,19 @@ export function EmbeddedSigningPanel({
   );
 
   useEffect(() => {
-    // Guards against an effect re-entry opening a second ceremony.
-    if (startedRef.current) return;
-    startedRef.current = true;
-
     let cancelled = false;
+    // Claim the ceremony for this run. Deliberately *not* a
+    // `if (alreadyStarted) return` guard: a ref survives StrictMode's
+    // simulated remount, so such a guard makes the second run a no-op while
+    // the first run's closure is already cancelled — leaving nobody to open
+    // the ceremony and the panel stuck on "Preparing signing session…".
+    const runId = ++runIdRef.current;
+    /** Has a later effect run taken the ceremony over? */
+    const superseded = () => runId !== runIdRef.current;
 
     const open = async () => {
       try {
+        if (cancelled) return;
         const provider = await resolveESignProvider();
         if (!provider.getEmbeddedSigningUrl) {
           throw new Error(
@@ -182,7 +197,15 @@ export function EmbeddedSigningPanel({
           signerName,
           clientUserId,
         );
-        if (cancelled) return;
+        if (cancelled) {
+          // A live signing URL exists now, so this is no longer a silent
+          // no-op. A superseded run drops its URL and lets the successor mint
+          // a fresh one (they are single-use, so it cannot be handed over);
+          // anything else means the panel is going away with a ceremony that
+          // was raised and never opened, which is a cancellation.
+          if (!superseded()) settle("cancel");
+          return;
+        }
 
         if (isTauri()) {
           // Subscribed *before* the window opens: a ceremony that completes
@@ -242,7 +265,14 @@ export function EmbeddedSigningPanel({
 
         if (!cancelled) setPhase("waiting");
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled) {
+          // A superseded run stays quiet: its successor is making the same
+          // call and will surface the same failure. Otherwise the panel is
+          // being torn down mid-request — end the ceremony rather than leave
+          // the envelope silently unaccounted for.
+          if (!superseded()) settle("cancel");
+          return;
+        }
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }

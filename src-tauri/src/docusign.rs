@@ -648,18 +648,37 @@ pub async fn docusign_get_embedded_signing_url(
     client_user_id: String,
     return_url: String,
 ) -> Result<String, String> {
-    let (creds, token) = authed(&vault).await?;
-    get_embedded_signing_url(
-        &creds.account_id,
-        &creds.base_uri,
-        &token,
-        &envelope_id,
-        &signer_email,
-        &signer_name,
-        &client_user_id,
-        &return_url,
-    )
-    .await
+    // Bracketing the whole command, not just the HTTP call. A recipient view
+    // that never reaches DocuSign and one that reaches it and fails are the
+    // same silence from the frontend's side; these two lines are what tells
+    // them apart. `log_response` cannot: it only fires on a non-success HTTP
+    // status, so a timeout or a vault failure leaves no trace at all.
+    eprintln!(
+        "docusign: recipient view requested — envelope {envelope_id}, signer {signer_email}"
+    );
+    let outcome = async {
+        let (creds, token) = authed(&vault).await?;
+        get_embedded_signing_url(
+            &creds.account_id,
+            &creds.base_uri,
+            &token,
+            &envelope_id,
+            &signer_email,
+            &signer_name,
+            &client_user_id,
+            &return_url,
+        )
+        .await
+    }
+    .await;
+
+    // The URL itself stays out of the log for the reason given in
+    // `get_embedded_signing_url` — it is a live credential.
+    match &outcome {
+        Ok(_) => eprintln!("docusign: recipient view minted — envelope {envelope_id}"),
+        Err(e) => eprintln!("docusign: recipient view failed — envelope {envelope_id}: {e}"),
+    }
+    outcome
 }
 
 /// Certificate of completion PDF bytes. Call only once status is `completed`.
