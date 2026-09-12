@@ -26,8 +26,13 @@ export interface ESignSigner {
  * Where DocuSign redirects the signing WebView when the ceremony ends. Served
  * by the loopback listener in `src-tauri/src/esign_callback.rs`, which turns
  * the redirect into an `esign:embedded_complete` event.
+ *
+ * The literal `127.0.0.1`, not `localhost`. The listener binds the IPv4
+ * loopback only, while `localhost` resolves to `::1` first on a dual-stack
+ * machine — a redirect there is refused, and a signature already collected
+ * would reach the app only on the next 30-second poll.
  */
-export const EMBEDDED_RETURN_URL = "http://localhost:55432/esign-complete";
+export const EMBEDDED_RETURN_URL = "http://127.0.0.1:55432/esign-complete";
 
 /**
  * DocuSign's embedded-signing outcomes, as they arrive on the return URL.

@@ -25,7 +25,14 @@ import type { EmbeddedSigningResult, eSignProvider } from "../lib/esign";
 const tauri = vi.hoisted(() => ({
   handler: null as ((event: { payload: EmbeddedSigningResult }) => void) | null,
   unlisten: null as ReturnType<typeof vi.fn> | null,
-  windows: [] as Array<{ label: string; options: Record<string, unknown>; close: ReturnType<typeof vi.fn> }>,
+  windows: [] as Array<{
+    label: string;
+    options: Record<string, unknown>;
+    close: ReturnType<typeof vi.fn>;
+    /** Fires the window's close-requested handler, as the red X would. */
+    requestClose: () => void;
+    closeUnlisten: ReturnType<typeof vi.fn>;
+  }>,
 }));
 
 const esign = vi.hoisted(() => ({
@@ -43,8 +50,20 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: class {
     close = vi.fn(async () => {});
+    private closeHandler: (() => void) | null = null;
+    onCloseRequested = vi.fn(async (handler: () => void) => {
+      this.closeHandler = handler;
+      return this.closeUnlisten;
+    });
+    closeUnlisten = vi.fn();
     constructor(label: string, options: Record<string, unknown>) {
-      tauri.windows.push({ label, options, close: this.close });
+      tauri.windows.push({
+        label,
+        options,
+        close: this.close,
+        closeUnlisten: this.closeUnlisten,
+        requestClose: () => this.closeHandler?.(),
+      });
     }
   },
 }));
@@ -59,7 +78,12 @@ vi.mock("../lib/esign", async (importOriginal) => ({
   resolveESignProvider: async () => esign.provider,
 }));
 
-import { EmbeddedSigningPanel, isSigningComplete, outcomeFromUrl } from "./EmbeddedSigningPanel";
+import {
+  CLOSE_GRACE_MS,
+  EmbeddedSigningPanel,
+  isSigningComplete,
+  outcomeFromUrl,
+} from "./EmbeddedSigningPanel";
 import {
   ConditionDefinitionView,
   syntheticSignerEmail,
@@ -273,11 +297,55 @@ describe("EmbeddedSigningPanel — outcomes", () => {
     expect(webview.close).toHaveBeenCalled();
   });
 
+  it("treats a signing window closed by hand as an abandoned ceremony", async () => {
+    // No redirect happens when the officer closes the window, so no
+    // `esign:embedded_complete` is ever emitted — without the close listener
+    // the panel would wait on an event that is not coming.
+    await mountAndOpen();
+
+    await act(async () => {
+      tauri.windows[0].requestClose();
+    });
+    await waitFor(() => expect(onCancel).toHaveBeenCalledOnce(), {
+      timeout: CLOSE_GRACE_MS + 2000,
+    });
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it("lets a completion already in flight win over the window closing", async () => {
+    // The signer finishes and then closes the window themselves: the redirect
+    // has fired, so a signature exists. Reading the close as a cancellation
+    // would leave that signature uncollected until the next 30-second poll.
+    await mountAndOpen();
+
+    await act(async () => {
+      tauri.windows[0].requestClose();
+    });
+    await emit("signing_complete");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, CLOSE_GRACE_MS + 50));
+    });
+
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("drops the close subscription once the ceremony resolves", async () => {
+    await mountAndOpen();
+    const webview = tauri.windows[0];
+    await emit("signing_complete");
+
+    // `close()` raises close-requested in Tauri; a live subscription would fire
+    // the grace timer against an envelope already handed to the pipeline.
+    expect(webview.closeUnlisten).toHaveBeenCalled();
+  });
+
   it("unsubscribes on unmount so a later event cannot resolve a dead panel", async () => {
     const { unmount } = await mountAndOpen();
     unmount();
 
     expect(tauri.unlisten).toHaveBeenCalled();
+    expect(tauri.windows[0].closeUnlisten).toHaveBeenCalled();
     expect(tauri.windows[0].close).toHaveBeenCalled();
   });
 });

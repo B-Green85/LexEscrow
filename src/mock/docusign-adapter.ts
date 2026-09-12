@@ -138,7 +138,7 @@ export function startDocuSignAdapter(port: number = DEFAULT_PORT): Server {
         log(`views/recipient ${envelopeId} → 404`);
         return send(404, { errorCode: "ENVELOPE_DOES_NOT_EXIST" });
       }
-      const signingUrl = `http://localhost:55432/esign-complete?event=signing_complete&envelopeId=${encodeURIComponent(
+      const signingUrl = `http://127.0.0.1:55432/esign-complete?event=signing_complete&envelopeId=${encodeURIComponent(
         envelopeId,
       )}`;
       log(`views/recipient ${envelopeId} → ${signingUrl}`);

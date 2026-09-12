@@ -49,6 +49,25 @@ const WEBVIEW_OPTIONS = {
 
 type Phase = "loading" | "waiting" | "error";
 
+/** The slice of Tauri's `WebviewWindow` this panel actually drives. */
+interface SigningWindow {
+  close: () => Promise<void>;
+  onCloseRequested: (handler: () => void) => Promise<Unlisten>;
+}
+
+/**
+ * How long a closed signing window waits for a completion event before the
+ * ceremony is read as abandoned.
+ *
+ * A signer who finishes and then closes the window themselves closes it
+ * *after* DocuSign has already redirected, so a completion may be in flight at
+ * that moment. Settling the close immediately would record a collected
+ * signature as a cancellation. The delay is imperceptible to the officer — the
+ * panel is closing either way — and costs nothing when the ceremony really was
+ * abandoned.
+ */
+export const CLOSE_GRACE_MS = 750;
+
 /**
  * Did this outcome collect a signature?
  *
@@ -94,10 +113,24 @@ export function EmbeddedSigningPanel({
   // Refs, not state: these are teardown handles the effect must reach without
   // re-running, and re-rendering on their arrival would tear down the ceremony
   // it just opened.
-  const webviewRef = useRef<{ close: () => Promise<void> } | null>(null);
+  const webviewRef = useRef<SigningWindow | null>(null);
   const unlistenRef = useRef<Unlisten | null>(null);
+  const closeUnlistenRef = useRef<Unlisten | null>(null);
+  const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settledRef = useRef(false);
   const startedRef = useRef(false);
+
+  /** Drop every subscription and pending timer. Safe to call more than once. */
+  const releaseListeners = useCallback(() => {
+    unlistenRef.current?.();
+    unlistenRef.current = null;
+    closeUnlistenRef.current?.();
+    closeUnlistenRef.current = null;
+    if (graceTimerRef.current !== null) {
+      clearTimeout(graceTimerRef.current);
+      graceTimerRef.current = null;
+    }
+  }, []);
 
   /** Close the signing window. Safe to call more than once. */
   const closeWebview = useCallback(() => {
@@ -119,13 +152,12 @@ export function EmbeddedSigningPanel({
     (event: string) => {
       if (settledRef.current) return;
       settledRef.current = true;
-      unlistenRef.current?.();
-      unlistenRef.current = null;
+      releaseListeners();
       closeWebview();
       if (isSigningComplete(event)) onComplete(event);
       else onCancel();
     },
-    [closeWebview, onComplete, onCancel],
+    [releaseListeners, closeWebview, onComplete, onCancel],
   );
 
   useEffect(() => {
@@ -173,10 +205,29 @@ export function EmbeddedSigningPanel({
           unlistenRef.current = unlisten;
 
           const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-          webviewRef.current = new WebviewWindow(WEBVIEW_LABEL, {
+          const webview: SigningWindow = new WebviewWindow(WEBVIEW_LABEL, {
             url: signingUrl,
             ...WEBVIEW_OPTIONS,
           });
+          webviewRef.current = webview;
+
+          // A window closed by hand never redirects, so no
+          // `esign:embedded_complete` is coming — without this the panel would
+          // wait on an event that will never arrive. `close()` raises this too,
+          // which is why the grace timer checks whether the ceremony already
+          // settled before treating the close as an abandonment.
+          const closeUnlisten = await webview.onCloseRequested(() => {
+            if (settledRef.current || graceTimerRef.current !== null) return;
+            graceTimerRef.current = setTimeout(() => {
+              graceTimerRef.current = null;
+              settle("cancel");
+            }, CLOSE_GRACE_MS);
+          });
+          if (cancelled) {
+            closeUnlisten();
+            return;
+          }
+          closeUnlistenRef.current = closeUnlisten;
         } else {
           // No desktop shell: open a tab and take the outcome from the URL if
           // it carries one (demo mode), since no loopback listener is running.
@@ -201,8 +252,7 @@ export function EmbeddedSigningPanel({
 
     return () => {
       cancelled = true;
-      unlistenRef.current?.();
-      unlistenRef.current = null;
+      releaseListeners();
       closeWebview();
     };
     // Identity is fixed for the lifetime of a mounted panel — a different
