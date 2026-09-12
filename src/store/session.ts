@@ -169,6 +169,27 @@ export interface BatchHydration {
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
 
 /**
+ * DEMO FALLBACK — replace with real party wallet input in V2.
+ *
+ * Extraction defaults an absent wallet to the zero address (`ZERO_ADDR` above,
+ * and the same default on `parsedRetainerSchema`), and Clio intake carries no
+ * wallet at all — so a document that never spelled one out reaches settlement
+ * with `address(0)` for a recipient. `RetainerRelease.directSettle` rejects
+ * that with `ZeroAddress()` before it transfers any USDC, which surfaces as a
+ * revert at the last step of the run. Until the officer can enter the real
+ * party wallets (see V2 note at the settlement call site), an unset recipient
+ * falls back to the deployer wallet so the demo settles end to end.
+ */
+const DEMO_FALLBACK_WALLET = "0x0b370090317443afFa8124Af45b7C2FeB5a01810";
+
+/** The wallet as extracted, or the demo fallback when nothing usable is set. */
+function settlementRecipient(wallet: string | null | undefined): string {
+  const w = wallet?.trim();
+  if (!w || w.toLowerCase() === ZERO_ADDR) return DEMO_FALLBACK_WALLET;
+  return w;
+}
+
+/**
  * Provider stand-in for manually entered payloads. LexGuard cannot ask a human
  * to "re-extract" one field mid-pipeline, so `correct` returns null — any
  * discrepancy surfaces to the reviewer as an escalation instead of being
@@ -2639,10 +2660,15 @@ export const useSession = create<SessionState>((set, get) => {
       // The hash below is real by construction — on any failure the workflow
       // stops here and says so. Nothing is ever fabricated to look settled.
       let txHash: string;
+      // DEMO FALLBACK — replace with real party wallet input in V2. Resolved
+      // once, above the try, so the completion log below records the wallets
+      // the money actually moved to rather than the unset payload fields.
+      const clientWallet = settlementRecipient(payload.clientWallet);
+      const firmWallet = settlementRecipient(payload.lawFirmWallet);
       try {
         const settled = await backend.executeDirectSettle({
-          clientWallet: payload.clientWallet,
-          firmWallet: payload.lawFirmWallet,
+          clientWallet,
+          firmWallet,
           // USD cents → USDC base units (6 decimals): 1¢ = 10,000 units.
           // Exact integer math in bigint; crosses IPC as a decimal string.
           clientAmountUsdc: (clientCents * 10_000n).toString(),
@@ -2678,8 +2704,8 @@ export const useSession = create<SessionState>((set, get) => {
         client_amount_usdc: Number(clientCents) / 100,
         firm_amount_usdc: Number(firmCents) / 100,
         tx_hash: txHash,
-        client_wallet: payload.clientWallet,
-        firm_wallet: payload.lawFirmWallet,
+        client_wallet: clientWallet,
+        firm_wallet: firmWallet,
       });
       await log("settlement_on_chain", { document_hash: artifact.hash, tx_hash: txHash });
 
