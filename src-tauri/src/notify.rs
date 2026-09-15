@@ -101,6 +101,10 @@ async fn send_email(req: &NotifyRequest, vault_smtp: Option<SmtpEntry>) -> Notif
             None => return skipped,
         },
     };
+    eprintln!(
+        "SMTP: host={host} port={port} username={}",
+        if username.is_empty() { "<unset>" } else { &username }
+    );
     let firm = env_or("LAW_FIRM_NAME", "Your Law Firm");
     let amount = format_usd(req.amount_cents);
     let reference = short_ref(&req.reference);
@@ -134,7 +138,7 @@ async fn send_email(req: &NotifyRequest, vault_smtp: Option<SmtpEntry>) -> Notif
         Err(_) => return NotifyResult::new("email", &req.to, "failed"),
     };
 
-    let mut builder = match AsyncSmtpTransport::<Tokio1Executor>::relay(&host) {
+    let mut builder = match AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host) {
         Ok(b) => b.port(port),
         Err(_) => return NotifyResult::new("email", &req.to, "failed"),
     };
