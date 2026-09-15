@@ -374,10 +374,26 @@ const extractResponseText = (body: string): string => {
 	return block.text
 }
 
-/** Render a zod failure as paths + constraint messages. Field values never appear. */
+/**
+ * Render a zod failure as paths + constraint codes. Field values never appear.
+ *
+ * `invalid_enum_value` is the one code whose default message quotes the value it
+ * rejected ("Invalid enum value. Expected 'legal' | … , received 'x'"). These
+ * strings go into thrown errors, and a throw leaves the enclave — so letting
+ * that message through would carry caller input across the confidentiality
+ * boundary into execution logs. It reports its bare code instead, on the same
+ * principle as the AI-provider failure below, which reports a status code and
+ * never the response body. Every other code's message describes a constraint
+ * rather than a value, so it passes through unchanged.
+ */
 const describeIssues = (error: z.ZodError): string =>
 	error.issues
-		.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+		.map((issue) => {
+			const path = issue.path.join('.') || '<root>'
+			return issue.code === z.ZodIssueCode.invalid_enum_value
+				? `${path}: ${issue.code}`
+				: `${path}: ${issue.message}`
+		})
 		.join('; ')
 
 // ─── TEE HTTP Callback ──────────────────────────────────────
@@ -498,10 +514,6 @@ export const onHttpTrigger = (runtime: TeeRuntime<Config>, payload: HTTPPayload)
 		timestamp: enclaveTimestamp,
 	})
 	const hmacSeal = hmacSha256(hmacKey, sealInput)
-
-	// ⚠️ Logs leave the confidentiality boundary. Exactly one, carrying no data.
-	// REMOVE BEFORE PRODUCTION DEPLOY
-	runtime.log('LexEscrow enclave validation complete')
 
 	// ── Step 6: Cross back to the DON for consensus ──
 	// `usingTheDons()` returns a regular `Runtime`. Everything passed into a
