@@ -1,3 +1,14 @@
+# ── Secrets & environment ─────────────────────────────────────
+# `*.env` alone only catches `.env` and `foo.env`; it misses `.env.local`,
+# `.env.staging` and friends, which is where a second set of real CRE secrets
+# would land. Both forms are listed, with the example file exempted after them
+# so the negation wins.
 *.env
+.env
+.env.*
+!.env.example
+secrets.yaml
+!secrets.yaml.example
+
 node_modules/
 bun.lock

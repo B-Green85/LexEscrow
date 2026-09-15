@@ -37,6 +37,20 @@ cre/secrets.yaml
 !**/config.json.example
 .secrets
 
+# ── Private keys & certificates ───────────────────────────────
+# Blanket-deny key material by extension so a real DocuSign RSA key, a deployer
+# key export or a TLS cert dropped into the tree is never stageable by accident.
+*.pem
+*.key
+*.p12
+*.pfx
+*private*
+# One deliberate exception: a throwaway 2048-bit RSA key generated solely for
+# the DocuSign unit tests (see the comment at src-tauri/src/docusign.rs:777).
+# `include_str!` resolves it at compile time, so a clone without it fails to
+# build the test target — it has to stay tracked.
+!src-tauri/test-fixtures/docusign_test_key.pem
+
 # ── Reference implementations (kept locally as reference only) ────
 cre-templates-main/
 reference/
@@ -74,3 +88,7 @@ Assets/LexEscrow.png
 Assets/LexEscrow_ICON.png
 cre-templates-new/
 cre-templates-new/
+
+
+.cre_build_tmp.js
+binary.wasm.br.b64
