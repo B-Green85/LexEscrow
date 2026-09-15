@@ -86,6 +86,7 @@ import {
 } from "./EmbeddedSigningPanel";
 import {
   ConditionDefinitionView,
+  deriveSigners,
   syntheticSignerEmail,
   type ConditionDefinitionViewProps,
 } from "../screens/ConditionDefinition";
@@ -433,7 +434,9 @@ describe("EmbeddedSigningPanel — StrictMode double-invoked effect", () => {
 
   it("opens the ceremony from a Sign Here click", async () => {
     const props: ConditionDefinitionViewProps = {
-      ...conditionProps("legal", "in_app"),
+      // The envelope must already exist and the signer's turn must have come —
+      // "Sign Here" is inert otherwise, which is the point of the gating.
+      ...sentProps("legal", "in_app", 2),
       onSignInApp: async (signer) => ({
         envelopeId: ENVELOPE_ID,
         clientUserId: SIGNER.clientUserId,
@@ -562,43 +565,167 @@ function conditionProps(
     barActive: true,
     cannaVerifyConditions: null,
     cannaVerifyRunning: false,
-    onSendForSignature: async () => {},
+    onSendForSignature: async () => new Map(),
     onRunCannaVerify: () => {},
     onProceed: () => {},
     onSignInApp: async () => null,
   };
 }
 
+/**
+ * `conditionProps`, advanced to "the envelope has been sent".
+ *
+ * `activeOrder` is the routing order currently holding the document, which is
+ * what decides whether an in-app party may open their ceremony: lower orders
+ * read as completed, the active order as `sent`, higher ones as `created` —
+ * DocuSign's waiting state.
+ */
+function sentProps(
+  cls: AssetClass,
+  route: "email" | "in_app",
+  activeOrder: number,
+): ConditionDefinitionViewProps {
+  const base = conditionProps(cls, route);
+  const signers = deriveSigners(cls, base.anchors, base.rawAnchors).map((sg) =>
+    sg.mode === "in_app" ? { ...sg, clientUserId: `officer-${sg.email}` } : sg,
+  );
+  return {
+    ...base,
+    eSignEnvelopes: [
+      {
+        envelopeId: ENVELOPE_ID,
+        sessionId: "wf-1",
+        documentLabel: "agreement.pdf",
+        signers,
+        status: "sent",
+        sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
+      },
+    ],
+    recipientStatuses: {
+      [ENVELOPE_ID]: signers.map((sg) => ({
+        email: sg.email,
+        routingOrder: sg.routingOrder,
+        clientUserId: sg.clientUserId,
+        status:
+          sg.routingOrder < activeOrder
+            ? "completed"
+            : sg.routingOrder === activeOrder
+              ? "sent"
+              : "created",
+      })),
+    },
+  };
+}
+
 describe("ConditionDefinition — signer routes (single flow, no toggle)", () => {
-  it("shows Sign Here — and no Send Email — for an in-app signer", () => {
-    const html = renderToString(createElement(ConditionDefinitionView, conditionProps("legal", "in_app")));
+  it("shows Sign Here for an in-app signer, enabled once their turn arrives", () => {
+    const html = renderToString(
+      createElement(ConditionDefinitionView, sentProps("legal", "in_app", 2)),
+    );
 
     expect(html).toContain("Sign Here");
     // Named for the signer it acts on, so two signers cannot share one button.
     expect(html).toContain("Sign in LexEscrow as");
-    expect(html).not.toContain("Send Email");
   });
 
-  it("shows Send Email — and no Sign Here — for an email signer, plus the bulk drawer", () => {
-    const html = renderToString(createElement(ConditionDefinitionView, conditionProps("legal", "email")));
+  it("holds Sign Here disabled while an earlier routing order still has the document", () => {
+    // Both parties route in-app here, so they share routing order 2 — order 1
+    // is the emailed party on a mixed envelope. Nobody at order 2 may sign yet.
+    const html = renderToString(
+      createElement(ConditionDefinitionView, sentProps("legal", "in_app", 1)),
+    );
 
-    expect(html).toContain("Send Email");
+    expect(html).toContain("Sign Here");
+    expect(html).toContain("disabled");
+    expect(html).toContain("Available once the other parties have signed.");
+  });
+
+  it("gives an email signer a status, not a second way to send", () => {
+    const html = renderToString(
+      createElement(ConditionDefinitionView, conditionProps("legal", "email")),
+    );
+
+    // One dispatch control for the whole envelope — no per-row send.
+    expect(html).not.toContain("Send Email");
     expect(html).toContain("Send for Signature");
+    expect(html).toContain("Not sent yet");
     expect(html).not.toContain("Sign Here");
   });
 
-  it("shows exactly one action per signer — no per-signer toggle", () => {
-    const emailHtml = renderToString(
+  it("sends every signer on one envelope, whatever their route", () => {
+    const html = renderToString(
       createElement(ConditionDefinitionView, conditionProps("real_estate", "email")),
     );
-    expect(emailHtml.split("Send Email").length - 1).toBe(2); // buyer + seller
-    expect(emailHtml).not.toContain("Sign Here");
+    // Buyer + seller, dispatched together rather than one envelope each.
+    expect(html).toContain("Send for Signature (2 signers)");
+    expect(html).not.toContain("Sign Here");
 
     const inAppHtml = renderToString(
-      createElement(ConditionDefinitionView, conditionProps("real_estate", "in_app")),
+      createElement(ConditionDefinitionView, sentProps("real_estate", "in_app", 2)),
     );
     expect(inAppHtml.split("Sign Here").length - 1).toBe(2);
-    expect(inAppHtml).not.toContain("Send Email");
+  });
+
+  it("reports each email signer's own routing state once sent", () => {
+    // Order 1 completed, order 2 current: on a same-order fixture that is
+    // every signer completed — the point is the row reads DocuSign's answer
+    // for that recipient rather than the envelope's.
+    const html = renderToString(
+      createElement(ConditionDefinitionView, sentProps("legal", "email", 2)),
+    );
+    expect(html).toContain("✅ Signed");
+    expect(html).not.toContain("Not sent yet");
+  });
+
+  it("badges only the in-app party on a completed mixed envelope", () => {
+    // The regression this guards: one envelope now carries both routes, so
+    // taking every signer on a completed envelope would badge the emailed
+    // client as having "signed in app" — the wrong claim about how their
+    // signature was collected, on the screen an auditor reads to find out.
+    // Genuinely mixed: the client by email, the firm in-app — which is the
+    // only shape where the two can be confused for one another.
+    const base = conditionProps("legal", "email");
+    const rawAnchors: Record<string, string> = {
+      ...base.rawAnchors,
+      lawFirmEmail: "",
+      lawFirmSignMode: "in_app",
+    };
+    const firmName = rawAnchors.lawFirmName;
+    const html = renderToString(
+      createElement(ConditionDefinitionView, {
+        ...base,
+        rawAnchors,
+        eSignEnvelopes: [
+          {
+            envelopeId: ENVELOPE_ID,
+            sessionId: "wf-1",
+            documentLabel: "agreement.pdf",
+            signers: [
+              {
+                name: "Brandon Green",
+                email: "clientemail@example.com",
+                role: "Client",
+                routingOrder: 1,
+              },
+              {
+                name: firmName,
+                email: syntheticSignerEmail(firmName, "Law firm"),
+                role: "Law firm",
+                routingOrder: 2,
+                clientUserId: "officer@firm.test-bg-law",
+              },
+            ],
+            status: "completed",
+            sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
+          },
+        ],
+      }),
+    );
+
+    // Exactly one badge — the embedded party's. The emailed client keeps a
+    // plain signature status instead.
+    expect(html.split("✅ Signed in app").length - 1).toBe(1);
+    expect(html).toContain("clientemail@example.com");
   });
 
   it("replaces the action with a Signed in app badge once the in-app envelope completes", () => {
@@ -617,13 +744,12 @@ describe("ConditionDefinition — signer routes (single flow, no toggle)", () =>
                 name: clientName,
                 email: syntheticSignerEmail(clientName, "Client"),
                 role: "Client",
-                routingOrder: 1,
+                routingOrder: 2, // in-app signers route after the email signers
+                clientUserId: "officer@firm.test-client",
               },
             ],
             status: "completed",
             sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
-            embeddedSigning: true,
-            embeddedSignerName: clientName,
           },
         ],
       }),
@@ -648,12 +774,12 @@ describe("ConditionDefinition — signer routes (single flow, no toggle)", () =>
                 name: clientName,
                 email: syntheticSignerEmail(clientName, "Client"),
                 role: "Client",
-                routingOrder: 1,
+                routingOrder: 2, // in-app signers route after the email signers
+                clientUserId: "officer@firm.test-client",
               },
             ],
             status: "sent",
             sentAt: new Date("2026-07-18T12:00:00Z").toISOString(),
-            embeddedSigning: true,
           },
         ],
       }),

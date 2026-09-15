@@ -5,7 +5,14 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockDocuSignProvider, DEMO_CERTIFICATE_TEXT, DEMO_ENVELOPE_PREFIX } from "./mock-docusign-provider";
-import { isTerminal, toESignStatus, type ESignSigner } from "./types";
+import {
+  embeddedClientUserId,
+  isEmbeddedSigner,
+  isTerminal,
+  toESignStatus,
+  WAITING_FOR_OTHER_SIGNERS,
+  type ESignSigner,
+} from "./types";
 import { signersMatchAnchors, useSession } from "../../store/session";
 import { resolveESignProvider, resetMockESignProvider } from "./index";
 import { deriveSigners } from "../../screens/ConditionDefinition";
@@ -247,7 +254,8 @@ describe("deriveSigners", () => {
       expect(s.name.trim()).not.toBe("");
       expect(s.email).toMatch(/@/);
       expect(s.role.trim()).not.toBe("");
-      expect(s.routingOrder).toBe(1);
+      // Email signers route first, in-app signers second (§23 signing order).
+      expect(s.routingOrder).toBe(s.mode === "email" ? 1 : 2);
     }
   });
 
@@ -416,5 +424,169 @@ describe("handleESignCompletion", () => {
     await expect(useSession.getState().handleESignCompletion(id)).resolves.toBeUndefined();
     expect(useSession.getState().error).toMatch(/completion pipeline failed/i);
     expect(current(id)!.certificateHash).toBeUndefined();
+  });
+});
+
+// ── One envelope, both routes (spec §22, §23) ────────────────────────────────
+
+describe("sendForSignature — one envelope carrying both routes", () => {
+  const anchors: TrustAnchors = {
+    attorneyBarNumber: "123456",
+    state: "California",
+    clientFullLegalName: "Brandon Green",
+    clientEmail: "brandon@example.com",
+  };
+
+  /** The mixed pair the unified flow exists for: one emailed, one in-app. */
+  const MIXED: ESignSigner[] = [
+    {
+      name: "Brandon Green",
+      email: "brandon@example.com",
+      role: "Client",
+      routingOrder: 1,
+      mode: "email",
+    },
+    {
+      name: "BG Law",
+      email: "bg-law.law-firm@in-app.lexescrow.local",
+      role: "Law firm",
+      routingOrder: 2,
+      mode: "in_app",
+    },
+  ];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-18T12:00:00Z"));
+    resetMockESignProvider();
+    useSession.getState().reset();
+    useSession.setState({
+      sessionId: "wf-unified",
+      operator: "officer@firm.test",
+      anchors,
+      rawAnchors: { clientFullLegalName: "Brandon Green", lawFirmName: "BG Law" },
+      // The vault is not what these cases are about.
+      storeBackend: "os_keychain",
+      file: new File([new Uint8Array([1, 2, 3])], "agreement.pdf"),
+      error: null,
+    });
+  });
+
+  afterEach(() => {
+    useSession.getState().stopESignPolling();
+    vi.useRealTimers();
+  });
+
+  const send = () =>
+    useSession.getState().sendForSignature("agreement.pdf", MIXED, "Subject", "Message");
+
+  it("puts both signers on a single envelope", async () => {
+    const targets = await send();
+
+    const envelopes = useSession.getState().eSignEnvelopes;
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0].signers.map((s) => s.email)).toEqual([
+      "brandon@example.com",
+      "bg-law.law-firm@in-app.lexescrow.local",
+    ]);
+    expect(targets.size).toBe(1);
+  });
+
+  it("marks only the in-app signer embedded, with the id DocuSign will be asked for", async () => {
+    await send();
+
+    const [emailSigner, inAppSigner] = useSession.getState().eSignEnvelopes[0].signers;
+    // The email signer must carry no clientUserId — its absence is what makes
+    // DocuSign actually deliver their email.
+    expect(isEmbeddedSigner(emailSigner)).toBe(false);
+    expect(emailSigner.clientUserId).toBeUndefined();
+
+    expect(isEmbeddedSigner(inAppSigner)).toBe(true);
+    expect(inAppSigner.clientUserId).toBe(
+      embeddedClientUserId("officer@firm.test", "bg-law.law-firm@in-app.lexescrow.local"),
+    );
+  });
+
+  it("returns a target whose envelope is the one that was raised", async () => {
+    const targets = await send();
+    const target = targets.get("bg-law.law-firm@in-app.lexescrow.local")!;
+
+    expect(target).toBeDefined();
+    expect(target.envelopeId).toBe(useSession.getState().eSignEnvelopes[0].envelopeId);
+    expect(target.clientUserId).toBe(
+      embeddedClientUserId("officer@firm.test", "bg-law.law-firm@in-app.lexescrow.local"),
+    );
+  });
+
+  it("refuses the in-app ceremony in plain words while the email signer still has it", async () => {
+    await send();
+
+    // Routing order 1 holds the document, so the order-2 recipient is not yet
+    // reachable — DocuSign answers RECIPIENT_NOT_IN_SEQUENCE.
+    const opened = await useSession.getState().signInApp(MIXED[1]);
+
+    expect(opened).toBeNull();
+    expect(useSession.getState().error).toBe(WAITING_FOR_OTHER_SIGNERS);
+    // The raw 400 body must not reach the officer.
+    expect(useSession.getState().error).not.toMatch(/RECIPIENT_NOT_IN_SEQUENCE|HTTP 400/);
+  });
+
+  it("opens the in-app ceremony once the routing order reaches it", async () => {
+    await send();
+    // The mock advances routing with the same compressed clock the demo uses.
+    vi.advanceTimersByTime(15_000);
+
+    const opened = await useSession.getState().signInApp(MIXED[1]);
+
+    expect(opened).not.toBeNull();
+    expect(opened!.envelopeId).toBe(useSession.getState().eSignEnvelopes[0].envelopeId);
+    expect(useSession.getState().error).toBeNull();
+  });
+
+  it("will not open a ceremony for a signer who is on no envelope", async () => {
+    const opened = await useSession.getState().signInApp(MIXED[1]);
+
+    expect(opened).toBeNull();
+    expect(useSession.getState().error).toMatch(/send the document for signature first/i);
+  });
+
+  it("reports routing state per recipient, not per envelope", async () => {
+    await send();
+    await useSession.getState().refreshRecipientStatuses();
+
+    const envelopeId = useSession.getState().eSignEnvelopes[0].envelopeId;
+    const recipients = useSession.getState().recipientStatuses[envelopeId];
+
+    // Same envelope, same envelope-level status — different recipient states.
+    expect(recipients.find((r) => r.routingOrder === 1)!.status).toBe("sent");
+    expect(recipients.find((r) => r.routingOrder === 2)!.status).toBe("created");
+  });
+
+  it("anchor-matches every signer on the one envelope, not one route at a time", async () => {
+    await send();
+    const envelopeId = useSession.getState().eSignEnvelopes[0].envelopeId;
+
+    await useSession.getState().handleESignCompletion(envelopeId);
+
+    const envelope = useSession.getState().eSignEnvelopes[0];
+    // One envelope → one certificate, one on-chain anchor, one verdict covering
+    // both parties rather than a separate partial match per route.
+    expect(useSession.getState().eSignEnvelopes).toHaveLength(1);
+    expect(envelope.certificateHash).toMatch(/^sha256:/);
+    expect(envelope.onChainTx).toBeTruthy();
+    expect(envelope.signers).toHaveLength(2);
+    expect(envelope.anchorMatch).toBe(true);
+  });
+
+  it("fails the anchor match when any one signer is not a trust anchor", async () => {
+    const stranger: ESignSigner = { ...MIXED[1], name: "Mallory Unknown" };
+    await useSession
+      .getState()
+      .sendForSignature("agreement.pdf", [MIXED[0], stranger], "Subject", "Message");
+    const envelopeId = useSession.getState().eSignEnvelopes[0].envelopeId;
+
+    await useSession.getState().handleESignCompletion(envelopeId);
+
+    expect(useSession.getState().eSignEnvelopes[0].anchorMatch).toBe(false);
   });
 });

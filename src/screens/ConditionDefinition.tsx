@@ -21,9 +21,11 @@ import { useSession } from "../store/session";
 import { descriptorFor, ASSET_CLASSES, EMAIL_RE, type AssetClass } from "../lib/assetClasses";
 import { CannaVerifyConditions } from "../components/CannaVerifyConditions";
 import { EmbeddedSigningPanel } from "../components/EmbeddedSigningPanel";
+import { isEmbeddedSigner, isRecipientActive } from "../lib/esign";
 import type {
   EmbeddedSigningTarget,
   ESignEnvelope,
+  ESignRecipientStatus,
   ESignSigner,
   ESignStatus,
 } from "../lib/esign";
@@ -82,9 +84,10 @@ export function deriveSigners(
     const key = email.trim().toLowerCase();
     if (!name.trim() || !key || seen.has(key)) return;
     seen.add(key);
-    // Equal routing order → DocuSign sends to everyone at once. Escrow
-    // signatures are peers, not a chain of approvals.
-    out.push({ name: name.trim(), email: email.trim(), role, routingOrder: 1, mode });
+    // Email signers route first, in-app signers second: DocuSign holds the
+    // in-app recipients until every email signer has completed, so the officer
+    // opening the ceremony sees the client's signature already on the document.
+    out.push({ name: name.trim(), email: email.trim(), role, routingOrder: mode === "email" ? 1 : 2, mode });
   };
 
   const route = (name: string, role: string, email: string, inApp: boolean) => {
@@ -185,15 +188,17 @@ function SignerRow({
   busy,
   preparing,
   canAct,
-  onSendEmail,
+  emailState,
   onSignHere,
 }: {
   signer: RequiredSigner;
   signedInApp: boolean;
   busy: boolean;
   preparing: boolean;
+  /** The in-app ceremony can be opened: on an envelope, and their turn now. */
   canAct: boolean;
-  onSendEmail: () => void;
+  /** What an email party's row reports in place of a control. */
+  emailState: string;
   onSignHere: () => void;
 }) {
   const isEmail = signer.mode === "email";
@@ -209,20 +214,20 @@ function SignerRow({
       {signedInApp ? (
         <span className="badge badge-emerald">✅ Signed in app</span>
       ) : isEmail ? (
-        <button
-          className="btn btn-secondary btn-sm shrink-0"
-          disabled={!canAct || busy}
-          onClick={onSendEmail}
-          title={`Email a DocuSign envelope to ${signer.email}`}
-        >
-          Send Email
-        </button>
+        // No control of its own. Both parties are dispatched by the single
+        // "Send for Signature" below, so this row reports where DocuSign has
+        // got to with them rather than offering a second way to send.
+        <span className="shrink-0 text-xs text-text-muted">{emailState}</span>
       ) : (
         <button
           className="btn btn-primary btn-sm shrink-0"
           disabled={!canAct || busy || preparing}
           onClick={onSignHere}
-          title={`Sign in LexEscrow as ${signer.name} — no email sent`}
+          title={
+            canAct
+              ? `Sign in LexEscrow as ${signer.name} — no email sent`
+              : "Available once the other parties have signed."
+          }
         >
           {preparing ? "Opening…" : "Sign Here"}
         </button>
@@ -380,19 +385,22 @@ export interface ConditionDefinitionViewProps {
   barActive: boolean | null;
   cannaVerifyConditions: CannaVerifyConditionsData | null;
   cannaVerifyRunning: boolean;
+  /** Per-recipient routing state by envelope id, as the store polls it. */
+  recipientStatuses?: Record<string, ESignRecipientStatus[]>;
   onSendForSignature: (
     documentLabel: string,
     signers: ESignSigner[],
     subject: string,
     message: string,
-  ) => Promise<void>;
+  ) => Promise<Map<string, EmbeddedSigningTarget>>;
   onRunCannaVerify: () => void;
   onProceed: () => void;
   /**
-   * Raise an embedded envelope for one internal signer and return what the
-   * signing panel needs. Optional so the view stays renderable — and testable —
-   * without the store; absent, "Sign Here" is inert rather than missing, since
-   * hiding the route entirely would misrepresent what the screen supports.
+   * Open the in-app ceremony for a signer already on the envelope and return
+   * what the signing panel needs. Optional so the view stays renderable — and
+   * testable — without the store; absent, "Sign Here" is inert rather than
+   * missing, since hiding the route entirely would misrepresent what the
+   * screen supports.
    */
   onSignInApp?: (signer: ESignSigner) => Promise<EmbeddedSigningTarget | null>;
   /** In-app signature collected — hand off to the certificate pipeline. */
@@ -412,6 +420,7 @@ export function ConditionDefinition() {
     rawAnchors,
     eSignEnvelopes,
     eSignPolling,
+    recipientStatuses,
     sendForSignature,
     busy,
     error,
@@ -435,6 +444,7 @@ export function ConditionDefinition() {
       rawAnchors={rawAnchors}
       eSignEnvelopes={eSignEnvelopes}
       eSignPolling={eSignPolling}
+      recipientStatuses={recipientStatuses}
       busy={busy}
       error={error}
       barActive={barActive}
@@ -443,7 +453,7 @@ export function ConditionDefinition() {
       onSendForSignature={sendForSignature}
       onRunCannaVerify={() => void runCannaVerify()}
       onProceed={() => navigateToEscrowMonitor()}
-      onSignInApp={(signer) => signInApp(artifact?.filename ?? "Escrow document", signer)}
+      onSignInApp={(signer) => signInApp(signer)}
       onEmbeddedSigningComplete={(envelopeId, event) =>
         void completeEmbeddedSigning(envelopeId, event)
       }
@@ -461,6 +471,7 @@ export function ConditionDefinitionView({
   rawAnchors,
   eSignEnvelopes,
   eSignPolling,
+  recipientStatuses = {},
   busy,
   error,
   barActive,
@@ -490,16 +501,87 @@ export function ConditionDefinitionView({
    * Who has already signed in-app. Derived from the envelopes rather than
    * tracked locally, so the badge reflects a completed certificate pipeline
    * and not merely a ceremony the officer walked through.
+   *
+   * The embedded recipients are picked out individually. One envelope now
+   * carries both routes, so taking every signer on a completed envelope would
+   * badge the emailed client as having "signed in app" — which is the wrong
+   * claim about how their signature was collected, on the one screen an
+   * auditor reads to find out.
    */
   const signedInApp = useMemo(
     () =>
       new Set(
         eSignEnvelopes
-          .filter((e) => e.embeddedSigning && e.status === "completed")
-          .flatMap((e) => e.signers.map((s) => s.email.trim().toLowerCase())),
+          .filter((e) => e.status === "completed")
+          .flatMap((e) =>
+            e.signers.filter(isEmbeddedSigner).map((s) => s.email.trim().toLowerCase()),
+          ),
       ),
     [eSignEnvelopes],
   );
+
+  /** Every recipient's routing state, keyed by lowercased email. */
+  const recipientByEmail = useMemo(() => {
+    const byEmail = new Map<string, ESignRecipientStatus>();
+    for (const list of Object.values(recipientStatuses)) {
+      for (const r of list) byEmail.set(r.email.trim().toLowerCase(), r);
+    }
+    return byEmail;
+  }, [recipientStatuses]);
+
+  /** Parties who are on a raised envelope, whatever their route. */
+  const onEnvelope = useMemo(
+    () =>
+      new Set(
+        eSignEnvelopes.flatMap((e) => e.signers.map((s) => s.email.trim().toLowerCase())),
+      ),
+    [eSignEnvelopes],
+  );
+
+  /**
+   * This party may open the in-app ceremony now.
+   *
+   * Two conditions, and the second is the new one: they must be on an
+   * envelope, and their routing turn must have arrived. DocuSign refuses a
+   * recipient view for a signer still waiting behind an email signer, so an
+   * ungated button would offer a ceremony that cannot open.
+   *
+   * A provider that reports no routing state leaves the control enabled rather
+   * than stuck — the refusal is still caught when the ceremony is requested.
+   */
+  const canSignInApp = (signer: ESignSigner): boolean => {
+    const key = signer.email.trim().toLowerCase();
+    if (!onEnvelope.has(key)) return false;
+    const recipient = recipientByEmail.get(key);
+    return recipient ? isRecipientActive(recipient) : true;
+  };
+
+  /** Parties whose envelope has completed — every signature on it is in. */
+  const onCompletedEnvelope = useMemo(
+    () =>
+      new Set(
+        eSignEnvelopes
+          .filter((e) => e.status === "completed")
+          .flatMap((e) => e.signers.map((sg) => sg.email.trim().toLowerCase())),
+      ),
+    [eSignEnvelopes],
+  );
+
+  /** What an email party's row reports, now that it has no button of its own. */
+  const emailSignerState = (signer: ESignSigner): string => {
+    const key = signer.email.trim().toLowerCase();
+    if (!onEnvelope.has(key)) return "Not sent yet";
+    // A completed envelope is the authoritative answer for everyone on it.
+    // Recipient polling stops at that point, so the last per-recipient read
+    // can still say "sent" — reporting that here would understate a signature
+    // the certificate already covers.
+    if (onCompletedEnvelope.has(key)) return "✅ Signed";
+    const status = (recipientByEmail.get(key)?.status ?? "").trim().toLowerCase();
+    if (status === "completed") return "✅ Signed";
+    if (status === "declined") return "Declined";
+    if (status === "created") return "Waiting their turn";
+    return "Awaiting signature";
+  };
 
   const signHere = async (signer: ESignSigner) => {
     if (!onSignInApp) return;
@@ -529,11 +611,13 @@ export function ConditionDefinitionView({
    * proceed gate takes this as an alternative.
    */
   const clioIntakeReady = intakeSource === "clio" && !!clioMatter;
-  // Only email-route signers are dispatched by the bulk send; in-app signers
-  // sign per-row via "Sign Here".
-  const emailSigners = useMemo(() => signers.filter((s) => s.mode === "email"), [signers]);
+  // Every signer rides one envelope — that is what lets DocuSign sequence
+  // them, and what leaves a single certificate covering all the signatures.
+  // The in-app parties are raised alongside the emailed ones and simply get no
+  // email; their ceremony opens per-row, once their routing turn arrives.
+  const alreadySent = signers.length > 0 && signers.every((sg) => onEnvelope.has(sg.email.trim().toLowerCase()));
   const send = async () => {
-    await onSendForSignature(artifact?.filename ?? "Escrow document", emailSigners, subject, message);
+    await onSendForSignature(artifact?.filename ?? "Escrow document", signers, subject, message);
     setDrawerOpen(false);
   };
 
@@ -656,28 +740,28 @@ export function ConditionDefinitionView({
                     signedInApp={signedInApp.has(s.email.trim().toLowerCase())}
                     busy={busy}
                     preparing={preparing === s.email}
-                    canAct={documentReady && (s.mode === "email" || !!onSignInApp)}
-                    onSendEmail={() =>
-                      void onSendForSignature(
-                        artifact?.filename ?? "Escrow document",
-                        [s],
-                        subject,
-                        message,
-                      )
-                    }
+                    canAct={documentReady && !!onSignInApp && canSignInApp(s)}
+                    emailState={emailSignerState(s)}
                     onSignHere={() => void signHere(s)}
                   />
                 ))}
               </ul>
 
-              {emailSigners.length > 0 &&
+              {signers.length > 0 &&
                 (!drawerOpen ? (
                   <button
                     className="btn btn-primary mt-4"
-                    disabled={!documentReady || busy}
+                    disabled={!documentReady || busy || alreadySent}
                     onClick={() => setDrawerOpen(true)}
+                    title={
+                      alreadySent
+                        ? "This document has already been sent for signature."
+                        : undefined
+                    }
                   >
-                    Send for Signature ({emailSigners.length} via email)
+                    {alreadySent
+                      ? "Sent for Signature"
+                      : `Send for Signature (${signers.length} signer${signers.length > 1 ? "s" : ""})`}
                   </button>
                 ) : (
                 <div className="mt-4 space-y-3 rounded-lg border border-app-border bg-app-input p-4">
@@ -709,7 +793,9 @@ export function ConditionDefinitionView({
                       disabled={busy || !subject.trim()}
                       onClick={() => void send()}
                     >
-                      {busy ? "Sending…" : `Send to ${emailSigners.length} signer${emailSigners.length > 1 ? "s" : ""}`}
+                      {busy
+                        ? "Sending…"
+                        : `Send to ${signers.length} signer${signers.length > 1 ? "s" : ""}`}
                     </button>
                     <button className="btn btn-secondary" onClick={() => setDrawerOpen(false)}>
                       Cancel
