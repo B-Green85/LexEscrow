@@ -22,7 +22,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isTauri } from "../lib/backend";
-import { resolveESignProvider, type EmbeddedSigningResult } from "../lib/esign";
+import {
+  describeRecipientViewError,
+  resolveESignProvider,
+  type EmbeddedSigningResult,
+} from "../lib/esign";
 
 interface Props {
   envelopeId: string;
@@ -273,7 +277,11 @@ export function EmbeddedSigningPanel({
           if (!superseded()) settle("cancel");
           return;
         }
-        setError(e instanceof Error ? e.message : String(e));
+        // The store pre-flights this same request before the panel opens, so an
+        // out-of-sequence recipient normally never gets here. It still can, if
+        // the routing order moved on in between — and a raw DocuSign 400 body
+        // is the wrong thing to meet mid-ceremony.
+        setError(describeRecipientViewError(e));
         setPhase("error");
       }
     };

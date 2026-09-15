@@ -341,25 +341,16 @@ fn embedded_client_user_id(signer: &ESignSigner) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
-/// Create and send an envelope. Returns the DocuSign envelope ID.
-pub async fn create_envelope(
-    account_id: &str,
-    base_uri: &str,
-    access_token: &str,
-    document_bytes: &[u8],
-    document_name: &str,
-    subject: &str,
-    message: &str,
-    signers: &[ESignSigner],
-) -> Result<String, String> {
-    if signers.is_empty() {
-        return Err("An envelope needs at least one signer.".into());
-    }
-    if document_bytes.is_empty() {
-        return Err("Cannot send an empty document for signature.".into());
-    }
-
-    let recipients: Vec<_> = signers
+/// Assemble the `recipients.signers` array for an envelope.
+///
+/// Recipient kind is decided per signer, not per envelope: a signer carrying a
+/// `clientUserId` is embedded (DocuSign sends them no email and a recipient
+/// view can be minted for them), one without it is an ordinary email
+/// recipient. A single envelope may freely mix the two, which is what lets one
+/// envelope carry the client at routing order 1 and the firm's in-app signer
+/// at routing order 2.
+fn build_recipients(signers: &[ESignSigner]) -> Vec<serde_json::Value> {
+    signers
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -381,7 +372,37 @@ pub async fn create_envelope(
             }
             recipient
         })
-        .collect();
+        .collect()
+}
+
+/// Per-recipient endpoint for one envelope.
+fn recipients_url(base_uri: &str, account_id: &str, envelope_id: &str) -> String {
+    format!(
+        "{}/{}/recipients",
+        envelopes_url(base_uri, account_id),
+        envelope_id
+    )
+}
+
+/// Create and send an envelope. Returns the DocuSign envelope ID.
+pub async fn create_envelope(
+    account_id: &str,
+    base_uri: &str,
+    access_token: &str,
+    document_bytes: &[u8],
+    document_name: &str,
+    subject: &str,
+    message: &str,
+    signers: &[ESignSigner],
+) -> Result<String, String> {
+    if signers.is_empty() {
+        return Err("An envelope needs at least one signer.".into());
+    }
+    if document_bytes.is_empty() {
+        return Err("Cannot send an empty document for signature.".into());
+    }
+
+    let recipients = build_recipients(signers);
 
     let body = json!({
         "emailSubject": subject,
@@ -450,6 +471,48 @@ pub async fn get_envelope_status(
         format!("DocuSign status response was not valid JSON: {e} — body was: {text}")
     })?;
     Ok(parsed.status.to_ascii_lowercase())
+}
+
+/// Per-recipient routing state for an envelope, as raw JSON.
+///
+/// Deliberately separate from [`get_envelope_status`], which answers only for
+/// the envelope as a whole. On a mixed envelope that distinction is the whole
+/// point: while the client at routing order 1 still has the document, the
+/// envelope reads `sent` and the firm's embedded signer at order 2 is not yet
+/// reachable — a recipient view requested for them fails with
+/// `RECIPIENT_NOT_IN_SEQUENCE`. Only the per-recipient view distinguishes
+/// "waiting their turn" from "ready to sign".
+///
+/// Returned unparsed: the caller models exactly the fields it needs, and the
+/// response carries recipient types (agents, editors, carbon copies) this
+/// build has no concept of.
+pub async fn list_recipients(
+    account_id: &str,
+    base_uri: &str,
+    access_token: &str,
+    envelope_id: &str,
+) -> Result<String, String> {
+    let resp = http()
+        .get(recipients_url(base_uri, account_id, envelope_id))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("DocuSign recipient list request failed: {e}"))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("DocuSign recipient list response was unreadable: {e}"))?;
+    log_response("recipient list", status, &text);
+
+    if !status.is_success() {
+        return Err(format!(
+            "DocuSign recipient list failed (HTTP {status}): {text}"
+        ));
+    }
+
+    Ok(text)
 }
 
 /// Mint a recipient view (embedded signing) URL for one signer.
@@ -635,6 +698,17 @@ pub async fn docusign_poll_status(
     get_envelope_status(&creds.account_id, &creds.base_uri, &token, &envelope_id).await
 }
 
+/// One per-recipient status read. Polled alongside [`docusign_poll_status`] so
+/// the UI can tell a signer who is waiting their turn from one who may sign.
+#[tauri::command]
+pub async fn docusign_list_recipients(
+    vault: State<'_, CredentialStoreState>,
+    envelope_id: String,
+) -> Result<String, String> {
+    let (creds, token) = authed(&vault).await?;
+    list_recipients(&creds.account_id, &creds.base_uri, &token, &envelope_id).await
+}
+
 /// Mint an embedded signing URL for an internal party.
 ///
 /// The signer must already exist on the envelope with this exact
@@ -814,6 +888,72 @@ mod tests {
         assert_eq!(
             embedded_client_user_id(&signer_with(Some(" officer@firm.test-ENV1 "))),
             Some("officer@firm.test-ENV1")
+        );
+    }
+
+    // ── Mixed-recipient envelopes (§22, §23) ────────────────────────────────
+
+    #[test]
+    fn a_mixed_envelope_marks_only_the_embedded_recipient() {
+        // The shape the unified flow sends: client by email at routing order 1,
+        // firm signer in-app at routing order 2, on one envelope.
+        let signers = vec![
+            ESignSigner {
+                name: "Brandon Green".into(),
+                email: "brandon@example.com".into(),
+                role: "Client".into(),
+                routing_order: 1,
+                client_user_id: None,
+            },
+            ESignSigner {
+                name: "BG Law".into(),
+                email: "bg-law.law-firm@in-app.lexescrow.local".into(),
+                role: "Law firm".into(),
+                routing_order: 2,
+                client_user_id: Some("officer@firm.test-bg-law".into()),
+            },
+        ];
+
+        let recipients = build_recipients(&signers);
+        assert_eq!(recipients.len(), 2);
+
+        // Email recipient: no clientUserId key at all. Its *absence* is what
+        // makes DocuSign deliver the email.
+        assert_eq!(recipients[0]["recipientId"], "1");
+        assert_eq!(recipients[0]["routingOrder"], "1");
+        assert_eq!(recipients[0]["email"], "brandon@example.com");
+        assert!(recipients[0].get("clientUserId").is_none());
+
+        // Embedded recipient: carries the id, and routes second.
+        assert_eq!(recipients[1]["recipientId"], "2");
+        assert_eq!(recipients[1]["routingOrder"], "2");
+        assert_eq!(recipients[1]["clientUserId"], "officer@firm.test-bg-law");
+    }
+
+    #[test]
+    fn recipient_ids_stay_envelope_local_and_one_based() {
+        let signers: Vec<ESignSigner> = (0..3)
+            .map(|i| ESignSigner {
+                name: format!("S{i}"),
+                email: format!("s{i}@example.com"),
+                role: "Signer".into(),
+                routing_order: 1,
+                client_user_id: None,
+            })
+            .collect();
+        let recipients = build_recipients(&signers);
+        let ids: Vec<&str> = recipients
+            .iter()
+            .map(|r| r["recipientId"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["1", "2", "3"]);
+    }
+
+    #[test]
+    fn recipients_url_targets_the_envelopes_recipient_collection() {
+        assert_eq!(
+            recipients_url("https://demo.docusign.net/", "acct-1", "env-9"),
+            "https://demo.docusign.net/restapi/v2.1/accounts/acct-1/envelopes/env-9/recipients"
         );
     }
 

@@ -53,7 +53,7 @@ function props(
     barActive: true,
     cannaVerifyConditions: null,
     cannaVerifyRunning: false,
-    onSendForSignature: async () => {},
+    onSendForSignature: async () => new Map(),
     onRunCannaVerify: () => {},
     onProceed: () => {},
     ...extra,

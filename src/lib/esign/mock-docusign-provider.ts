@@ -13,7 +13,14 @@
  * at different moments advance independently — exactly as real ones would.
  */
 
-import { EMBEDDED_RETURN_URL, type ESignSigner, type ESignStatus, type eSignProvider } from "./types";
+import {
+  EMBEDDED_RETURN_URL,
+  RECIPIENT_NOT_IN_SEQUENCE,
+  type ESignRecipientStatus,
+  type ESignSigner,
+  type ESignStatus,
+  type eSignProvider,
+} from "./types";
 
 export const DEMO_ENVELOPE_PREFIX = "DEMO-ENV-";
 export const DEMO_CERTIFICATE_TEXT = "DEMO-CERTIFICATE-PDF";
@@ -83,12 +90,57 @@ export class MockDocuSignProvider implements eSignProvider {
     envelopeId: string,
     _signerEmail: string,
     _signerName: string,
-    _clientUserId: string,
+    clientUserId: string,
   ): Promise<string> {
-    if (!this.envelopes.has(envelopeId)) {
+    const env = this.envelopes.get(envelopeId);
+    if (!env) {
       throw new Error(`Unknown envelope: ${envelopeId}`);
     }
+    // Refuse a signer whose turn has not arrived, in DocuSign's own words.
+    // A mock that always hands back a URL would let the gating regress
+    // silently — the failure it is there to prevent is exactly this one.
+    const recipient = env.signers.find((s) => s.clientUserId === clientUserId);
+    if (recipient && recipient.routingOrder > this.currentRoutingOrder(env)) {
+      throw new Error(
+        `DocuSign refused the embedded signing view (HTTP 400): {"errorCode":"${RECIPIENT_NOT_IN_SEQUENCE}","message":"The token for an out of sequence recipient cannot be generated."}`,
+      );
+    }
     return `${EMBEDDED_RETURN_URL}?event=signing_complete&envelopeId=${encodeURIComponent(envelopeId)}`;
+  }
+
+  /**
+   * Which routing order currently holds the document.
+   *
+   * The compressed clock doubles as the routing clock: `sent` means the first
+   * order still has it, `delivered` means the first order finished and the
+   * document moved on, `completed` means everyone is done. That maps the one
+   * distinction the UI depends on — waiting vs. able to sign — onto a
+   * lifecycle the demo already simulates, rather than inventing a second one.
+   */
+  private currentRoutingOrder(env: MockEnvelope): number {
+    const orders = env.signers.map((s) => s.routingOrder);
+    const age = Date.now() - env.createdAt;
+    return age >= DELIVERED_AFTER_MS ? Math.max(...orders) : Math.min(...orders);
+  }
+
+  async listRecipients(envelopeId: string): Promise<ESignRecipientStatus[]> {
+    const env = this.envelopes.get(envelopeId);
+    if (!env) throw new Error(`Unknown envelope: ${envelopeId}`);
+    const age = Date.now() - env.createdAt;
+    const current = this.currentRoutingOrder(env);
+
+    return env.signers.map((s) => ({
+      email: s.email,
+      routingOrder: s.routingOrder,
+      clientUserId: s.clientUserId,
+      status:
+        age >= COMPLETED_AFTER_MS || s.routingOrder < current
+          ? "completed"
+          : s.routingOrder === current
+            ? "sent"
+            : // Their turn has not come — DocuSign's own waiting state.
+              "created",
+    }));
   }
 
   /** Test/demo helper — forget every tracked envelope. */

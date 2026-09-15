@@ -12,6 +12,13 @@ export interface ESignSigner {
   role: string;
   routingOrder: number;
   /**
+   * The delivery route chosen for this party on Document Load. Optional here
+   * and required on `RequiredSigner`: an envelope read back from the provider
+   * carries recipients, not routes, so this is only known for signers the
+   * officer routed. `"in_app"` is what causes a `clientUserId` to be minted.
+   */
+  mode?: "email" | "in_app";
+  /**
    * Set only for *embedded* signers — internal parties (law firm staff, escrow
    * officer) who sign inside LexEscrow rather than through a DocuSign email.
    *
@@ -106,10 +113,72 @@ export interface ESignEnvelope {
   certificateHash?: string;
   onChainTx?: string;
   anchorMatch?: boolean;
-  /** True when this envelope was raised for in-app (embedded) signing. */
-  embeddedSigning?: boolean;
-  /** Which internal party signs it in-app. */
-  embeddedSignerName?: string;
+}
+
+/**
+ * This recipient signs in-app.
+ *
+ * Derived, never stored: one envelope now carries both routes, so "is this
+ * embedded" is a fact about a *recipient*, not about the envelope. The
+ * `clientUserId` is the same thing DocuSign keys on, which keeps LexEscrow's
+ * answer and DocuSign's from drifting apart.
+ */
+export function isEmbeddedSigner(signer: ESignSigner): boolean {
+  return (signer.clientUserId ?? "").trim() !== "";
+}
+
+/** The envelope carries at least one in-app recipient. */
+export function hasEmbeddedSigner(envelope: { signers: ESignSigner[] }): boolean {
+  return envelope.signers.some(isEmbeddedSigner);
+}
+
+/**
+ * One recipient's routing state, as LexEscrow models it.
+ *
+ * `status` is DocuSign's recipient status lowercased. The one that matters is
+ * the difference between `created` — the recipient exists but their routing
+ * order has not been reached — and `sent`/`delivered`, which mean the document
+ * is with them now.
+ */
+export interface ESignRecipientStatus {
+  email: string;
+  routingOrder: number;
+  status: string;
+  clientUserId?: string;
+}
+
+/**
+ * The recipient may sign right now.
+ *
+ * `created` is the waiting state: DocuSign refuses a recipient view for such a
+ * signer with `RECIPIENT_NOT_IN_SEQUENCE`, so this is precisely the condition
+ * that gates the in-app "Sign Here" control.
+ */
+export function isRecipientActive(recipient: ESignRecipientStatus): boolean {
+  const s = recipient.status.trim().toLowerCase();
+  return s === "sent" || s === "delivered" || s === "autoresponded";
+}
+
+/** DocuSign's refusal when a recipient's routing turn has not yet arrived. */
+export const RECIPIENT_NOT_IN_SEQUENCE = "RECIPIENT_NOT_IN_SEQUENCE";
+
+/** What the officer is shown instead of DocuSign's raw 400 body. */
+export const WAITING_FOR_OTHER_SIGNERS =
+  "Waiting for other parties to sign before in-app signing is available.";
+
+/**
+ * Turn a recipient-view failure into something an officer can act on.
+ *
+ * The backend returns DocuSign's response body verbatim, which for an
+ * out-of-sequence recipient is a JSON blob quoting `RECIPIENT_NOT_IN_SEQUENCE`.
+ * That is the expected state of a correctly-built envelope whose earlier
+ * signer has not finished — not an error the officer can do anything about
+ * except wait — so it is translated rather than surfaced.
+ */
+export function describeRecipientViewError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (raw.includes(RECIPIENT_NOT_IN_SEQUENCE)) return WAITING_FOR_OTHER_SIGNERS;
+  return raw;
 }
 
 export interface eSignProvider {
@@ -137,6 +206,14 @@ export interface eSignProvider {
     signerName: string,
     clientUserId: string,
   ): Promise<string>;
+  /**
+   * Per-recipient routing state.
+   *
+   * Optional for the same reason as {@link getEmbeddedSigningUrl}: it only
+   * means anything to a provider that sequences recipients. Callers must
+   * feature-detect and fall back to leaving in-app signing ungated.
+   */
+  listRecipients?(envelopeId: string): Promise<ESignRecipientStatus[]>;
 }
 
 /**

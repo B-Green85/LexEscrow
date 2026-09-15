@@ -184,6 +184,7 @@ pub fn run() {
             docusign::docusign_poll_status,
             docusign::docusign_get_certificate,
             docusign::docusign_get_embedded_signing_url,
+            docusign::docusign_list_recipients,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

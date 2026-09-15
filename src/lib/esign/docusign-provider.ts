@@ -12,6 +12,7 @@ import { isTauri } from "../backend";
 import {
   EMBEDDED_RETURN_URL,
   toESignStatus,
+  type ESignRecipientStatus,
   type ESignSigner,
   type ESignStatus,
   type eSignProvider,
@@ -51,6 +52,35 @@ export class DocuSignProvider implements eSignProvider {
       message,
       signers,
       sessionId,
+    });
+  }
+
+  /**
+   * Per-recipient routing state.
+   *
+   * The backend hands back DocuSign's response verbatim; the shape is narrowed
+   * here rather than in Rust so the recipient kinds this build has no concept
+   * of (agents, editors, carbon copies) are simply not read. Only `signers`
+   * can hold a `clientUserId`, so only `signers` is parsed.
+   */
+  async listRecipients(envelopeId: string): Promise<ESignRecipientStatus[]> {
+    requireTauri();
+    const raw = await invoke<string>("docusign_list_recipients", { envelopeId });
+    const parsed: unknown = JSON.parse(raw);
+    const signers = (parsed as { signers?: unknown }).signers;
+    if (!Array.isArray(signers)) return [];
+    return signers.map((r) => {
+      const rec = r as Record<string, unknown>;
+      return {
+        email: String(rec.email ?? ""),
+        // DocuSign returns routingOrder as a string.
+        routingOrder: Number(rec.routingOrder ?? 0),
+        status: String(rec.status ?? ""),
+        clientUserId:
+          typeof rec.clientUserId === "string" && rec.clientUserId.trim() !== ""
+            ? rec.clientUserId
+            : undefined,
+      };
     });
   }
 

@@ -26,10 +26,17 @@ import { toPayloadCents } from "../lexguard/payload-diff";
 import { runCannaVerify as runCannaVerifyAdapters } from "../lib/cannaverify";
 import type { CannaVerifyConditions } from "../lib/cannaverify/types";
 import { verifyBar, CALBAR_DEFAULT_BASE_URL, type BarVerifyResult } from "../lib/adapters";
-import { resolveESignProvider, isTerminal, embeddedClientUserId } from "../lib/esign";
+import {
+  resolveESignProvider,
+  isTerminal,
+  embeddedClientUserId,
+  describeRecipientViewError,
+  isEmbeddedSigner,
+} from "../lib/esign";
 import type {
   EmbeddedSigningTarget,
   ESignEnvelope,
+  ESignRecipientStatus,
   ESignSigner,
   ESignStatus,
 } from "../lib/esign";
@@ -486,6 +493,17 @@ export interface SessionState {
   eSignPolling: boolean;
   /** Interval handle, held so `reset()` and terminal states can clear it. */
   eSignPollTimer: ReturnType<typeof setInterval> | null;
+  /**
+   * In-app signing targets from the envelope that carries them, keyed by
+   * lowercased signer email.
+   *
+   * Populated by `sendForSignature`, which is now the only thing that raises an
+   * envelope. `signInApp` reads it rather than creating a second envelope —
+   * that separation is what puts both parties on one document.
+   */
+  embeddedTargets: Map<string, EmbeddedSigningTarget>;
+  /** Per-recipient routing state per envelope id, refreshed by the poll. */
+  recipientStatuses: Record<string, ESignRecipientStatus[]>;
 
   // ── Release paths (spec §6) ──────────────────────────────────────────────
   /** Path B tally. Non-null once the escrow is locked into arbitration. */
@@ -674,14 +692,21 @@ export interface SessionState {
   proceedToSettlement: () => Promise<void>;
   /** Re-read the vault's blockchain config. Safe to call on a locked vault. */
   refreshBlockchainConfig: () => Promise<void>;
+  /**
+   * Raise the one envelope carrying every signer, and return the in-app
+   * signing targets it created, keyed by lowercased signer email. Email
+   * signers produce no entry.
+   */
   sendForSignature: (
     documentLabel: string,
     signers: ESignSigner[],
     subject: string,
     message: string,
-  ) => Promise<void>;
-  /** Raise an embedded envelope for one internal signer (spec §22). */
-  signInApp: (documentLabel: string, signer: ESignSigner) => Promise<EmbeddedSigningTarget | null>;
+  ) => Promise<Map<string, EmbeddedSigningTarget>>;
+  /** Open the in-app ceremony for a signer already on the envelope (spec §22). */
+  signInApp: (signer: ESignSigner) => Promise<EmbeddedSigningTarget | null>;
+  /** Refresh per-recipient routing state for every envelope still in flight. */
+  refreshRecipientStatuses: () => Promise<void>;
   completeEmbeddedSigning: (envelopeId: string, event: string) => Promise<void>;
   cancelEmbeddedSigning: (envelopeId: string) => Promise<void>;
   startESignPolling: () => void;
@@ -955,6 +980,8 @@ export const useSession = create<SessionState>((set, get) => {
     eSignEnvelopes: [],
     eSignPolling: false,
     eSignPollTimer: null,
+    embeddedTargets: new Map(),
+    recipientStatuses: {},
     arbitrationState: null,
     stagedReleaseState: null,
     releasePathChosen: false,
@@ -1322,6 +1349,8 @@ export const useSession = create<SessionState>((set, get) => {
         eSignEnvelopes: [],
         eSignPolling: false,
         eSignPollTimer: null,
+        embeddedTargets: new Map(),
+        recipientStatuses: {},
         arbitrationState: null,
         stagedReleaseState: null,
         releasePathChosen: false,
@@ -2198,32 +2227,52 @@ export const useSession = create<SessionState>((set, get) => {
     // ── eSign lifecycle (spec §22 Stage 4, §23) ─────────────────────────────
 
     /**
-     * Send the loaded document for signature. Persists the envelope, records
-     * `esign_sent` on the audit chain, and starts the poll loop.
+     * Send the loaded document for signature — every signer, one envelope.
+     *
+     * Email and in-app parties ride the same envelope so that DocuSign can
+     * sequence them: the email signers hold routing order 1, the in-app
+     * signers order 2, and the certificate of completion at the end covers
+     * every signature rather than one per party. The in-app parties are marked
+     * embedded here, by minting their `clientUserId` *before* creation —
+     * DocuSign matches a recipient view on that exact value, so it cannot be
+     * decided later.
+     *
+     * Returns the in-app targets keyed by lowercased signer email, which is
+     * what `signInApp` later opens the ceremony against.
      */
     sendForSignature: async (documentLabel, signers, subject, message) => {
-      const { file, sessionId } = get();
+      const empty = new Map<string, EmbeddedSigningTarget>();
+      const { file, sessionId, operator } = get();
       if (!sessionId) {
         set({ error: "No active session — load a document first." });
-        return;
+        return empty;
       }
       if (!(await get().ensureCredentials())) {
         set({ error: "Credentials are locked — unlock to send for signature." });
-        return;
+        return empty;
       }
       if (!file) {
         set({ error: "No document loaded to send for signature." });
-        return;
+        return empty;
       }
       if (signers.length === 0) {
         set({ error: "Add at least one signer before sending for signature." });
-        return;
+        return empty;
       }
 
       set({ busy: true, error: null });
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const provider = await resolveESignProvider();
+
+        // An in-app party becomes an embedded recipient by carrying a
+        // clientUserId; an email party must not have one, since its absence is
+        // what makes DocuSign deliver their email. One envelope, both kinds.
+        const recipients: ESignSigner[] = signers.map((sg) =>
+          sg.mode === "in_app"
+            ? { ...sg, clientUserId: embeddedClientUserId(operator, sg.email) }
+            : sg,
+        );
 
         // Diagnostic: confirm exactly what reaches DocuSign — the recipient
         // addresses actually being sent (not a stale parsed value or a synthetic
@@ -2236,14 +2285,19 @@ export const useSession = create<SessionState>((set, get) => {
         );
         console.log(
           "[esign] recipients:",
-          signers.map((s) => ({ name: s.name, email: s.email, clientUserId: s.clientUserId ?? null })),
+          recipients.map((s) => ({
+            name: s.name,
+            email: s.email,
+            routingOrder: s.routingOrder,
+            clientUserId: s.clientUserId ?? null,
+          })),
         );
 
         const envelopeId = await provider.sendEnvelope(
           sessionId,
           bytes,
           documentLabel,
-          signers,
+          recipients,
           subject,
           message,
         );
@@ -2252,114 +2306,118 @@ export const useSession = create<SessionState>((set, get) => {
           envelopeId,
           sessionId,
           documentLabel,
-          signersJson: JSON.stringify(signers),
+          signersJson: JSON.stringify(recipients),
         });
 
         const envelope: ESignEnvelope = {
           envelopeId,
           sessionId,
           documentLabel,
-          signers,
+          signers: recipients,
           status: "sent",
           sentAt: new Date().toISOString(),
         };
-        set((s) => ({ eSignEnvelopes: [...s.eSignEnvelopes, envelope], busy: false }));
+
+        const targets = new Map<string, EmbeddedSigningTarget>();
+        for (const sg of recipients) {
+          if (!isEmbeddedSigner(sg)) continue;
+          targets.set(sg.email.trim().toLowerCase(), {
+            envelopeId,
+            clientUserId: sg.clientUserId as string,
+            signer: sg,
+          });
+        }
+
+        set((s) => ({
+          eSignEnvelopes: [...s.eSignEnvelopes, envelope],
+          embeddedTargets: new Map([...s.embeddedTargets, ...targets]),
+          busy: false,
+        }));
 
         await log("esign_sent", {
           envelope_id: envelopeId,
           provider: provider.providerName(),
           document_label: documentLabel,
-          signers: signers.map((sg) => ({ name: sg.name, email: sg.email, role: sg.role })),
+          signers: recipients.map((sg) => ({
+            name: sg.name,
+            email: sg.email,
+            role: sg.role,
+            routing_order: sg.routingOrder,
+            embedded: isEmbeddedSigner(sg),
+          })),
         });
 
         get().startESignPolling();
+        // Seed the routing state so the in-app control is gated correctly from
+        // the moment the envelope exists, rather than after the first tick.
+        void get().refreshRecipientStatuses();
+        return targets;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         set({ error: `Send for signature failed: ${message}`, busy: false });
+        return empty;
       }
     },
 
     /**
-     * Raise an envelope for in-app signing by one internal party (spec §22).
+     * Open the in-app ceremony for a signer already on the envelope (spec §22).
      *
-     * Differs from `sendForSignature` in exactly one respect that matters: the
-     * signer carries a `clientUserId`, which makes them embedded. DocuSign then
-     * sends no email and the ceremony is reachable only through a recipient
-     * view URL — which is what the returned target lets the panel request.
+     * Raises nothing. The signer was placed on the single envelope by
+     * `sendForSignature`, already carrying the `clientUserId` that makes them
+     * embedded, so all that remains is to mint their recipient view — which is
+     * also the check that they are actually reachable: DocuSign refuses one
+     * for a signer whose routing turn has not arrived, and that refusal is the
+     * authoritative answer regardless of what the polled status said a moment
+     * ago.
      *
-     * The envelope is otherwise ordinary. It is persisted, polled and completed
-     * by the same code as an email envelope, so an in-app signature ends up
-     * with the same certificate, the same AnchorReceipt registration and the
-     * same AnchorMatcher verdict. Nothing downstream needs to know which route
-     * collected it.
+     * The minted URL is deliberately discarded. It is single-use and expires
+     * in minutes, so the panel mints its own when the ceremony window opens;
+     * this call exists to fail *before* the panel is shown rather than inside
+     * it, where the officer would meet a raw DocuSign error mid-ceremony.
      */
-    signInApp: async (documentLabel, signer) => {
-      const { file, sessionId, operator } = get();
-      if (!sessionId) {
-        set({ error: "No active session — load a document first." });
-        return null;
-      }
-      if (!file) {
-        set({ error: "No document loaded to sign." });
+    signInApp: async (signer) => {
+      const key = signer.email.trim().toLowerCase();
+      const target = get().embeddedTargets.get(key);
+      if (!target) {
+        set({
+          error:
+            "This party is not on a signature envelope yet — send the document for signature first.",
+        });
         return null;
       }
 
       set({ busy: true, error: null });
       try {
-        const clientUserId = embeddedClientUserId(operator, signer.email);
-        const embeddedSigner: ESignSigner = { ...signer, clientUserId };
-        const bytes = new Uint8Array(await file.arrayBuffer());
         const provider = await resolveESignProvider();
+        if (!provider.getEmbeddedSigningUrl) {
+          set({
+            error: `${provider.providerName()} does not support in-app signing — send this document by email instead.`,
+            busy: false,
+          });
+          return null;
+        }
 
-        // Subject and message are still sent: DocuSign requires a subject on
-        // every envelope, and this one surfaces in the account's envelope list
-        // and audit history even though no email is dispatched.
-        const envelopeId = await provider.sendEnvelope(
-          sessionId,
-          bytes,
-          documentLabel,
-          [embeddedSigner],
-          `Signature required — ${documentLabel}`,
-          `In-app signature by ${signer.name} (${signer.role}).`,
+        await provider.getEmbeddedSigningUrl(
+          target.envelopeId,
+          target.signer.email,
+          target.signer.name,
+          target.clientUserId,
         );
 
-        await backend.saveDocusignEnvelope({
-          envelopeId,
-          sessionId,
-          documentLabel,
-          signersJson: JSON.stringify([embeddedSigner]),
-        });
-
-        const envelope: ESignEnvelope = {
-          envelopeId,
-          sessionId,
-          documentLabel,
-          signers: [embeddedSigner],
-          status: "sent",
-          sentAt: new Date().toISOString(),
-          embeddedSigning: true,
-          embeddedSignerName: signer.name,
-        };
-        set((s) => ({ eSignEnvelopes: [...s.eSignEnvelopes, envelope], busy: false }));
-
         await log("esign_embedded_opened", {
-          envelope_id: envelopeId,
+          envelope_id: target.envelopeId,
           provider: provider.providerName(),
-          document_label: documentLabel,
           signer: { name: signer.name, email: signer.email, role: signer.role },
-          client_user_id: clientUserId,
-          officer_identity: operator,
+          client_user_id: target.clientUserId,
+          officer_identity: get().operator,
         });
 
-        // Polling continues alongside the callback. The redirect is the fast
-        // path, not the only one: if the signer closes the window before it
-        // fires, the 30-second poll still catches the completion.
-        get().startESignPolling();
-
-        return { envelopeId, clientUserId, signer: embeddedSigner };
+        set({ busy: false });
+        return target;
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        set({ error: `In-app signing failed: ${message}`, busy: false });
+        // An out-of-sequence recipient is an expected state of a correctly
+        // built envelope, not a fault — it is translated, not surfaced raw.
+        set({ error: describeRecipientViewError(e), busy: false });
         return null;
       }
     },
@@ -2387,11 +2445,46 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
+    /**
+     * Refresh per-recipient routing state for every envelope still in flight.
+     *
+     * Separate from `pollAllEnvelopes` because it answers a different question:
+     * the envelope-level status says the envelope is `sent`, which is equally
+     * true when the client has it and when the firm's in-app signer has it.
+     * Only this tells the two apart, and that difference is what enables or
+     * disables "Sign Here".
+     *
+     * A provider that cannot sequence recipients simply records nothing, which
+     * leaves in-app signing ungated — the same behaviour as before sequencing
+     * existed, rather than a control stuck disabled forever.
+     */
+    refreshRecipientStatuses: async () => {
+      const pending = get().eSignEnvelopes.filter((e) => !isTerminal(e.status));
+      if (pending.length === 0) return;
+
+      const provider = await resolveESignProvider();
+      if (!provider.listRecipients) return;
+
+      for (const envelope of pending) {
+        try {
+          const recipients = await provider.listRecipients(envelope.envelopeId);
+          set((st) => ({
+            recipientStatuses: { ...st.recipientStatuses, [envelope.envelopeId]: recipients },
+          }));
+        } catch (e) {
+          // A transient read failure is not a routing change — keep the last
+          // known state rather than falsely locking or unlocking the control.
+          console.error("esign recipient list failed", envelope.envelopeId, e);
+        }
+      }
+    },
+
     /** Begin (or continue) the 30-second poll. Idempotent. */
     startESignPolling: () => {
       if (get().eSignPollTimer) return;
       const timer = setInterval(() => {
         void get().pollAllEnvelopes();
+        void get().refreshRecipientStatuses();
       }, ESIGN_POLL_INTERVAL_MS);
       set({ eSignPolling: true, eSignPollTimer: timer });
     },
