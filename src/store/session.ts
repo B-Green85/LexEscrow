@@ -2739,6 +2739,27 @@ export const useSession = create<SessionState>((set, get) => {
           status: cre.status,
           execution_path: path,
         });
+        // The enclave's actual verdict — `validated`, `lexguardScore`, and the
+        // `hmacSeal` computed over them — is NOT read back here, and currently
+        // cannot be. The trigger is async-accept: it returns a
+        // `workflow_execution_id` immediately, before the ~30s run has produced
+        // anything, so the handler's return value is never in the response.
+        // Nothing exposes it afterwards either — `cre execution status` and
+        // `events` carry run metadata only, and `logs` carries whatever
+        // `runtime.log()` emitted, which is deliberately nothing now that the
+        // enclave's debug line is gone.
+        //
+        // The seal in particular exists only inside the DON report's ABI
+        // payload, which becomes readable once a receiver contract consumes it
+        // via `writeReport`. RetainerRelease cannot be that receiver: its
+        // `_processReport` decodes the older `cre/main.ts` tuple, not this
+        // workflow's. Surfacing the verdict therefore needs a new receiver
+        // contract and a deploy — a V2 item, and not something to approximate
+        // here, because a fabricated verdict is worse than a missing one.
+        //
+        // What is recorded is that the enclave ran, keyed by execution ID, so
+        // the run stays auditable and can be reconciled against the DON later.
+        await log("cre_enclave_verdict_pending", { execution_id: cre.executionId });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         await log("cre_workflow_trigger_failed", {
