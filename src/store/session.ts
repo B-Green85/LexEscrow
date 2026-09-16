@@ -25,7 +25,7 @@ import { primeVDB, setNumericAnchor, type VDBStore } from "../lexguard/vdb";
 import { toPayloadCents } from "../lexguard/payload-diff";
 import { runCannaVerify as runCannaVerifyAdapters } from "../lib/cannaverify";
 import type { CannaVerifyConditions } from "../lib/cannaverify/types";
-import { verifyBar, CALBAR_DEFAULT_BASE_URL, type BarVerifyResult } from "../lib/adapters";
+import { verifyBar, BAR_VERIFY_SOURCE, type BarVerifyResult } from "../lib/adapters";
 import {
   resolveESignProvider,
   isTerminal,
@@ -117,7 +117,23 @@ export type Screen =
  */
 export type DebugPanelState = 0 | 1 | 2;
 
-export type StepStatus = "pending" | "active" | "done" | "error";
+/**
+ * Three ways a step can fail to be green, and they are not interchangeable.
+ *
+ *   * `error`    — something the officer submitted did not hold up. Red, and
+ *                  it halts the run.
+ *   * `warning`  — a check that should have run did not get an answer. Amber:
+ *                  the run continues, but someone has to finish the check by
+ *                  hand.
+ *   * `advisory` — a check this install cannot run at all, because it is not
+ *                  configured or nothing covers this jurisdiction. Neutral
+ *                  grey: nothing is wrong with the transaction, and painting
+ *                  a blank config field red says that something is.
+ *
+ * All three leave the underlying condition unmet, so none of them lets a
+ * release through. They differ only in what the officer is told.
+ */
+export type StepStatus = "pending" | "active" | "done" | "error" | "warning" | "advisory";
 export type EntryMode = "ai" | "manual";
 export type ProcPhase = "choose" | "running" | "manual";
 
@@ -350,7 +366,7 @@ function withBarVerifyDetail(
           ...c,
           description: attribution ? `${result.detail} (${attribution})` : result.detail,
           eventDescription: result.detail,
-          creAdapterUrl: CALBAR_DEFAULT_BASE_URL,
+          creAdapterUrl: BAR_VERIFY_SOURCE,
           ...(c.status === "failed" && { failureReason: result.detail }),
         }
       : c,
@@ -1573,11 +1589,7 @@ export const useSession = create<SessionState>((set, get) => {
         // tell an active attorney from a suspended one, which is the only
         // question that matters before releasing a retainer.
         setStep("bar", "active");
-        const barResult = await verifyBar(
-          anchors.attorneyBarNumber,
-          anchors.state,
-          CALBAR_DEFAULT_BASE_URL,
-        );
+        const barResult = await verifyBar(anchors.attorneyBarNumber, anchors.state);
         const active = barResult.status === "active";
         // "unavailable" is not a verdict about the attorney — the registry was
         // never reached, so nothing about their standing is known either way.
@@ -1587,13 +1599,29 @@ export const useSession = create<SessionState>((set, get) => {
         // condition. Null leaves the bar condition `pending`, which blocks the
         // release just as hard — `allMet` counts only met and waived — while
         // saying the true thing, that the check still has to be done by hand.
-        const unavailable = barResult.status === "unavailable";
-        set({ barActive: unavailable ? null : active, barVerifyResult: barResult });
+        // Three more statuses join `unavailable` in saying nothing about the
+        // attorney. `not_configured` and `unsupported_state` are facts about
+        // this install and this jurisdiction; `not_found` is the registry
+        // answering that it holds no such record, which is a finding but not a
+        // standing verdict. All four leave `barActive` null rather than false:
+        // false is a claim ("not in good standing") the session is in no
+        // position to make, and it would write a `failureReason` saying so onto
+        // the condition. Null leaves the bar condition `pending`, which blocks
+        // the release just as hard — `allMet` counts only met and waived —
+        // while saying the true thing.
+        const inconclusive =
+          barResult.status === "unavailable" ||
+          barResult.status === "not_configured" ||
+          barResult.status === "unsupported_state";
+        set({ barActive: inconclusive ? null : active, barVerifyResult: barResult });
         await log("bar_verification_result", {
           active,
           status: barResult.status,
           state: barResult.state,
-          source: `BarVerify adapter — ${barResult.state}`,
+          verified: active,
+          license_status: barResult.detail,
+          has_public_discipline: barResult.hasPublicDiscipline ?? false,
+          source: BAR_VERIFY_SOURCE,
           detail: barResult.detail,
           attorney_name: barResult.attorneyName ?? null,
           admission_date: barResult.admissionDate ?? null,
@@ -1602,7 +1630,7 @@ export const useSession = create<SessionState>((set, get) => {
           // are enough to correlate an entry without recording the identifier.
           bar_last4: anchors.attorneyBarNumber.slice(-4),
         });
-        if (!active && !unavailable) {
+        if (!active && !inconclusive) {
           setStep("bar", "error");
           set({
             // The adapter's own detail, not a generic message: "scaffold",
@@ -1622,7 +1650,7 @@ export const useSession = create<SessionState>((set, get) => {
           return;
         }
 
-        if (unavailable) {
+        if (inconclusive) {
           // The AnchorReceipt shape from step 1b: the step goes red with the
           // reason on it, and processing continues. Halting here would cost the
           // officer the parse and every validation after it over a network
@@ -1630,12 +1658,22 @@ export const useSession = create<SessionState>((set, get) => {
           // to re-run the whole session once the adapter answered again. What
           // the release actually depends on is the bar *condition*, which stays
           // unmet until someone verifies standing another way.
+          // `advisory` rather than `error`: none of these three is the
+          // attorney's problem, and painting a missing API token red on the
+          // Processing screen tells the officer a transaction is wrong when the
+          // only thing wrong is a blank field in Configuration. Red stays
+          // reserved for configured-but-failed.
+          // Grey for the two capability gaps, amber for the registry that did
+          // not answer. Only the amber one is a check that should have run and
+          // now needs a human; the other two are facts about configuration.
+          const [status, label]: [StepStatus, string] =
+            barResult.status === "not_configured"
+              ? ["advisory", "Bar verification not configured — add Apify token in Configuration"]
+              : barResult.status === "unsupported_state"
+                ? ["advisory", barResult.detail]
+                : ["warning", "Attorney verification unavailable — manual review required"];
           set((s) => ({
-            steps: s.steps.map((step) =>
-              step.key === "bar"
-                ? { ...step, status: "error", label: "Attorney verification unavailable — manual review required" }
-                : step,
-            ),
+            steps: s.steps.map((step) => (step.key === "bar" ? { ...step, status, label } : step)),
           }));
         } else {
           setStep("bar", "done");

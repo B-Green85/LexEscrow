@@ -1,6 +1,6 @@
 /**
- * BarVerify — 50-state bar association verification (spec §10, "Adapter Library
- * Vision"; §14 V1 roadmap).
+ * BarVerify — multi-state bar association verification (spec §10, "Adapter
+ * Library Vision"; §14 V1 roadmap).
  *
  * The legal asset class turns on one fact an escrow cannot assume: that the
  * attorney of record is actually admitted and in good standing *right now*. A
@@ -8,23 +8,28 @@
  * exists to prevent, and a regex over the bar number cannot detect it — a
  * disbarred attorney's number is still six digits.
  *
- * Fifty jurisdictions, fifty registries, no common API. So the shape here is a
- * router: one canonical result type, one entry per state, and per-state
- * implementations added independently. California is live in V1 (the CRE
- * Chainlink Functions call target, mocked locally by `src/mock/calbar-adapter`);
- * the other forty-nine are declared but unimplemented.
+ * Fifty jurisdictions, fifty registries, no common API. V1 routed one of them
+ * to a mock adapter on `localhost:3001` that was never running outside a demo,
+ * so every real session failed this step. The lookup now goes to the Rust
+ * backend, which queries fourteen official registries through a single Apify
+ * actor with a vault-held token; the remaining thirty-six stay declared and
+ * unroutable.
  *
- * A scaffolded state returns `error`, never `active`. That asymmetry is the
- * whole safety property: "we have not built this yet" and "this attorney is in
- * good standing" must never be the same value, because the caller turns the
- * result into a boolean that gates money.
+ * This module keeps the interpretation — the safety-critical part. Five of its
+ * eight statuses are *not* verdicts about the attorney, and collapsing any of
+ * them into one would be the bug:
  *
- * `unavailable` is the third thing that is not a verdict: the registry was
- * never reached at all. It is held apart from `error` because the two call for
- * different handling upstream — an unreachable registry is a fact about the
- * network, not about the attorney, and a settlement session should not die on
- * it. It is still never `active`, so the gate stays shut either way; what
- * changes is that the officer resolves it by hand instead of losing the run.
+ *   * `unsupported_state` — no crawler covers this jurisdiction.
+ *   * `not_configured`    — no Apify token, so nothing was ever asked.
+ *   * `unavailable`       — the registry was not reached, or refused.
+ *   * `not_found`         — the registry answered and holds no such attorney.
+ *   * `error`             — the registry answered with something unreadable.
+ *
+ * None of them is ever `active`, so the gate stays shut either way. What
+ * changes is what the officer is told to do, and whether the session survives:
+ * "we cannot check this" must not read as "this attorney is not in good
+ * standing", and neither must halt a run over a fact about our configuration
+ * rather than about the transaction.
  */
 
 import * as backend from "../backend";
@@ -33,10 +38,27 @@ import * as backend from "../backend";
 export interface BarVerifyResult {
   barNumber: string;
   state: string;
-  status: "active" | "inactive" | "suspended" | "not_found" | "error" | "unavailable";
+  status:
+    | "active"
+    | "inactive"
+    | "suspended"
+    | "not_found"
+    | "error"
+    | "unavailable"
+    | "not_configured"
+    | "unsupported_state";
   attorneyName?: string;
   admissionDate?: string;
   firmName?: string;
+  /**
+   * A public disciplinary record against this attorney.
+   *
+   * Independent of `status` on purpose: an attorney can be `active` and still
+   * carry a formal reprimand, and the officer needs to see that before
+   * releasing a retainer. Absent means the registry did not say, which is not
+   * the same as "clean".
+   */
+  hasPublicDiscipline?: boolean;
   detail: string;
 }
 
@@ -54,8 +76,26 @@ export interface StateBarAdapter {
   implemented: boolean;
 }
 
-/** Where the CA adapter lives during local demo and CRE simulation. */
-export const CALBAR_DEFAULT_BASE_URL = "http://localhost:3001";
+/**
+ * What produced a verdict, recorded on the condition row and in the audit
+ * trail. Replaces the `localhost:3001` mock adapter base URL that used to sit
+ * here — the registry is now reached through a single Apify actor rather than
+ * one HTTP endpoint per state, so there is a source to name but no base URL to
+ * configure.
+ */
+export const BAR_VERIFY_SOURCE = "apify/jungle_synthesizer~multi-state-bar-scraper";
+
+/**
+ * The fourteen jurisdictions the actor actually crawls, as its input schema
+ * enumerates them.
+ *
+ * Kept next to the routing table rather than derived from it so the two can be
+ * cross-checked: `implemented` below is this list, and a state drifting out of
+ * agreement is a test failure rather than a silent empty result.
+ */
+export const APIFY_SUPPORTED_STATES = [
+  "AZ", "CA", "FL", "GA", "ID", "IL", "MA", "MN", "NJ", "NY", "OH", "PA", "TN", "TX",
+] as const;
 
 /**
  * What `detail` leads with when the registry could not be reached.
@@ -77,17 +117,17 @@ export const BAR_VERIFY_UNAVAILABLE = "Bar verification unavailable — manual r
 export const STATE_ADAPTER_MAP: Record<string, StateBarAdapter> = {
   AL: { code: "AL", state: "Alabama", adapter: "alabar", authority: "Alabama State Bar", implemented: false },
   AK: { code: "AK", state: "Alaska", adapter: "alaskabar", authority: "Alaska Bar Association", implemented: false },
-  AZ: { code: "AZ", state: "Arizona", adapter: "azbar", authority: "State Bar of Arizona", implemented: false },
+  AZ: { code: "AZ", state: "Arizona", adapter: "azbar", authority: "State Bar of Arizona", implemented: true },
   AR: { code: "AR", state: "Arkansas", adapter: "arkbar", authority: "Arkansas Judiciary — Office of Professional Conduct", implemented: false },
   CA: { code: "CA", state: "California", adapter: "calbar", authority: "The State Bar of California", implemented: true },
   CO: { code: "CO", state: "Colorado", adapter: "coloradobar", authority: "Colorado Supreme Court — Office of Attorney Registration", implemented: false },
   CT: { code: "CT", state: "Connecticut", adapter: "ctbar", authority: "Connecticut Judicial Branch — Statewide Grievance Committee", implemented: false },
   DE: { code: "DE", state: "Delaware", adapter: "debar", authority: "Delaware State Bar Association", implemented: false },
-  FL: { code: "FL", state: "Florida", adapter: "floridabar", authority: "The Florida Bar", implemented: false },
-  GA: { code: "GA", state: "Georgia", adapter: "gabar", authority: "State Bar of Georgia", implemented: false },
+  FL: { code: "FL", state: "Florida", adapter: "floridabar", authority: "The Florida Bar", implemented: true },
+  GA: { code: "GA", state: "Georgia", adapter: "gabar", authority: "State Bar of Georgia", implemented: true },
   HI: { code: "HI", state: "Hawaii", adapter: "hsba", authority: "Hawaii State Bar Association", implemented: false },
-  ID: { code: "ID", state: "Idaho", adapter: "idahobar", authority: "Idaho State Bar", implemented: false },
-  IL: { code: "IL", state: "Illinois", adapter: "iardc", authority: "Illinois Attorney Registration and Disciplinary Commission", implemented: false },
+  ID: { code: "ID", state: "Idaho", adapter: "idahobar", authority: "Idaho State Bar", implemented: true },
+  IL: { code: "IL", state: "Illinois", adapter: "iardc", authority: "Illinois Attorney Registration and Disciplinary Commission", implemented: true },
   IN: { code: "IN", state: "Indiana", adapter: "inbar", authority: "Indiana Supreme Court — Roll of Attorneys", implemented: false },
   IA: { code: "IA", state: "Iowa", adapter: "iowabar", authority: "Iowa Judicial Branch — Office of Professional Regulation", implemented: false },
   KS: { code: "KS", state: "Kansas", adapter: "ksbar", authority: "Kansas Office of Judicial Administration — Attorney Registration", implemented: false },
@@ -95,29 +135,29 @@ export const STATE_ADAPTER_MAP: Record<string, StateBarAdapter> = {
   LA: { code: "LA", state: "Louisiana", adapter: "labar", authority: "Louisiana State Bar Association", implemented: false },
   ME: { code: "ME", state: "Maine", adapter: "mainebar", authority: "Maine Board of Overseers of the Bar", implemented: false },
   MD: { code: "MD", state: "Maryland", adapter: "mdbar", authority: "Maryland Judiciary — Attorney Information System", implemented: false },
-  MA: { code: "MA", state: "Massachusetts", adapter: "mabbo", authority: "Massachusetts Board of Bar Overseers", implemented: false },
+  MA: { code: "MA", state: "Massachusetts", adapter: "mabbo", authority: "Massachusetts Board of Bar Overseers", implemented: true },
   MI: { code: "MI", state: "Michigan", adapter: "michbar", authority: "State Bar of Michigan", implemented: false },
-  MN: { code: "MN", state: "Minnesota", adapter: "mnbar", authority: "Minnesota Lawyer Registration Office", implemented: false },
+  MN: { code: "MN", state: "Minnesota", adapter: "mnbar", authority: "Minnesota Lawyer Registration Office", implemented: true },
   MS: { code: "MS", state: "Mississippi", adapter: "msbar", authority: "The Mississippi Bar", implemented: false },
   MO: { code: "MO", state: "Missouri", adapter: "mobar", authority: "The Missouri Bar", implemented: false },
   MT: { code: "MT", state: "Montana", adapter: "montanabar", authority: "State Bar of Montana", implemented: false },
   NE: { code: "NE", state: "Nebraska", adapter: "nebar", authority: "Nebraska State Bar Association", implemented: false },
   NV: { code: "NV", state: "Nevada", adapter: "nvbar", authority: "State Bar of Nevada", implemented: false },
   NH: { code: "NH", state: "New Hampshire", adapter: "nhbar", authority: "New Hampshire Bar Association", implemented: false },
-  NJ: { code: "NJ", state: "New Jersey", adapter: "njbar", authority: "New Jersey Courts — Attorney Registration", implemented: false },
+  NJ: { code: "NJ", state: "New Jersey", adapter: "njbar", authority: "New Jersey Courts — Attorney Registration", implemented: true },
   NM: { code: "NM", state: "New Mexico", adapter: "nmbar", authority: "State Bar of New Mexico", implemented: false },
-  NY: { code: "NY", state: "New York", adapter: "nysbar", authority: "New York State Unified Court System — Attorney Registration", implemented: false },
+  NY: { code: "NY", state: "New York", adapter: "nysbar", authority: "New York State Unified Court System — Attorney Registration", implemented: true },
   NC: { code: "NC", state: "North Carolina", adapter: "ncbar", authority: "North Carolina State Bar", implemented: false },
   ND: { code: "ND", state: "North Dakota", adapter: "ndbar", authority: "State Bar Association of North Dakota", implemented: false },
-  OH: { code: "OH", state: "Ohio", adapter: "ohiobar", authority: "Supreme Court of Ohio — Office of Attorney Services", implemented: false },
+  OH: { code: "OH", state: "Ohio", adapter: "ohiobar", authority: "Supreme Court of Ohio — Office of Attorney Services", implemented: true },
   OK: { code: "OK", state: "Oklahoma", adapter: "okbar", authority: "Oklahoma Bar Association", implemented: false },
   OR: { code: "OR", state: "Oregon", adapter: "osbar", authority: "Oregon State Bar", implemented: false },
-  PA: { code: "PA", state: "Pennsylvania", adapter: "padb", authority: "Disciplinary Board of the Supreme Court of Pennsylvania", implemented: false },
+  PA: { code: "PA", state: "Pennsylvania", adapter: "padb", authority: "Disciplinary Board of the Supreme Court of Pennsylvania", implemented: true },
   RI: { code: "RI", state: "Rhode Island", adapter: "ribar", authority: "Rhode Island Supreme Court — Attorney Registration", implemented: false },
   SC: { code: "SC", state: "South Carolina", adapter: "scbar", authority: "South Carolina Bar", implemented: false },
   SD: { code: "SD", state: "South Dakota", adapter: "sdbar", authority: "State Bar of South Dakota", implemented: false },
-  TN: { code: "TN", state: "Tennessee", adapter: "tnbpr", authority: "Tennessee Board of Professional Responsibility", implemented: false },
-  TX: { code: "TX", state: "Texas", adapter: "texasbar", authority: "State Bar of Texas", implemented: false },
+  TN: { code: "TN", state: "Tennessee", adapter: "tnbpr", authority: "Tennessee Board of Professional Responsibility", implemented: true },
+  TX: { code: "TX", state: "Texas", adapter: "texasbar", authority: "State Bar of Texas", implemented: true },
   UT: { code: "UT", state: "Utah", adapter: "utahbar", authority: "Utah State Bar", implemented: false },
   VT: { code: "VT", state: "Vermont", adapter: "vtbar", authority: "Vermont Judiciary — Attorney Licensing", implemented: false },
   VA: { code: "VA", state: "Virginia", adapter: "vsb", authority: "Virginia State Bar", implemented: false },
@@ -146,113 +186,91 @@ export function resolveState(state: string): StateBarAdapter | null {
   return Object.values(STATE_ADAPTER_MAP).find((e) => e.state.toLowerCase() === normalized) ?? null;
 }
 
-// ── Per-state implementations ────────────────────────────────────────────────
-
-/** The registry's `status` strings, narrowed to the union or rejected. */
-const KNOWN_STATUSES = new Set(["active", "inactive", "suspended", "not_found"]);
+// ── Interpretation ───────────────────────────────────────────────────────────
 
 /**
- * The one rejection shape that means the registry *did* answer.
+ * Registry status strings that mean "may not practice".
  *
- * `backend.verifyBarNumber` rejects for two unrelated reasons, and only one of
- * them is "we never got there". A non-2xx means the registry or its adapter
- * responded and refused — something is wrong at the far end, and that is a real
- * error. Everything else a transport can raise (connection refused, DNS, TLS,
- * timeout, an offline machine) means no answer came back at all.
- *
- * Both transports phrase the non-2xx case identically — the browser `fetch`
- * path in `lib/backend.ts` and the Rust `verify_bar_number` command both throw
- * "<state> State Bar lookup failed with HTTP <code>" — which is the seam this
- * matches on. A rejection it does not recognize is treated as unreachable,
- * which is the conservative direction: the worst case is that a session
- * continues to manual review when it could have failed outright.
+ * Mapped rather than passed through because the union the caller branches on is
+ * fixed, and the registries between them emit at least six spellings of "no".
+ * `disbarred` lands on `suspended`: both mean the licence does not currently
+ * authorize practice, which is the only distinction the gate acts on — the
+ * exact word survives in `detail`.
  */
-const ANSWERED_WITH_HTTP_ERROR = /lookup failed with HTTP \d+/i;
-
-interface CalBarResponse {
-  barNumber?: string;
-  status?: string;
-  attorneyName?: string;
-  admissionDate?: string;
-  firmName?: string;
-  detail?: string;
-}
+const STATUS_MAP: Record<string, BarVerifyResult["status"]> = {
+  active: "active",
+  inactive: "inactive",
+  suspended: "suspended",
+  disbarred: "suspended",
+  retired: "inactive",
+  deceased: "inactive",
+};
 
 /**
- * California — live in V1.
+ * Turn the backend verdict into a routed result.
  *
- * Under CRE this is a Chainlink Functions call whose result is written on-chain
- * by BFT consensus; locally it hits the mock CA Bar adapter on port 3001.
- *
- * The HTTP call is delegated to the backend (`backend.verifyBarNumber`), not
- * issued from here: under Tauri it must run in Rust, where no browser origin
- * policy blocks the cross-origin GET. The interpretation of the body — the
- * safety-critical part — stays in this module.
+ * Exported for tests: this is where "no token" is told apart from "no such
+ * attorney", and getting that wrong shows up as a red banner on a screen rather
+ * than as a thrown error.
  */
-async function verifyBarForState_CA(
+export function interpretBackendResult(
+  raw: backend.BarVerifyApiResult,
   barNumber: string,
-  state: string,
-  baseUrl: string,
-): Promise<BarVerifyResult> {
-  const base: BarVerifyResult = { barNumber, state, status: "error", detail: "" };
+  stateName: string,
+): BarVerifyResult {
+  const base: BarVerifyResult = {
+    barNumber,
+    state: stateName,
+    status: "error",
+    detail: "",
+    ...(raw.hasPublicDiscipline && { hasPublicDiscipline: true }),
+  };
 
-  let data: CalBarResponse;
-  try {
-    data = (await backend.verifyBarNumber(barNumber, state, baseUrl)) as CalBarResponse;
-  } catch (e) {
-    // Neither branch is ever `active` — to the gate they mean the same thing.
-    // They differ only in what the *session* should do next, which is why they
-    // are two statuses rather than one.
-    const message = e instanceof Error ? e.message : String(e);
-    const detail = `Could not reach the California State Bar adapter: ${message}`;
-
-    if (ANSWERED_WITH_HTTP_ERROR.test(message)) {
-      return { ...base, detail };
+  if (raw.error) {
+    // Not configured is a fact about this install, not about the attorney, and
+    // it is the one failure the officer can fix in thirty seconds. It is held
+    // apart from every other error so the UI can render it neutrally.
+    if (raw.error === backend.BAR_VERIFY_NOT_CONFIGURED) {
+      return { ...base, status: "not_configured", detail: raw.error };
     }
-
-    // Unreachable. Log it here rather than only upstream: this is the layer
-    // that knows the transport failed, and the console line survives a session
-    // the officer abandons before the audit trail is exported.
-    console.warn("bar verification unreachable", state, message);
-    return { ...base, status: "unavailable", detail: `${BAR_VERIFY_UNAVAILABLE} ${detail}` };
+    if (raw.error.startsWith("Bar verification does not cover")) {
+      return { ...base, status: "unsupported_state", detail: raw.error };
+    }
+    // Everything else — unreachable gateway, non-2xx, unreadable body — is a
+    // registry we did not get an answer from.
+    console.warn("bar verification unavailable", stateName, raw.error);
+    return { ...base, status: "unavailable", detail: `${BAR_VERIFY_UNAVAILABLE} ${raw.error}` };
   }
 
-  const status = (data.status ?? "").toLowerCase();
-
-  // An unrecognized status is an error, not a pass. The registry adding a
-  // value we have never seen must not resolve to "active" by default.
-  if (!KNOWN_STATUSES.has(status)) {
+  // No error and no status: the registry answered and holds no such attorney.
+  if (!raw.licenseStatus) {
     return {
       ...base,
-      detail: `California State Bar returned an unrecognized status: ${data.status ?? "(none)"}.`,
+      status: "not_found",
+      detail: `${stateName} bar registry has no record for bar number ${barNumber}.`,
     };
   }
 
-  return {
-    barNumber: data.barNumber ?? barNumber,
-    state,
-    status: status as BarVerifyResult["status"],
-    ...(data.attorneyName && { attorneyName: data.attorneyName }),
-    ...(data.admissionDate && { admissionDate: data.admissionDate }),
-    ...(data.firmName && { firmName: data.firmName }),
-    detail: data.detail ?? `California State Bar reports status: ${status}.`,
-  };
-}
+  const mapped = STATUS_MAP[raw.licenseStatus.trim().toLowerCase()];
 
-/**
- * Every state without an implementation.
- *
- * `error` rather than `not_found`: the attorney may well be in perfect
- * standing — we simply have not built the adapter that could tell. Reporting
- * absence of capability as absence of the attorney would be a lie about the
- * registry.
- */
-function scaffoldResult(barNumber: string, entry: StateBarAdapter): BarVerifyResult {
+  // A status the registries have never emitted before must not resolve to
+  // "active" by default.
+  if (!mapped) {
+    return {
+      ...base,
+      detail: `${stateName} bar registry returned an unrecognized status: ${raw.licenseStatus}.`,
+    };
+  }
+
+  const discipline = raw.hasPublicDiscipline
+    ? " Public disciplinary record on file."
+    : "";
+
   return {
-    barNumber,
-    state: entry.state,
-    status: "error",
-    detail: `${entry.state} bar verification — V2 adapter (scaffold)`,
+    ...base,
+    status: mapped,
+    ...(raw.name && { attorneyName: raw.name }),
+    detail: `${stateName} bar registry reports status: ${raw.licenseStatus}.${discipline}`,
   };
 }
 
@@ -261,16 +279,13 @@ function scaffoldResult(barNumber: string, entry: StateBarAdapter): BarVerifyRes
 /**
  * Verify an attorney's standing with their state bar.
  *
- * Never throws. Every failure path — unknown state, unreachable adapter,
- * malformed response, unimplemented jurisdiction — returns a `BarVerifyResult`
- * with a `detail` an escrow officer can act on, because the caller is a
- * settlement gate and an exception there is indistinguishable from a crash.
+ * Never throws. Every failure path — unknown state, uncovered jurisdiction,
+ * missing token, unreachable registry, malformed response — returns a
+ * `BarVerifyResult` with a `detail` an escrow officer can act on, because the
+ * caller is a settlement gate and an exception there is indistinguishable from
+ * a crash.
  */
-export async function verifyBar(
-  barNumber: string,
-  state: string,
-  adapterBaseUrl: string = CALBAR_DEFAULT_BASE_URL,
-): Promise<BarVerifyResult> {
+export async function verifyBar(barNumber: string, state: string): Promise<BarVerifyResult> {
   const trimmed = barNumber.trim();
   const entry = resolveState(state);
 
@@ -278,8 +293,19 @@ export async function verifyBar(
     return {
       barNumber: trimmed,
       state,
-      status: "error",
+      status: "unsupported_state",
       detail: `"${state}" is not a recognized US state — no bar verification adapter is routable.`,
+    };
+  }
+
+  if (!entry.implemented) {
+    return {
+      barNumber: trimmed,
+      state: entry.state,
+      status: "unsupported_state",
+      detail:
+        `Bar verification does not cover ${entry.state} — supported states are ` +
+        `${APIFY_SUPPORTED_STATES.join(", ")}.`,
     };
   }
 
@@ -292,11 +318,24 @@ export async function verifyBar(
     };
   }
 
-  switch (entry.code) {
-    case "CA":
-      return verifyBarForState_CA(trimmed, entry.state, adapterBaseUrl);
-    // V2: one case per state as its adapter lands.
-    default:
-      return scaffoldResult(trimmed, entry);
+  // The backend resolves the state to the actor's two-letter code itself; the
+  // full name is passed because that is what the trust anchors carry, and it
+  // round-trips through one normalizer rather than two.
+  let raw: backend.BarVerifyApiResult;
+  try {
+    raw = await backend.verifyBarNumber(trimmed, entry.code);
+  } catch (e) {
+    // The command is written never to reject, so this is belt-and-braces: an
+    // IPC fault, not a registry verdict.
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn("bar verification transport failed", entry.state, message);
+    return {
+      barNumber: trimmed,
+      state: entry.state,
+      status: "unavailable",
+      detail: `${BAR_VERIFY_UNAVAILABLE} ${message}`,
+    };
   }
+
+  return interpretBackendResult(raw, trimmed, entry.state);
 }

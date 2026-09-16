@@ -11,6 +11,7 @@ import type {
   PracticePantherPublic,
   SmtpPublic,
   TwilioPublic,
+  ApifyPublic,
   VaultPublic,
 } from "../lib/vaultTypes";
 import { toast } from "../components/Toast";
@@ -389,6 +390,95 @@ function TwilioCard({ data, refresh }: { data: TwilioPublic | null; refresh: () 
           <Err msg={err} />
           <div className="flex gap-2">
             <button className="btn btn-primary" disabled={busy || !accountSid} onClick={save}>
+              Save
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </CardShell>
+  );
+}
+
+// ── Apify — attorney bar verification ───────────────────────────────────────
+
+/** The states the bar scraper actually covers, for the card's subtitle. */
+const APIFY_BAR_STATES = "AZ, CA, FL, GA, ID, IL, MA, MN, NJ, NY, OH, PA, TN, TX";
+
+function ApifyCard({ data, refresh }: { data: ApifyPublic | null; refresh: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [apiToken, setApiToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const openEdit = () => {
+    setApiToken("");
+    setErr(null);
+    setEditing(true);
+  };
+  const save = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await backend.vaultSetApify({ apiToken: apiToken || undefined });
+      setEditing(false);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+  const del = async () => {
+    await backend.vaultDelete("apify");
+    refresh();
+  };
+
+  return (
+    <CardShell
+      title="Apify — Attorney Bar Verification"
+      subtitle={`Verifies attorney standing against 14 U.S. state bars: ${APIFY_BAR_STATES}.`}
+    >
+      {!editing ? (
+        <div>
+          {data?.hasApiToken ? (
+            <dl className="space-y-1.5 text-sm">
+              <Row k="API token" v="•••••••• stored" />
+            </dl>
+          ) : (
+            // Neutral, not a warning: an install that never touches the legal
+            // asset class has no reason to hold this token, and the Processing
+            // screen already reports the step as unconfigured rather than
+            // failed.
+            <p className="text-sm text-text-muted">
+              No Apify token — attorney bar verification is skipped and left for manual review.
+            </p>
+          )}
+          <div className="mt-3 flex gap-2">
+            <button className="btn btn-secondary" onClick={openEdit}>
+              {data?.hasApiToken ? "Edit" : "Add"}
+            </button>
+            {data?.hasApiToken && (
+              <button className="btn btn-secondary text-red-600" onClick={del}>
+                Delete
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="label">API token</label>
+            <SecretInput
+              value={apiToken}
+              onChange={setApiToken}
+              placeholder={data?.hasApiToken ? "leave blank to keep existing" : "apify_api_…"}
+            />
+          </div>
+          <Err msg={err} />
+          <div className="flex gap-2">
+            <button className="btn btn-primary" disabled={busy || !apiToken} onClick={save}>
               Save
             </button>
             <button className="btn btn-secondary" onClick={() => setEditing(false)}>
@@ -1971,6 +2061,7 @@ export function Configuration() {
           <AiCard data={pub?.ai ?? null} refresh={refresh} />
           <SmtpCard data={pub?.smtp ?? null} refresh={refresh} />
           <TwilioCard data={pub?.twilio ?? null} refresh={refresh} />
+          <ApifyCard data={pub?.apify ?? null} refresh={refresh} />
           <DocuSignCard data={docusign} refresh={refresh} />
 
           <div className="pt-2">

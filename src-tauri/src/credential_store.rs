@@ -12,7 +12,7 @@
 //!  * [`VaultStore`] wraps the existing AES-256-GCM + scrypt vault. Portable,
 //!    dependency-free, and password-gated.
 //!
-//! Both address the same nine credentials by the same names ([`CREDENTIAL_KEYS`]),
+//! Both address the same ten credentials by the same names ([`CREDENTIAL_KEYS`]),
 //! so migrating between them is a copy, not a translation.
 //!
 //! The IPC rule is unchanged and absolute: credential *values* never cross to
@@ -30,8 +30,9 @@ use zeroize::Zeroizing;
 use crate::store_config::{read_store_config, write_store_config, StoreBackend};
 use crate::vault::{
     can_settle, has_debug_console, has_docusign_credentials, merge_ai, merge_blockchain, merge_clio,
-    merge_debug_console, merge_docusign, merge_practice_panther, merge_smtp, merge_twilio,
-    new_seal_key_b64, verify_debug_password, AiEntry, AiInput, BlockchainConfig, BlockchainInput,
+    merge_apify, merge_debug_console, merge_docusign, merge_practice_panther, merge_smtp,
+    merge_twilio, new_seal_key_b64, verify_debug_password, AiEntry, AiInput, ApifyEntry, ApifyInput,
+    BlockchainConfig, BlockchainInput,
     BlockchainPublic, ClioConfig, ClioConfigInput, ClioPublic, DebugConsoleEntry, DebugConsoleInput,
     DebugConsolePublic, DocuSignInput, DocuSignPublic, DocuSignSecret, PracticePantherConfig,
     PracticePantherConfigInput, PracticePantherPublic, SmtpEntry, SmtpInput, TwilioEntry,
@@ -39,7 +40,7 @@ use crate::vault::{
 };
 
 /// Service name for every keyring entry. The username field carries the
-/// credential key, so one LexEscrow install occupies nine entries under one
+/// credential key, so one LexEscrow install occupies ten entries under one
 /// service — which is what makes them findable in Keychain Access and
 /// `secret-tool` without guessing.
 const KEYRING_SERVICE: &str = "lexescrow";
@@ -65,6 +66,7 @@ pub const CREDENTIAL_KEYS: &[&str] = &[
     "practice-panther",
     "blockchain",
     "debug-console",
+    "apify",
     KEY_SEAL,
 ];
 
@@ -457,6 +459,10 @@ impl CredentialStoreState {
         self.resolve("debug-console")
     }
 
+    pub fn resolve_apify(&self) -> Option<ApifyEntry> {
+        self.resolve("apify")
+    }
+
     /// The per-install AnchorReceipt seal key, minting it on first use.
     ///
     /// Minting here rather than at unlock is what lets the OS-keychain backend
@@ -504,6 +510,11 @@ impl CredentialStoreState {
     pub fn set_twilio(&self, input: TwilioInput) -> Result<(), CredentialStoreError> {
         let merged = merge_twilio(self.resolve_twilio().as_ref(), input);
         self.write("twilio", &merged)
+    }
+
+    pub fn set_apify(&self, input: ApifyInput) -> Result<(), CredentialStoreError> {
+        let merged = merge_apify(self.resolve_apify().as_ref(), input);
+        self.write("apify", &merged)
     }
 
     pub fn set_docusign(&self, input: DocuSignInput) -> Result<(), CredentialStoreError> {
@@ -598,6 +609,7 @@ impl CredentialStoreState {
             self.resolve_ai().as_ref(),
             self.resolve_smtp().as_ref(),
             self.resolve_twilio().as_ref(),
+            self.resolve_apify().as_ref(),
         )
     }
 
@@ -919,6 +931,14 @@ pub fn vault_set_twilio(
     input: TwilioInput,
 ) -> Result<(), String> {
     state.set_twilio(input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn vault_set_apify(
+    state: State<'_, CredentialStoreState>,
+    input: ApifyInput,
+) -> Result<(), String> {
+    state.set_apify(input).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1403,6 +1423,7 @@ mod tests {
             "practice-panther" => r#"{"webhookUrl":"https://example.test/pp","matterId":null,"apiKey":"pp-tok"}"#,
             "blockchain" => r#"{"rpcUrl":"https://eth-sepolia.g.alchemy.com/v2/SECRET","chainId":11155111,"contractAddress":"0xc0","deployerAddress":"0xd0","deployerPrivateKey":"0xdeadbeef","usdcAddress":"0xu0","forwarderAddress":"0xf0","networkName":"Ethereum Sepolia"}"#,
             "debug-console" => r#"{"operatorId":"ops-jordan","passwordHash":"scrypt$15$8$1$AAAAAAAAAAAAAAAAAAAAAA==$3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4="}"#,
+            "apify" => r#"{"apiToken":"apify_api_secret"}"#,
             KEY_SEAL => "3q2+796tvu/erb7v3q2+796tvu/erb7v3q2+7w4=",
             other => panic!("no fixture for {other}"),
         }
@@ -1805,7 +1826,7 @@ mod tests {
         for k in CREDENTIAL_KEYS {
             assert!(seen.insert(*k), "duplicate credential key {k}");
         }
-        assert_eq!(CREDENTIAL_KEYS.len(), 9);
+        assert_eq!(CREDENTIAL_KEYS.len(), 10);
         assert_eq!(*CREDENTIAL_KEYS.last().unwrap(), KEY_SEAL);
     }
 

@@ -23,6 +23,7 @@ import * as backend from "../lib/backend";
 import * as providers from "../lib/ai/providers";
 import * as adapters from "../lib/adapters";
 import { BAR_VERIFY_UNAVAILABLE } from "../lib/adapters";
+import { BAR_VERIFY_NOT_CONFIGURED } from "../lib/backend";
 import { ExecutionPath, type ParsedRetainerPayload } from "../lexguard/types";
 import type { ClioMatterPayload } from "../lib/clio";
 
@@ -65,6 +66,14 @@ const UNAVAILABLE = {
   state: "California",
   status: "unavailable" as const,
   detail: `${BAR_VERIFY_UNAVAILABLE} Could not reach the California State Bar adapter: ECONNREFUSED`,
+};
+
+/** The other non-verdict: no Apify token, so nothing was ever asked. */
+const NOT_CONFIGURED = {
+  barNumber: "123456",
+  state: "California",
+  status: "not_configured" as const,
+  detail: BAR_VERIFY_NOT_CONFIGURED,
 };
 
 let audit: Array<[string, string]>;
@@ -150,11 +159,15 @@ describe("an unreachable bar registry", () => {
     );
   });
 
-  it("marks the step red with what the officer has to do", async () => {
+  it("marks the step amber with what the officer has to do", async () => {
     await useSession.getState().beginProcessing();
 
     const step = useSession.getState().steps.find((s) => s.key === "bar");
-    expect(step?.status).toBe("error");
+    // Amber, not red: the registry said nothing about this attorney, so the
+    // check still has to be finished by hand — but nothing about the
+    // transaction has failed. Red is reserved for a check that ran and did not
+    // pass.
+    expect(step?.status).toBe("warning");
     expect(step?.label).toContain("manual review required");
   });
 
@@ -192,5 +205,65 @@ describe("an unreachable bar registry", () => {
     // …but the reason the officer needs is on the condition itself.
     expect(bar?.description).toContain("manual review required");
     expect(useSession.getState().conditionSummary.allMet).toBe(false);
+  });
+});
+
+/**
+ * An unconfigured Apify token must not look like a failed transaction.
+ *
+ * This is the distinction the Processing screen turns into colour: red means a
+ * check ran and did not pass, and a blank field in Configuration is neither. An
+ * officer who sees red here starts investigating an escrow that is fine.
+ */
+describe("an unconfigured bar verification", () => {
+  beforeEach(() => {
+    vi.spyOn(adapters, "verifyBar").mockResolvedValue(NOT_CONFIGURED as never);
+  });
+
+  it("marks the step neutral grey, not red and not amber", async () => {
+    await useSession.getState().beginProcessing();
+
+    const step = useSession.getState().steps.find((s) => s.key === "bar");
+    expect(step?.status).toBe("advisory");
+    expect(step?.status).not.toBe("error");
+    expect(step?.status).not.toBe("warning");
+    expect(step?.label).toContain("Apify token");
+  });
+
+  it("does not halt processing or fail the session", async () => {
+    await useSession.getState().beginProcessing();
+
+    expect(useSession.getState().error).toBeNull();
+    expect(vi.mocked(backend.updateSessionState).mock.calls.map(([, s]) => s)).not.toContain(
+      "FAILED",
+    );
+  });
+
+  it("leaves standing unknown rather than asserting the attorney failed", async () => {
+    await useSession.getState().beginProcessing();
+    expect(useSession.getState().barActive).toBeNull();
+  });
+
+  it("keeps the release gate shut", async () => {
+    // Continuing is not the same as passing: an unverified attorney still
+    // blocks the release, exactly as an unreachable registry does.
+    await useSession.getState().beginProcessing();
+    useSession.getState().initConditions();
+
+    const bar = useSession.getState().conditions.find((c) => c.type === "bar_verify");
+    expect(bar?.status).toBe("pending");
+    expect(useSession.getState().conditionSummary.allMet).toBe(false);
+  });
+
+  it("records the source actor in the audit trail", async () => {
+    await useSession.getState().beginProcessing();
+
+    const entry = audit.find(([event]) => event === "bar_verification_result");
+    expect(entry).toBeDefined();
+    const payload = JSON.parse(entry![1]);
+    expect(payload.status).toBe("not_configured");
+    expect(payload.verified).toBe(false);
+    expect(payload.has_public_discipline).toBe(false);
+    expect(payload.source).toBe("apify/jungle_synthesizer~multi-state-bar-scraper");
   });
 });

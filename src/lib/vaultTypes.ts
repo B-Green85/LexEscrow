@@ -40,6 +40,17 @@ export interface TwilioPublic {
 }
 
 /**
+ * Apify's public view — backs attorney bar verification.
+ *
+ * The token is the entire credential, so presence is the only thing there is to
+ * report. There is no addressing field to echo back: the actor is pinned in
+ * code, and what varies per install is only who is paying for the run.
+ */
+export interface ApifyPublic {
+  hasApiToken: boolean;
+}
+
+/**
  * DocuSign's public view (spec §24).
  *
  * The two credentials — the integration key and the RSA PEM — never cross IPC
@@ -68,6 +79,7 @@ export interface VaultPublic {
   ai: AiPublic | null;
   smtp: SmtpPublic | null;
   twilio: TwilioPublic | null;
+  apify: ApifyPublic | null;
 }
 
 /**
@@ -210,6 +222,11 @@ export interface TwilioInput {
   authToken?: string;
 }
 
+/** A blank `apiToken` keeps the stored one, as elsewhere. */
+export interface ApifyInput {
+  apiToken?: string;
+}
+
 /**
  * DocuSign setter payload — every field is a string because the whole entry is
  * secret-bearing. Submitting `integrationKey` or `jwtPrivateKey` blank keeps
@@ -312,6 +329,7 @@ export const CREDENTIAL_LABEL: Record<string, string> = {
   docusign: "DocuSign",
   clio: "Clio Manage",
   "practice-panther": "PracticePanther",
+  apify: "Apify bar verification",
   blockchain: "Settlement",
   "debug-console": "LexTrace debug console",
   "hmac-vault-key": "AnchorReceipt seal key",

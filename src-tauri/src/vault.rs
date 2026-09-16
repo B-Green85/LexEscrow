@@ -98,6 +98,16 @@ pub struct TwilioEntry {
     pub from_number: String,
 }
 
+/// Apify API token — backs attorney bar verification (`bar_verify.rs`).
+///
+/// One field, because the actor is addressed by a fixed slug in code rather
+/// than configured: what varies per install is only who is paying for the run.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApifyEntry {
+    pub api_token: String,
+}
+
 /// DocuSign JWT-Grant credentials (spec §18 / §24).
 ///
 /// `jwt_private_key` is the most sensitive value the vault holds — an RSA PEM
@@ -248,6 +258,8 @@ struct VaultData {
     blockchain: Option<BlockchainConfig>,
     #[serde(default)]
     debug_console: Option<DebugConsoleEntry>,
+    #[serde(default)]
+    apify: Option<ApifyEntry>,
 }
 
 // ============================================================================
@@ -278,6 +290,14 @@ pub struct TwilioPublic {
     account_sid: String,
     from_number: String,
     has_auth_token: bool,
+}
+
+/// Secret-free Apify view. The token is the whole credential, so presence is
+/// the only thing there is to report.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApifyPublic {
+    pub has_api_token: bool,
 }
 
 /// Secret-free DocuSign view.
@@ -311,6 +331,7 @@ pub struct VaultPublic {
     ai: Option<AiPublic>,
     smtp: Option<SmtpPublic>,
     twilio: Option<TwilioPublic>,
+    apify: Option<ApifyPublic>,
 }
 
 /// Secret-free Clio view.
@@ -400,6 +421,7 @@ impl VaultPublic {
         ai: Option<&AiEntry>,
         smtp: Option<&SmtpEntry>,
         twilio: Option<&TwilioEntry>,
+        apify: Option<&ApifyEntry>,
     ) -> Self {
         VaultPublic {
             ai: ai.map(|e| AiPublic {
@@ -418,6 +440,9 @@ impl VaultPublic {
                 account_sid: e.account_sid.clone(),
                 from_number: e.from_number.clone(),
                 has_auth_token: !e.auth_token.is_empty(),
+            }),
+            apify: apify.map(|e| ApifyPublic {
+                has_api_token: !e.api_token.is_empty(),
             }),
         }
     }
@@ -625,6 +650,15 @@ pub struct TwilioInput {
     auth_token: Option<String>,
 }
 
+/// Apify setter payload. A blank token keeps what is stored, matching every
+/// other group's edit semantics.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApifyInput {
+    #[serde(default)]
+    pub api_token: Option<String>,
+}
+
 /// DocuSign setter payload. Every field is a plain `String` (the whole entry is
 /// secret-bearing), but the two secrets follow the same edit semantics as the
 /// other groups: submitting them blank keeps whatever is already stored, so an
@@ -778,6 +812,16 @@ pub fn merge_twilio(existing: Option<&TwilioEntry>, input: TwilioInput) -> Twili
         from_number: input.from_number.trim().to_string(),
         auth_token,
     }
+}
+
+pub fn merge_apify(existing: Option<&ApifyEntry>, input: ApifyInput) -> ApifyEntry {
+    let api_token = input
+        .api_token
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| existing.map(|e| e.api_token.clone()))
+        .unwrap_or_default();
+    ApifyEntry { api_token }
 }
 
 pub fn merge_docusign(existing: Option<&DocuSignSecret>, input: DocuSignInput) -> DocuSignSecret {
@@ -1075,6 +1119,7 @@ impl VaultState {
             data.ai.as_ref(),
             data.smtp.as_ref(),
             data.twilio.as_ref(),
+            data.apify.as_ref(),
         ))
     }
 
@@ -1104,6 +1149,11 @@ impl VaultState {
     #[cfg_attr(not(test), allow(dead_code))]
     fn set_twilio(&self, input: TwilioInput) -> Result<(), VaultError> {
         self.mutate(|data| data.twilio = Some(merge_twilio(data.twilio.as_ref(), input)))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn set_apify(&self, input: ApifyInput) -> Result<(), VaultError> {
+        self.mutate(|data| data.apify = Some(merge_apify(data.apify.as_ref(), input)))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -1244,6 +1294,7 @@ impl VaultState {
             "ai" => data.ai = None,
             "smtp" => data.smtp = None,
             "twilio" => data.twilio = None,
+            "apify" => data.apify = None,
             "docusign" => data.docusign = None,
             "clio" => data.clio = None,
             "practice-panther" => data.practice_panther = None,
@@ -1291,6 +1342,11 @@ impl VaultState {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn resolve_twilio(&self) -> Option<TwilioEntry> {
         self.inner.lock().unwrap().as_ref().and_then(|s| s.data.twilio.clone())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn resolve_apify(&self) -> Option<ApifyEntry> {
+        self.inner.lock().unwrap().as_ref().and_then(|s| s.data.apify.clone())
     }
 
     /// DocuSign credentials for `docusign.rs`. The returned clone zeroizes
@@ -1374,6 +1430,7 @@ impl VaultState {
             "ai" => data.ai.as_ref().map(serde_json::to_string).transpose()?,
             "smtp" => data.smtp.as_ref().map(serde_json::to_string).transpose()?,
             "twilio" => data.twilio.as_ref().map(serde_json::to_string).transpose()?,
+            "apify" => data.apify.as_ref().map(serde_json::to_string).transpose()?,
             "docusign" => data.docusign.as_ref().map(serde_json::to_string).transpose()?,
             "clio" => data.clio.as_ref().map(serde_json::to_string).transpose()?,
             "practice-panther" => data
@@ -1408,6 +1465,10 @@ impl VaultState {
             "twilio" => {
                 let e: TwilioEntry = serde_json::from_str(value)?;
                 self.mutate(|d| d.twilio = Some(e))
+            }
+            "apify" => {
+                let e: ApifyEntry = serde_json::from_str(value)?;
+                self.mutate(|d| d.apify = Some(e))
             }
             "docusign" => {
                 let e: DocuSignSecret = serde_json::from_str(value)?;
@@ -1450,8 +1511,8 @@ impl VaultState {
             "hmac-vault-key" => Err(VaultError::UnknownKey(
                 "hmac-vault-key is not deletable — it anchors every issued AnchorReceipt".into(),
             )),
-            "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practice-panther" | "blockchain"
-            | "debug-console" => self.delete_group(key),
+            "ai" | "smtp" | "twilio" | "apify" | "docusign" | "clio" | "practice-panther"
+            | "blockchain" | "debug-console" => self.delete_group(key),
             other => Err(VaultError::UnknownKey(other.to_string())),
         }
     }

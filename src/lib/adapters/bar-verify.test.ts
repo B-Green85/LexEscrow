@@ -3,324 +3,316 @@
  *
  * The load-bearing assertion in this file is the negative one: nothing that is
  * not an affirmative "active" from a real registry may come back as `active`.
- * An unreachable adapter, an unimplemented state, an unrecognized status and a
- * malformed body must all land somewhere else, because the legal flow reduces
- * this result to a boolean that gates a retainer release.
+ * An uncovered state, a missing token, an unreachable registry, an unrecognized
+ * status and an absent record must all land somewhere else, because the legal
+ * flow reduces this result to a boolean that gates a retainer release.
+ *
+ * The second theme is that the five non-verdicts stay distinct. `not_configured`
+ * in particular has to survive all the way to the screen as its own thing — it
+ * renders neutrally, while every other failure renders as a problem.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as backend from "../backend";
 import {
   verifyBar,
   resolveState,
+  interpretBackendResult,
   STATE_ADAPTER_MAP,
-  CALBAR_DEFAULT_BASE_URL,
+  APIFY_SUPPORTED_STATES,
+  BAR_VERIFY_SOURCE,
   BAR_VERIFY_UNAVAILABLE,
   type BarVerifyResult,
 } from "./bar-verify";
 
-const BASE = "http://localhost:3001";
+const ALL_STATUSES = [
+  "active",
+  "inactive",
+  "suspended",
+  "not_found",
+  "error",
+  "unavailable",
+  "not_configured",
+  "unsupported_state",
+];
 
-/** The mock CA Bar adapter's active response (src/mock/calbar-adapter.ts). */
-const ACTIVE_BODY = {
-  barNumber: "234567",
-  status: "active",
-  attorneyName: "Alex J. Mercer",
-  admissionDate: "2014-06-01",
-  firmName: "Mercer Legal Group LLP",
-  detail: "Active member in good standing — California State Bar",
-};
-
-const INACTIVE_BODY = {
-  barNumber: "99",
-  status: "inactive",
-  detail: "Bar number not found in California State Bar records",
-};
-
-/** Stub `fetch` with a fixed JSON body. Returns the spy for URL assertions. */
-function stubFetch(body: unknown, ok = true, status = 200) {
-  const mockFetch = vi.fn(async () => ({
-    ok,
-    status,
-    json: async () => body,
-  })) as unknown as typeof fetch;
-  vi.stubGlobal("fetch", mockFetch);
-  return mockFetch as unknown as ReturnType<typeof vi.fn>;
+/** A backend verdict, with the shape the Rust command actually returns. */
+function apiResult(over: Partial<backend.BarVerifyApiResult> = {}): backend.BarVerifyApiResult {
+  return {
+    verified: false,
+    name: null,
+    licenseStatus: null,
+    hasPublicDiscipline: false,
+    state: "CA",
+    error: null,
+    ...over,
+  };
 }
 
-/** Every key the interface declares, with the optional ones optional. */
+/** Stub the Rust command with a fixed verdict. Returns the spy. */
+function stubBackend(result: backend.BarVerifyApiResult) {
+  return vi.spyOn(backend, "verifyBarNumber").mockResolvedValue(result);
+}
+
 function expectResultShape(r: BarVerifyResult): void {
   expect(typeof r.barNumber).toBe("string");
   expect(typeof r.state).toBe("string");
   expect(typeof r.detail).toBe("string");
-  expect(["active", "inactive", "suspended", "not_found", "error", "unavailable"]).toContain(
-    r.status,
-  );
+  expect(ALL_STATUSES).toContain(r.status);
   for (const key of ["attorneyName", "admissionDate", "firmName"] as const) {
     if (r[key] !== undefined) expect(typeof r[key]).toBe("string");
   }
+  if (r.hasPublicDiscipline !== undefined) expect(typeof r.hasPublicDiscipline).toBe("boolean");
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-// ── California — the live V1 adapter ─────────────────────────────────────────
+// ── A covered state, end to end ──────────────────────────────────────────────
 
-describe("verifyBar — California", () => {
-  it("returns active with the attorney's details for a valid bar number", async () => {
-    stubFetch(ACTIVE_BODY);
-    const result = await verifyBar("234567", "CA", BASE);
+describe("verifyBar — a covered state", () => {
+  it("returns active with the attorney's name for a licensed attorney", async () => {
+    stubBackend(apiResult({ verified: true, name: "Hae-Ri You", licenseStatus: "Active" }));
+    const r = await verifyBar("300000", "CA");
 
-    expect(result.status).toBe("active");
-    expect(result.attorneyName).toBe("Alex J. Mercer");
-    expect(result.admissionDate).toBe("2014-06-01");
-    expect(result.firmName).toBe("Mercer Legal Group LLP");
-    expect(result.state).toBe("California");
-    expectResultShape(result);
+    expect(r.status).toBe("active");
+    expect(r.attorneyName).toBe("Hae-Ri You");
+    expect(r.state).toBe("California");
+    expect(r.detail).toContain("Active");
+    expectResultShape(r);
   });
 
-  it("returns inactive for a bar number the registry does not hold", async () => {
-    stubFetch(INACTIVE_BODY);
-    const result = await verifyBar("99", "CA", BASE);
-
-    expect(result.status).toBe("inactive");
-    expect(result.detail).toContain("not found");
-    expect(result.attorneyName).toBeUndefined();
-    expectResultShape(result);
-  });
-
-  it("routes California to the CA adapter endpoint", async () => {
-    const mockFetch = stubFetch(ACTIVE_BODY);
-    await verifyBar("234567", "CA", BASE);
-    expect(mockFetch).toHaveBeenCalledWith("http://localhost:3001/verify/234567");
+  it("passes the two-letter code to the backend, not the full state name", async () => {
+    const spy = stubBackend(apiResult({ verified: true, licenseStatus: "Active" }));
+    await verifyBar("300000", "California");
+    // The actor's input schema enumerates codes; a full name is rejected by it.
+    expect(spy).toHaveBeenCalledWith("300000", "CA");
   });
 
   it("accepts the full state name as the trust anchors spell it", async () => {
-    const mockFetch = stubFetch(ACTIVE_BODY);
-    // Document Load stores "California", not "CA" — both must route.
-    const result = await verifyBar("234567", "California", BASE);
-    expect(result.status).toBe("active");
-    expect(mockFetch).toHaveBeenCalledOnce();
+    stubBackend(apiResult({ verified: true, licenseStatus: "Active" }));
+    const r = await verifyBar("300000", "California");
+    expect(r.status).toBe("active");
   });
 
-  it("defaults to the demo adapter base URL when none is given", async () => {
-    const mockFetch = stubFetch(ACTIVE_BODY);
-    await verifyBar("234567", "CA");
-    expect(mockFetch).toHaveBeenCalledWith(`${CALBAR_DEFAULT_BASE_URL}/verify/234567`);
+  it("trims the bar number before sending it", async () => {
+    const spy = stubBackend(apiResult({ verified: true, licenseStatus: "Active" }));
+    await verifyBar("  300000  ", "CA");
+    expect(spy).toHaveBeenCalledWith("300000", "CA");
   });
 
-  it("percent-encodes the bar number into the URL", async () => {
-    const mockFetch = stubFetch(INACTIVE_BODY);
-    await verifyBar("12/34", "CA", BASE);
-    expect(mockFetch).toHaveBeenCalledWith("http://localhost:3001/verify/12%2F34");
-  });
+  it("reports not_found for a blank bar number without calling the backend", async () => {
+    const spy = stubBackend(apiResult());
+    const r = await verifyBar("   ", "CA");
 
-  it("tolerates a base URL with a trailing slash", async () => {
-    const mockFetch = stubFetch(ACTIVE_BODY);
-    await verifyBar("234567", "CA", "http://localhost:3001/");
-    expect(mockFetch).toHaveBeenCalledWith("http://localhost:3001/verify/234567");
-  });
-
-  it("reports unavailable, not error, when the adapter is unreachable", async () => {
-    // The registry was never reached, so there is no verdict about the
-    // attorney to report — only a network fact. The distinction is what lets
-    // the pipeline continue instead of failing the session.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("ECONNREFUSED");
-      }),
-    );
-    const result = await verifyBar("234567", "CA", BASE);
-
-    expect(result.status).toBe("unavailable");
-    expect(result.detail).toContain(BAR_VERIFY_UNAVAILABLE);
-    // The transport's own reason survives — an officer chasing this needs to
-    // know it was a refused connection and not a 500.
-    expect(result.detail).toContain("ECONNREFUSED");
-    expectResultShape(result);
-  });
-
-  it("never reports active for an unreachable adapter", async () => {
-    // The safety property is untouched by the new status: unreachable is a
-    // reason to review by hand, never a reason to open the gate.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new TypeError("Failed to fetch");
-      }),
-    );
-    expect((await verifyBar("234567", "CA", BASE)).status).not.toBe("active");
-  });
-
-  it("reports an error on a non-OK HTTP response", async () => {
-    // A 503 is the far end *answering* and refusing. Something is wrong at the
-    // registry rather than on the wire, so this stays a hard error and still
-    // halts the session.
-    stubFetch({}, false, 503);
-    const result = await verifyBar("234567", "CA", BASE);
-
-    expect(result.status).toBe("error");
-    expect(result.detail).toContain("503");
-    expect(result.detail).not.toContain(BAR_VERIFY_UNAVAILABLE);
-  });
-
-  it("treats an unrecognized registry status as an error, never as active", async () => {
-    // The safety property: a value we have never seen cannot pass the gate.
-    stubFetch({ barNumber: "234567", status: "probationary" });
-    const result = await verifyBar("234567", "CA", BASE);
-
-    expect(result.status).toBe("error");
-    expect(result.detail).toContain("probationary");
-  });
-
-  it("treats a body with no status at all as an error", async () => {
-    stubFetch({ barNumber: "234567" });
-    expect((await verifyBar("234567", "CA", BASE)).status).toBe("error");
-  });
-
-  it("reports not_found for a blank bar number without calling the adapter", async () => {
-    const mockFetch = stubFetch(ACTIVE_BODY);
-    const result = await verifyBar("   ", "CA", BASE);
-
-    expect(result.status).toBe("not_found");
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(r.status).toBe("not_found");
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 
-// ── Scaffolded states ────────────────────────────────────────────────────────
+// ── The five things that are not verdicts ────────────────────────────────────
 
-describe("verifyBar — scaffolded states", () => {
-  it("returns an error naming the state as a V2 scaffold", async () => {
-    const result = await verifyBar("1234567", "NY", BASE);
+describe("verifyBar — non-verdicts stay distinct", () => {
+  it("reports not_configured when no Apify token is stored", async () => {
+    stubBackend(apiResult({ error: backend.BAR_VERIFY_NOT_CONFIGURED }));
+    const r = await verifyBar("300000", "CA");
 
-    expect(result.status).toBe("error");
-    expect(result.detail).toBe("New York bar verification — V2 adapter (scaffold)");
-    expectResultShape(result);
+    expect(r.status).toBe("not_configured");
+    expect(r.detail).toBe(backend.BAR_VERIFY_NOT_CONFIGURED);
   });
 
-  it("never issues a network call for an unimplemented state", async () => {
-    const mockFetch = stubFetch(ACTIVE_BODY);
-    await verifyBar("1234567", "TX", BASE);
-    expect(mockFetch).not.toHaveBeenCalled();
+  it("does not collapse not_configured into unavailable", async () => {
+    // These render differently — grey versus amber — so the distinction has to
+    // survive the router.
+    stubBackend(apiResult({ error: backend.BAR_VERIFY_NOT_CONFIGURED }));
+    const configured = await verifyBar("300000", "CA");
+
+    stubBackend(apiResult({ error: "Could not reach the bar verification service: timeout" }));
+    const unreachable = await verifyBar("300000", "CA");
+
+    expect(configured.status).toBe("not_configured");
+    expect(unreachable.status).toBe("unavailable");
   });
 
-  it.each(["NY", "TX", "FL", "IL", "WA", "OH"])(
-    "returns a scaffold result mentioning scaffold for %s",
-    async (code) => {
-      const result = await verifyBar("1234567", code, BASE);
-      expect(result.status).toBe("error");
-      expect(result.detail).toContain("scaffold");
-      expect(result.state).toBe(STATE_ADAPTER_MAP[code].state);
-    },
-  );
+  it("reports unavailable when the registry could not be reached", async () => {
+    stubBackend(apiResult({ error: "Could not reach the bar verification service: timeout" }));
+    const r = await verifyBar("300000", "CA");
 
-  it("returns an error for a state that is not a US state at all", async () => {
-    const result = await verifyBar("1234567", "Ontario", BASE);
-    expect(result.status).toBe("error");
-    expect(result.detail).toContain("not a recognized US state");
-    expectResultShape(result);
+    expect(r.status).toBe("unavailable");
+    expect(r.detail).toContain(BAR_VERIFY_UNAVAILABLE);
   });
 
-  it("never reports active for any state other than California", async () => {
-    // Blanket sweep: no scaffold may accidentally satisfy the settlement gate.
-    stubFetch(ACTIVE_BODY);
-    for (const code of Object.keys(STATE_ADAPTER_MAP)) {
-      if (code === "CA") continue;
-      const result = await verifyBar("234567", code, BASE);
-      expect(result.status, `${code} must not report active`).not.toBe("active");
+  it("reports unavailable on a non-2xx from the service", async () => {
+    stubBackend(apiResult({ error: "Bar verification service returned HTTP 503." }));
+    const r = await verifyBar("300000", "CA");
+    expect(r.status).toBe("unavailable");
+  });
+
+  it("reports unsupported_state for a state no crawler covers", async () => {
+    const spy = stubBackend(apiResult());
+    const r = await verifyBar("12345", "WY");
+
+    expect(r.status).toBe("unsupported_state");
+    expect(r.detail).toContain("Wyoming");
+    // Named, so the officer learns which states would work.
+    expect(r.detail).toContain("CA");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("reports unsupported_state for a string that is not a US state", async () => {
+    const r = await verifyBar("12345", "Narnia");
+    expect(r.status).toBe("unsupported_state");
+    expect(r.detail).toContain("Narnia");
+  });
+
+  it("reports not_found when the registry answered and holds no record", async () => {
+    stubBackend(apiResult({ verified: false, licenseStatus: null, error: null }));
+    const r = await verifyBar("999999", "CA");
+    expect(r.status).toBe("not_found");
+  });
+
+  it("never reports active for any non-verdict", async () => {
+    const failures: backend.BarVerifyApiResult[] = [
+      apiResult({ error: backend.BAR_VERIFY_NOT_CONFIGURED }),
+      apiResult({ error: "Could not reach the bar verification service: refused" }),
+      apiResult({ error: "Bar verification service returned HTTP 500." }),
+      apiResult({ error: "Bar verification does not cover \"Wyoming\" — supported states are CA." }),
+      apiResult({ verified: false, licenseStatus: null }),
+    ];
+    for (const f of failures) {
+      stubBackend(f);
+      const r = await verifyBar("300000", "CA");
+      expect(r.status).not.toBe("active");
+      expectResultShape(r);
     }
   });
 });
 
-// ── The routing map ──────────────────────────────────────────────────────────
+// ── Status interpretation ────────────────────────────────────────────────────
+
+describe("interpretBackendResult", () => {
+  it("maps every status the registries emit", () => {
+    const cases: Array<[string, BarVerifyResult["status"]]> = [
+      ["Active", "active"],
+      ["Inactive", "inactive"],
+      ["Suspended", "suspended"],
+      ["Disbarred", "suspended"],
+      ["Retired", "inactive"],
+      ["Deceased", "inactive"],
+    ];
+    for (const [raw, expected] of cases) {
+      const r = interpretBackendResult(
+        apiResult({ verified: raw === "Active", licenseStatus: raw }),
+        "300000",
+        "California",
+      );
+      expect(r.status, `${raw} should map to ${expected}`).toBe(expected);
+      // The exact registry word survives even where two map to one status.
+      expect(r.detail).toContain(raw);
+    }
+  });
+
+  it("is case-insensitive about the registry's spelling", () => {
+    for (const raw of ["active", "ACTIVE", " Active "]) {
+      const r = interpretBackendResult(
+        apiResult({ verified: true, licenseStatus: raw }),
+        "300000",
+        "California",
+      );
+      expect(r.status).toBe("active");
+    }
+  });
+
+  it("treats an unrecognized registry status as an error, never as active", () => {
+    const r = interpretBackendResult(
+      apiResult({ verified: false, licenseStatus: "Pending Review" }),
+      "300000",
+      "California",
+    );
+    expect(r.status).toBe("error");
+    expect(r.detail).toContain("unrecognized");
+  });
+
+  it("surfaces public discipline independently of the verdict", () => {
+    // An attorney can be active and still carry a formal reprimand; the officer
+    // needs both facts, so one must not mask the other.
+    const r = interpretBackendResult(
+      apiResult({ verified: true, licenseStatus: "Active", hasPublicDiscipline: true }),
+      "300000",
+      "California",
+    );
+    expect(r.status).toBe("active");
+    expect(r.hasPublicDiscipline).toBe(true);
+    expect(r.detail).toContain("disciplinary");
+  });
+
+  it("carries discipline through on a failure path too", () => {
+    const r = interpretBackendResult(
+      apiResult({ error: "Bar verification service returned HTTP 500.", hasPublicDiscipline: true }),
+      "300000",
+      "California",
+    );
+    expect(r.hasPublicDiscipline).toBe(true);
+  });
+});
+
+// ── Routing table ────────────────────────────────────────────────────────────
 
 describe("STATE_ADAPTER_MAP", () => {
   it("contains all 50 states", () => {
     expect(Object.keys(STATE_ADAPTER_MAP)).toHaveLength(50);
   });
 
-  it("includes every USPS state code exactly once", () => {
-    const expected = [
-      "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
-      "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
-      "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-      "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
-      "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
-    ];
-    expect(Object.keys(STATE_ADAPTER_MAP).sort()).toEqual([...expected].sort());
-  });
-
   it("keys every entry by its own code and gives each a distinct state name", () => {
     const names = new Set<string>();
     for (const [key, entry] of Object.entries(STATE_ADAPTER_MAP)) {
       expect(entry.code).toBe(key);
-      expect(entry.state.length).toBeGreaterThan(0);
-      expect(entry.adapter.length).toBeGreaterThan(0);
-      expect(entry.authority.length).toBeGreaterThan(0);
+      expect(names.has(entry.state)).toBe(false);
       names.add(entry.state);
     }
-    expect(names.size).toBe(50);
   });
 
-  it("marks California as the only implemented adapter in V1", () => {
+  /**
+   * The routing table and the actor's input enum have to agree. A state marked
+   * implemented that the actor does not crawl returns an empty dataset, which
+   * reads as "no such attorney" — a false negative against a real person.
+   */
+  it("marks exactly the states the actor crawls as implemented", () => {
     const implemented = Object.values(STATE_ADAPTER_MAP)
       .filter((e) => e.implemented)
-      .map((e) => e.code);
-    expect(implemented).toEqual(["CA"]);
+      .map((e) => e.code)
+      .sort();
+    expect(implemented).toEqual([...APIFY_SUPPORTED_STATES].sort());
   });
 
-  it("routes California to the calbar adapter", () => {
-    expect(STATE_ADAPTER_MAP.CA.adapter).toBe("calbar");
-    expect(STATE_ADAPTER_MAP.CA.implemented).toBe(true);
-  });
-
-  it("carries the documented adapter slugs for the named V2 states", () => {
-    expect(STATE_ADAPTER_MAP.NY.adapter).toBe("nysbar");
-    expect(STATE_ADAPTER_MAP.TX.adapter).toBe("texasbar");
-    expect(STATE_ADAPTER_MAP.FL.adapter).toBe("floridabar");
-    expect(STATE_ADAPTER_MAP.IL.adapter).toBe("iardc");
+  it("covers fourteen jurisdictions", () => {
+    expect(APIFY_SUPPORTED_STATES).toHaveLength(14);
   });
 });
 
 describe("resolveState", () => {
   it("resolves by code, case-insensitively", () => {
-    expect(resolveState("ca")?.state).toBe("California");
-    expect(resolveState("CA")?.state).toBe("California");
+    expect(resolveState("CA")?.code).toBe("CA");
+    expect(resolveState("ca")?.code).toBe("CA");
   });
 
   it("resolves by full name, case-insensitively and with surrounding space", () => {
-    expect(resolveState("  new york ")?.code).toBe("NY");
-    expect(resolveState("Massachusetts")?.code).toBe("MA");
+    expect(resolveState("California")?.code).toBe("CA");
+    expect(resolveState("  new jersey  ")?.code).toBe("NJ");
   });
 
   it("returns null for anything it cannot route", () => {
+    expect(resolveState("Narnia")).toBeNull();
     expect(resolveState("")).toBeNull();
     expect(resolveState("   ")).toBeNull();
-    expect(resolveState("Ontario")).toBeNull();
-    expect(resolveState("ZZ")).toBeNull();
   });
 });
 
-// ── Demo data policy ─────────────────────────────────────────────────────────
-
-describe("demo data policy", () => {
-  it("uses a clearly fictional attorney in the mock response", async () => {
-    stubFetch(ACTIVE_BODY);
-    const result = await verifyBar("234567", "CA", BASE);
-
-    // The fixture attorney is invented for this adapter — see
-    // src/mock/calbar-adapter.ts and the policy in ./README.md.
-    expect(result.attorneyName).toBe("Alex J. Mercer");
-    expect(result.firmName).toBe("Mercer Legal Group LLP");
-  });
-
-  it("carries no real contact details through the result", async () => {
-    stubFetch(ACTIVE_BODY);
-    const serialized = JSON.stringify(await verifyBar("234567", "CA", BASE));
-
-    expect(serialized).not.toMatch(/@/); // no email addresses
-    expect(serialized).not.toMatch(/\(\d{3}\)|\d{3}-\d{3}-\d{4}/); // no phone numbers
+describe("provenance", () => {
+  it("names the actor that produced a verdict", () => {
+    // Recorded on the condition row and in the audit trail — a verdict with no
+    // attributable source proves nothing on read-back.
+    expect(BAR_VERIFY_SOURCE).toBe("apify/jungle_synthesizer~multi-state-bar-scraper");
   });
 });

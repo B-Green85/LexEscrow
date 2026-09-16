@@ -28,6 +28,7 @@ import type {
   PracticePantherPublic,
   SmtpInput,
   TwilioInput,
+  ApifyInput,
   UnlockResult,
   VaultPublic,
   VaultStatus,
@@ -323,34 +324,58 @@ async function memAppendAudit(
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/** The Rust command's verdict — see `src-tauri/src/bar_verify.rs`. */
+export interface BarVerifyApiResult {
+  verified: boolean;
+  name: string | null;
+  licenseStatus: string | null;
+  hasPublicDiscipline: boolean;
+  /** The resolved two-letter code that was actually queried. */
+  state: string;
+  error: string | null;
+}
+
 /**
- * CA State Bar verification lookup — the raw JSON body from the adapter.
+ * Attorney bar verification against the official state registry.
  *
- * Under Tauri this is issued by the Rust backend, where no browser origin
- * policy applies; the lookup is a cross-origin GET and the WebView would
- * otherwise be blocked by CORS. In a plain browser (`npm run dev`, tests) there
- * is no backend, so the same request goes out as a direct `fetch` — the dev
- * server reaches the mock adapter on port 3001 without a preflight.
+ * Issued by the Rust backend, which holds the Apify token: the lookup is
+ * authenticated with a credential that must never reach the WebView, and it is
+ * cross-origin besides. The backend never rejects — every failure comes back as
+ * a result with `verified: false` and an `error`, because this sits on a
+ * settlement gate and a thrown exception there is indistinguishable from a
+ * crash.
  *
- * Rejects on a transport failure or non-2xx status; the BarVerify router
- * (`lib/adapters/bar-verify`) turns a rejection into a `status: "error"`
- * result, which is the safe value at a settlement gate.
+ * Outside Tauri (`npm run dev`, tests) there is no vault to hold a token and no
+ * backend to spend it, so this reports itself unconfigured rather than calling
+ * Apify from the page. A browser-issued call would have to embed the token in
+ * the document to work at all.
  */
 export async function verifyBarNumber(
   barNumber: string,
   state: string,
-  adapterUrl: string,
-): Promise<unknown> {
+): Promise<BarVerifyApiResult> {
   if (isTauri()) {
-    return invoke<unknown>("verify_bar_number", { barNumber, state, adapterUrl });
+    return invoke<BarVerifyApiResult>("verify_bar_number", { barNumber, state });
   }
-  const url = `${adapterUrl.replace(/\/$/, "")}/verify/${encodeURIComponent(barNumber)}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`${state} State Bar lookup failed with HTTP ${res.status}`);
-  }
-  return res.json();
+  return {
+    verified: false,
+    name: null,
+    licenseStatus: null,
+    hasPublicDiscipline: false,
+    state,
+    error: BAR_VERIFY_NOT_CONFIGURED,
+  };
 }
+
+/**
+ * Spelled identically to `NOT_CONFIGURED` in `src-tauri/src/bar_verify.rs`.
+ *
+ * The router matches on this string to tell "no token" apart from "the registry
+ * refused", and those render differently — grey versus amber — so the two
+ * copies have to agree byte for byte.
+ */
+export const BAR_VERIFY_NOT_CONFIGURED =
+  "Bar verification not configured — add Apify token in Configuration";
 
 export async function loadArtifact(filename: string, bytes: Uint8Array): Promise<LoadedArtifact> {
   if (isTauri()) {
@@ -854,8 +879,16 @@ export async function vaultSetTwilio(input: TwilioInput): Promise<void> {
   await browserVault.setTwilio(input);
 }
 
+export async function vaultSetApify(input: ApifyInput): Promise<void> {
+  if (isTauri()) {
+    await invoke("vault_set_apify", { input });
+    return;
+  }
+  await browserVault.setApify(input);
+}
+
 export async function vaultDelete(
-  group: "ai" | "smtp" | "twilio" | "docusign" | "blockchain",
+  group: "ai" | "smtp" | "twilio" | "apify" | "docusign" | "blockchain",
 ): Promise<void> {
   if (isTauri()) {
     await invoke("vault_delete", { group });

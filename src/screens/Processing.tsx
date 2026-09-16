@@ -28,6 +28,27 @@ function StepIcon({ status }: { status: ProcessingStep["status"] }) {
         </svg>
       </div>
     );
+  // A check that should have run but got no answer: amber, because someone
+  // still has to finish it by hand.
+  if (status === "warning")
+    return (
+      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+          <path fillRule="evenodd" d="M10 2a1 1 0 01.87.5l7 12A1 1 0 0117 16H3a1 1 0 01-.87-1.5l7-12A1 1 0 0110 2zm0 4a1 1 0 00-1 1v3a1 1 0 102 0V7a1 1 0 00-1-1zm0 7.5a1 1 0 100 2 1 1 0 000-2z" clipRule="evenodd" />
+        </svg>
+      </div>
+    );
+  // A check this install cannot run at all is neutral, not failed: a dash on a
+  // grey disc. Red here would report a missing API token as a broken
+  // transaction.
+  if (status === "advisory")
+    return (
+      <div className="flex h-5 w-5 items-center justify-center rounded-full bg-app-input text-text-muted">
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+          <path fillRule="evenodd" d="M4 10a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1z" clipRule="evenodd" />
+        </svg>
+      </div>
+    );
   return <div className="h-5 w-5 rounded-full border-2 border-app-border" />;
 }
 
@@ -146,7 +167,9 @@ export function Processing() {
                     ? "text-text-primary"
                     : step.status === "error"
                       ? "text-red-700"
-                      : "text-text-muted"
+                      : step.status === "warning"
+                        ? "text-amber-700"
+                        : "text-text-muted"
               }`}
             >
               {step.label}

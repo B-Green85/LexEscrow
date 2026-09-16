@@ -6,9 +6,9 @@
 //!   * `Db`                  — SQLite pool + hash-chained audit trail (Phase 3).
 //!   * `DebugConsoleState`   — LexTrace command alternation + run guard.
 
-mod adapters;
 mod ai;
 mod artifact_guard;
+mod bar_verify;
 mod blockchain_write_auth;
 mod clio;
 mod cre;
@@ -135,6 +135,7 @@ pub fn run() {
             credential_store::vault_set_ai,
             credential_store::vault_set_smtp,
             credential_store::vault_set_twilio,
+            credential_store::vault_set_apify,
             credential_store::vault_set_docusign,
             credential_store::vault_get_docusign_public,
             credential_store::vault_has_docusign,
@@ -171,8 +172,8 @@ pub fn run() {
             credential_store::vault_set_practice_panther,
             credential_store::vault_get_practice_panther_public,
             integrations::integration_send_webhook,
-            // External adapter HTTP calls (backend-issued, no WebView CORS)
-            adapters::verify_bar_number,
+            // Attorney bar verification — Apify multi-state bar registry lookup
+            bar_verify::verify_bar_number,
             // Document text extraction (field suggestion at Document Load)
             extractor::extract_document_text,
             extractor::extract_document_text_bytes,

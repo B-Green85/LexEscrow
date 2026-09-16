@@ -24,6 +24,7 @@ import type {
   PracticePantherPublic,
   SmtpInput,
   TwilioInput,
+  ApifyInput,
   UnlockResult,
   VaultPublic,
   VaultStatus,
@@ -45,6 +46,9 @@ interface TwilioStored {
   accountSid: string;
   fromNumber: string;
   authToken: string;
+}
+interface ApifyStored {
+  apiToken: string;
 }
 interface DocuSignStored {
   integrationKey: string;
@@ -102,6 +106,7 @@ interface VData {
   ai: AiStored | null;
   smtp: SmtpStored | null;
   twilio: TwilioStored | null;
+  apify: ApifyStored | null;
   docusign: DocuSignStored | null;
   clio: ClioStored | null;
   practicePanther: WebhookStored | null;
@@ -160,6 +165,7 @@ function emptyData(): VData {
     ai: null,
     smtp: null,
     twilio: null,
+    apify: null,
     docusign: null,
     clio: null,
     practicePanther: null,
@@ -246,6 +252,7 @@ export function getPublic(): VaultPublic {
     twilio: data.twilio
       ? { accountSid: data.twilio.accountSid, fromNumber: data.twilio.fromNumber, hasAuthToken: data.twilio.authToken.length > 0 }
       : null,
+    apify: data.apify ? { hasApiToken: data.apify.apiToken.length > 0 } : null,
   };
 }
 
@@ -275,8 +282,15 @@ export async function setTwilio(input: TwilioInput): Promise<void> {
   await persist();
 }
 
+export async function setApify(input: ApifyInput): Promise<void> {
+  const s = requireUnlocked();
+  const apiToken = input.apiToken && input.apiToken.length > 0 ? input.apiToken : (s.data.apify?.apiToken ?? "");
+  s.data.apify = { apiToken: apiToken.trim() };
+  await persist();
+}
+
 export async function deleteGroup(
-  group: "ai" | "smtp" | "twilio" | "docusign" | "clio" | "practicePanther" | "blockchain",
+  group: "ai" | "smtp" | "twilio" | "apify" | "docusign" | "clio" | "practicePanther" | "blockchain",
 ): Promise<void> {
   const s = requireUnlocked();
   s.data[group] = null;
