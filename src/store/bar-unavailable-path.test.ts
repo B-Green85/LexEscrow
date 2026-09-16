@@ -76,6 +76,19 @@ const NOT_CONFIGURED = {
   detail: BAR_VERIFY_NOT_CONFIGURED,
 };
 
+/**
+ * The registry answered and holds no such attorney.
+ *
+ * A successful lookup that came back empty — not a failed lookup. The Rust
+ * command marks the difference by leaving `error` null.
+ */
+const NOT_FOUND = {
+  barNumber: "123456",
+  state: "California",
+  status: "not_found" as const,
+  detail: "No record found in state bar registry — manual verification required.",
+};
+
 let audit: Array<[string, string]>;
 let parseSpy: ReturnType<typeof vi.fn>;
 
@@ -265,5 +278,75 @@ describe("an unconfigured bar verification", () => {
     expect(payload.verified).toBe(false);
     expect(payload.has_public_discipline).toBe(false);
     expect(payload.source).toBe("apify/jungle_synthesizer~multi-state-bar-scraper");
+  });
+});
+
+/**
+ * An empty dataset from a real lookup must not halt the run.
+ *
+ * A bar number can be absent from a registry because it was mistyped, because
+ * the attorney is admitted elsewhere, or because that state is crawled by name
+ * rather than by number. None of those is "this attorney is not in good
+ * standing", so none of them is grounds for throwing away the parse and every
+ * validation behind it. Red stays for a check that ran and did not pass.
+ */
+describe("a bar number with no registry record", () => {
+  beforeEach(() => {
+    vi.spyOn(adapters, "verifyBar").mockResolvedValue(NOT_FOUND as never);
+  });
+
+  it("marks the step amber, not red", async () => {
+    await useSession.getState().beginProcessing();
+
+    const step = useSession.getState().steps.find((s) => s.key === "bar");
+    expect(step?.status).toBe("warning");
+    expect(step?.status).not.toBe("error");
+    expect(step?.label).toBe(
+      "No record found in state bar registry — manual verification required.",
+    );
+  });
+
+  it("does not halt processing or fail the session", async () => {
+    await useSession.getState().beginProcessing();
+
+    expect(useSession.getState().error).toBeNull();
+    expect(vi.mocked(backend.updateSessionState).mock.calls.map(([, s]) => s)).not.toContain(
+      "FAILED",
+    );
+  });
+
+  it("reaches the AI parse rather than stopping at step 2", async () => {
+    await useSession.getState().beginProcessing();
+    expect(parseSpy).toHaveBeenCalled();
+  });
+
+  it("leaves standing unknown rather than asserting the attorney failed", async () => {
+    // Null, not false: an absent record is not a finding that this attorney is
+    // in bad standing, and writing one would put a `failureReason` on the
+    // condition saying so.
+    await useSession.getState().beginProcessing();
+    expect(useSession.getState().barActive).toBeNull();
+  });
+
+  it("keeps the release gate shut", async () => {
+    // Continuing is not passing. The bar condition stays pending, and `allMet`
+    // counts only met and waived.
+    await useSession.getState().beginProcessing();
+    useSession.getState().initConditions();
+
+    const bar = useSession.getState().conditions.find((c) => c.type === "bar_verify");
+    expect(bar?.status).toBe("pending");
+    expect(bar?.failureReason).toBeUndefined();
+    expect(useSession.getState().conditionSummary.allMet).toBe(false);
+  });
+
+  it("records the not_found verdict in the audit trail", async () => {
+    await useSession.getState().beginProcessing();
+
+    const entry = audit.find(([event]) => event === "bar_verification_result");
+    expect(entry).toBeDefined();
+    const payload = JSON.parse(entry![1]);
+    expect(payload.status).toBe("not_found");
+    expect(payload.verified).toBe(false);
   });
 });

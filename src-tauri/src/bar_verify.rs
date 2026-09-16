@@ -170,7 +170,11 @@ fn is_active(status: &str) -> bool {
 fn interpret(records: &[BarRecord], code: &str) -> BarVerifyResult {
     let Some(record) = records.first() else {
         // The registry answered, and it has no such attorney. That is a real
-        // finding, not a failure — hence no `error`.
+        // finding, not a failure — hence no `error`. `error` is reserved for
+        // the three ways a lookup can fail to produce an answer at all: an
+        // unreachable service, a non-2xx, and a body that will not parse. An
+        // empty dataset is none of those, and the caller renders it as
+        // something to check by hand rather than as a broken run.
         return BarVerifyResult {
             verified: false,
             name: None,
@@ -387,13 +391,41 @@ mod tests {
 
     /// An empty dataset means the registry answered and holds no such
     /// attorney — a finding, not a failure, so no error is attached.
+    ///
+    /// This is what keeps the caller from halting a run over it: the frontend
+    /// tells "no record" apart from "the lookup failed" by the presence of
+    /// `error`, and only the latter is a broken run.
     #[test]
     fn an_empty_dataset_is_unverified_without_an_error() {
         let r = interpret(&[], "CA");
         assert!(!r.verified);
         assert_eq!(r.error, None);
         assert_eq!(r.name, None);
+        assert_eq!(r.license_status, None);
         assert_eq!(r.state, "CA");
+    }
+
+    /// The distinction the caller renders as amber-versus-red: only a lookup
+    /// that failed to produce an answer carries `error`. An empty dataset is a
+    /// successful lookup with nothing in it.
+    #[test]
+    fn only_a_failed_lookup_carries_an_error() {
+        assert_eq!(interpret(&[], "CA").error, None);
+        assert_eq!(
+            interpret(&[record(Some("Active"), None, None)], "CA").error,
+            None
+        );
+        for failure in [
+            "Could not reach the bar verification service: timeout",
+            "Bar verification service returned HTTP 503.",
+            "Bar verification service returned an unreadable body: expected value",
+            NOT_CONFIGURED,
+        ] {
+            assert!(
+                BarVerifyResult::unverified("CA", failure).error.is_some(),
+                "{failure} must carry an error"
+            );
+        }
     }
 
     /// Discipline is reported independently of the verdict: an attorney can be

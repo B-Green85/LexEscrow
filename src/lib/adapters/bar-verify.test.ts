@@ -169,7 +169,23 @@ describe("verifyBar — non-verdicts stay distinct", () => {
   it("reports not_found when the registry answered and holds no record", async () => {
     stubBackend(apiResult({ verified: false, licenseStatus: null, error: null }));
     const r = await verifyBar("999999", "CA");
+
     expect(r.status).toBe("not_found");
+    expect(r.detail).toBe("No record found in state bar registry — manual verification required.");
+  });
+
+  it("keeps the blank-bar-number message distinct from an empty registry result", async () => {
+    // Both are `not_found`, and they are different things to hand an officer:
+    // one means the registry was searched and came back empty, the other means
+    // there was nothing to search for.
+    stubBackend(apiResult({ verified: false, licenseStatus: null, error: null }));
+    const empty = await verifyBar("999999", "CA");
+    const blank = await verifyBar("   ", "CA");
+
+    expect(empty.status).toBe("not_found");
+    expect(blank.status).toBe("not_found");
+    expect(blank.detail).toContain("No bar number was provided");
+    expect(blank.detail).not.toBe(empty.detail);
   });
 
   it("never reports active for any non-verdict", async () => {

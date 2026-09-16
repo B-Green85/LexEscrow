@@ -1612,7 +1612,8 @@ export const useSession = create<SessionState>((set, get) => {
         const inconclusive =
           barResult.status === "unavailable" ||
           barResult.status === "not_configured" ||
-          barResult.status === "unsupported_state";
+          barResult.status === "unsupported_state" ||
+          barResult.status === "not_found";
         set({ barActive: inconclusive ? null : active, barVerifyResult: barResult });
         await log("bar_verification_result", {
           active,
@@ -1671,7 +1672,12 @@ export const useSession = create<SessionState>((set, get) => {
               ? ["advisory", "Bar verification not configured — add Apify token in Configuration"]
               : barResult.status === "unsupported_state"
                 ? ["advisory", barResult.detail]
-                : ["warning", "Attorney verification unavailable — manual review required"];
+                : barResult.status === "not_found"
+                  // The router's own wording: "no record in the registry" and
+                  // "no bar number was provided" both land here, and they are
+                  // different things to hand an officer.
+                  ? ["warning", barResult.detail]
+                  : ["warning", "Attorney verification unavailable — manual review required"];
           set((s) => ({
             steps: s.steps.map((step) => (step.key === "bar" ? { ...step, status, label } : step)),
           }));

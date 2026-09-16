@@ -247,11 +247,17 @@ export function interpretBackendResult(
   }
 
   // No error and no status: the registry answered and holds no such attorney.
+  //
+  // Not a verdict about standing. A bar number can be absent from a registry
+  // because it was mistyped, because the attorney is admitted elsewhere, or —
+  // for the nine states the actor crawls by name rather than by number —
+  // because a number lookup was never going to match there. None of those is
+  // "this attorney is not in good standing", so it reads as work for a human.
   if (!raw.licenseStatus) {
     return {
       ...base,
       status: "not_found",
-      detail: `${stateName} bar registry has no record for bar number ${barNumber}.`,
+      detail: "No record found in state bar registry — manual verification required.",
     };
   }
 
