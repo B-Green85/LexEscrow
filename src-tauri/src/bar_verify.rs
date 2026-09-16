@@ -7,8 +7,8 @@
 //!
 //! The lookup runs through the `jungle_synthesizer/multi-state-bar-scraper`
 //! actor, which crawls fourteen official state bar sites and returns one record
-//! per attorney. It replaces the `localhost:3001` mock adapter, which was never
-//! running outside a demo and therefore failed every real session.
+//! per attorney. It replaces a local mock adapter that was never running
+//! outside a demo and therefore failed every real session.
 //!
 //! Three properties are load-bearing and none is guessable from the shape of
 //! the JSON:

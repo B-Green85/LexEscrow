@@ -1,5 +1,5 @@
 {
-  "barVerifyUrl": "https://your-adapter.example.com/calbar/{bar}",
+  "barVerifyUrl": "https://your-adapter.example.com/verify/{bar}",
   "notificationUrl": "http://127.0.0.1:8787/notify",
   "evms": [
     {

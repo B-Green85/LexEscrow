@@ -28,7 +28,7 @@ npm run dev:demo      # Vite in demo mode, no Tauri shell
 `--mode demo` (or `VITE_DEMO_MODE=true`) swaps only the **external seams**:
 
 - eSign goes to `MockDocuSignProvider` instead of the DocuSign REST API
-- adapters point at `localhost:3001/3002/3003`
+- adapters point at `localhost:3002/3003`
 - AnchorReceipt on-chain registration uses the mock tx format
 
 Everything between those seams — ArtifactGuard hashing, the LexGuard pipeline,
@@ -110,7 +110,6 @@ occur. Delivery is best-effort — a failed webhook never blocks a settlement.
 
 | Adapter  | Port | What it simulates              |
 | -------- | ---- | ------------------------------ |
-| CA Bar   | 3001 | California State Bar lookup    |
 | Metrc    | 3002 | Cannabis regulatory API        |
 | DocuSign | 3003 | DocuSign eSignature REST API   |
 
@@ -132,8 +131,8 @@ https://sepolia.etherscan.io/address/0x6f532f0eefc61a5792ad211850a8b48fbc388674
 
 ## Troubleshooting
 
-**Adapters won't start** — ports 3001–3003 may already be bound. Check with
-`lsof -i :3001` and stop the previous run.
+**Adapters won't start** — ports 3002–3003 may already be bound. Check with
+`lsof -i :3002` and stop the previous run.
 
 **Database not found** — launch LexEscrow once so it initializes
 `lexescrow.db`, then re-run `reset_demo.sh`.

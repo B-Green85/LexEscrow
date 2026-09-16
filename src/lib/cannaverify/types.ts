@@ -5,8 +5,9 @@
  * Cannabis IND asset class. Each adapter wraps an external regulatory API
  * (Metrc, state cannabis authority, Secretary of State) as what will become a
  * Chainlink Functions call under CRE BFT consensus (spec §10). In this build
- * the calls hit the local mock Metrc adapter on port 3002, exactly as attorney
- * verification hits the mock CA Bar adapter on 3001.
+ * the calls hit the local mock Metrc adapter on port 3002. Attorney bar
+ * verification has no mock — it goes to a real registry through the Rust
+ * backend (`src-tauri/src/bar_verify.rs`).
  *
  * Every check result is persisted to the `cannaverify_results` table so the
  * on-chain record of due diligence survives the session.

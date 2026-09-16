@@ -41,15 +41,12 @@ strings, 32-byte document hash) shaped exactly as the desktop app posts it.
 ### Full end-to-end run (HTTP trigger + mock bar adapter)
 
 `onHTTPTrigger` verifies the attorney against `barVerifyUrl` before anything
-else. For a self-contained end-to-end run, start the local mock CA State Bar
-adapter and point the config at it:
+else. That endpoint must return HTTP 200 for an active licensee and a non-2xx
+status otherwise; point `config.json` at one before simulating:
 
 ```bash
-# 1) start the mock (returns HTTP 200 "active" for any bar number)
-bun ../src/mock/calbar-adapter.ts        # http://localhost:3001/calbar/:barNumber
-
-# 2) config.json → "barVerifyUrl": "http://localhost:3001/calbar/"
-# 3) run the HTTP trigger (index 1) with the validated payload, broadcasting:
+# 1) config.json → "barVerifyUrl": "https://registry.example.com/verify/"
+# 2) run the HTTP trigger (index 1) with the validated payload, broadcasting:
 cre workflow simulate . --broadcast --target local-simulation \
   --non-interactive --trigger-index 1 \
   --http-payload ./http_trigger_payload.json --env ./.env

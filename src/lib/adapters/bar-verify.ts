@@ -9,8 +9,8 @@
  * disbarred attorney's number is still six digits.
  *
  * Fifty jurisdictions, fifty registries, no common API. V1 routed one of them
- * to a mock adapter on `localhost:3001` that was never running outside a demo,
- * so every real session failed this step. The lookup now goes to the Rust
+ * to a local mock adapter that was never running outside a demo, so every real
+ * session failed this step. The lookup now goes to the Rust
  * backend, which queries fourteen official registries through a single Apify
  * actor with a vault-held token; the remaining thirty-six stay declared and
  * unroutable.
@@ -68,7 +68,11 @@ export interface StateBarAdapter {
   code: string;
   /** Full state name, as the UI and trust anchors spell it. */
   state: string;
-  /** Adapter slug: the module that implements (or will implement) this state. */
+  /**
+   * Registry slug — a short handle for the jurisdiction's own bar site
+   * (`calbar` → calbar.ca.gov). Names the registry, not a module: routing goes
+   * through one actor now, so there is no per-state adapter file to point at.
+   */
   adapter: string;
   /** The regulator whose registry is authoritative for this state. */
   authority: string;
@@ -78,9 +82,9 @@ export interface StateBarAdapter {
 
 /**
  * What produced a verdict, recorded on the condition row and in the audit
- * trail. Replaces the `localhost:3001` mock adapter base URL that used to sit
- * here — the registry is now reached through a single Apify actor rather than
- * one HTTP endpoint per state, so there is a source to name but no base URL to
+ * trail. Replaces the mock adapter base URL that used to sit here — the
+ * registry is now reached through a single Apify actor rather than one HTTP
+ * endpoint per state, so there is a source to name but no base URL to
  * configure.
  */
 export const BAR_VERIFY_SOURCE = "apify/jungle_synthesizer~multi-state-bar-scraper";

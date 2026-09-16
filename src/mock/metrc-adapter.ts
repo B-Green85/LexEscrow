@@ -2,9 +2,9 @@
  * Mock Metrc + state regulatory adapter — for local CRE simulation only.
  *
  * Stands in for the real endpoints the CannaVerify adapter suite's Chainlink
- * Functions calls hit during cannabis condition verification (spec §5). Same
- * pattern as `calbar-adapter.ts`: a zero-dependency `node:http` server that
- * answers with fixed demo data, so the whole cannabis workflow runs offline.
+ * Functions calls hit during cannabis condition verification (spec §5). A
+ * zero-dependency `node:http` server that answers with fixed demo data, so the
+ * whole cannabis workflow runs offline.
  *
  * In production these are replaced by actual Chainlink Functions HTTP calls to
  * Metrc's per-state API and the relevant Secretary of State endpoint.
@@ -128,7 +128,7 @@ export function startMetrcAdapter(port: number = DEFAULT_PORT): Server {
   return server;
 }
 
-// Run directly (`npx tsx src/mock/metrc-adapter.ts`) — mirrors calbar-adapter.
+// Run directly: `npx tsx src/mock/metrc-adapter.ts`.
 if (process.argv[1] && process.argv[1].endsWith("metrc-adapter.ts")) {
   startMetrcAdapter(DEFAULT_PORT);
 }

@@ -28,7 +28,7 @@
 ## CRE workflow — full end-to-end simulation (verified)
 
 Ran `cre workflow simulate` (HTTP trigger, `--broadcast`) against the deployed
-contract with a local mock CA State Bar adapter (`src/mock/calbar-adapter.ts`).
+contract with a stub bar-verification endpoint behind `barVerifyUrl`.
 The workflow verified the attorney, converted USD→USDC, generated the signed
 report, and wrote it through the real Sepolia KeystoneForwarder
 (`0x15fC…9F88`) to the contract:

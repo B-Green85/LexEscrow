@@ -18,7 +18,7 @@ APP_PID=""
 
 # Kill the whole process group of each child: `npx tsx` and `cargo tauri dev`
 # both spawn grandchildren that would otherwise survive the trap and keep
-# ports 3001-3003 and 1420 bound.
+# ports 3002-3003 and 1420 bound.
 cleanup() {
   trap - EXIT INT TERM
   for pid in "$ADAPTERS_PID" "$APP_PID"; do
@@ -42,7 +42,7 @@ cd "$REPO_ROOT"
 # `npx tsx` start is routinely slower than two seconds.
 echo -n "Waiting for adapters"
 for _ in $(seq 1 30); do
-  if curl -s -f http://localhost:3001/verify/447823 > /dev/null 2>&1; then
+  if curl -s -f http://localhost:3002/v2/licenses/C10-0001234-LIC > /dev/null 2>&1; then
     break
   fi
   echo -n "."
@@ -50,14 +50,13 @@ for _ in $(seq 1 30); do
 done
 echo ""
 
-if ! curl -s -f http://localhost:3001/verify/447823 > /dev/null 2>&1; then
-  echo "❌ Mock adapters did not come up on port 3001."
+if ! curl -s -f http://localhost:3002/v2/licenses/C10-0001234-LIC > /dev/null 2>&1; then
+  echo "❌ Mock adapters did not come up on port 3002."
   echo "   Try running them directly to see the error: npm run demo"
   exit 1
 fi
 
 echo "✅ Mock adapters running:"
-echo "   CA Bar:    http://localhost:3001"
 echo "   Metrc:     http://localhost:3002"
 echo "   DocuSign:  http://localhost:3003"
 echo ""
