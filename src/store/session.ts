@@ -1745,6 +1745,7 @@ export const useSession = create<SessionState>((set, get) => {
           ...parsed,
           barNumber: anchors.attorneyBarNumber,
           clientName: parsed.clientName ?? anchors.clientFullLegalName,
+          lawFirmName: parsed.lawFirmName ?? "",
         };
         set({ payload, providerLabel: provider.label });
         await log("parse", { entry_mode: "ai", provider: provider.label });

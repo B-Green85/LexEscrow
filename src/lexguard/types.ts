@@ -40,6 +40,7 @@ export interface ParsedRetainerPayload {
   // ── Verification / trust-anchor context (populated by the app, not AI) ────
   barNumber: string;
   clientName?: string; // proper noun extracted from the document
+  lawFirmName?: string; // law firm as defined in the document (Legal)
   extractedBarNumber?: string | null; // bar number as written in the document (AnchorMatcher)
   attorneyName?: string; // identity returned by bar verification
   lawFirmBillingApi?: string;
@@ -99,6 +100,10 @@ export const AiExtractionSchema = z.object({
   recommendedPath: z.enum(["DirectSettlement", "ArbitrationEscrow", "StagedRelease"]),
   anomaliesFlagged: z.array(z.string()).default([]),
   anomaliesSuppressed: z.boolean().default(false),
+  // Party names (Legal). Optional: classes whose prompt does not ask for them
+  // simply omit them, and a `null` "not found" is dropped before validation.
+  clientName: z.string().optional(),
+  lawFirmName: z.string().optional(),
 });
 
 export type AiExtraction = z.infer<typeof AiExtractionSchema>;

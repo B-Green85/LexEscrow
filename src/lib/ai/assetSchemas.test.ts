@@ -9,6 +9,18 @@ describe("systemPromptFor", () => {
     expect(prompt).toContain("earnedFees");
   });
 
+  it("legal prompt asks for the party names from the PARTIES section, not the title", () => {
+    const prompt = systemPromptFor("legal");
+    expect(prompt).toContain("- clientName (string)");
+    expect(prompt).toContain("- lawFirmName (string)");
+    expect(prompt).toContain("PARTIES section");
+    expect(prompt).toContain("not from the document title or headings");
+  });
+
+  it("only the legal prompt carries the party-name rule", () => {
+    expect(systemPromptFor("real_estate")).not.toContain("For clientName and lawFirmName");
+  });
+
   it("real_estate prompt mentions parcelNumber and purchasePrice", () => {
     const prompt = systemPromptFor("real_estate");
     expect(prompt).toContain("parcelNumber");

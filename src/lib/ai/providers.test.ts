@@ -50,6 +50,24 @@ describe("validateAndConvert (Zod + cents→dollars)", () => {
     }
   });
 
+  it("carries the AI's clientName and lawFirmName onto the payload", () => {
+    const r = validateAndConvert({ ...validCents, clientName: "ProvenyxRD LLC", lawFirmName: "Bergener Mirejovsky" });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.payload.clientName).toBe("ProvenyxRD LLC");
+      expect(r.payload.lawFirmName).toBe("Bergener Mirejovsky");
+    }
+  });
+
+  it("treats a null party name as not found, not a validation failure", () => {
+    const r = validateAndConvert({ ...validCents, clientName: null, lawFirmName: null });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.payload.clientName).toBeUndefined();
+      expect(r.payload.lawFirmName).toBeUndefined();
+    }
+  });
+
   it("coerces string-number cents", () => {
     const r = validateAndConvert({ ...validCents, totalHeld: "500000" });
     expect(r.success && r.payload.totalHeld).toBe(5000);

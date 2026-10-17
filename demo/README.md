@@ -29,7 +29,7 @@ npm run dev:demo      # Vite in demo mode, no Tauri shell
 
 - eSign goes to `MockDocuSignProvider` instead of the DocuSign REST API
 - adapters point at `localhost:3002/3003`
-- AnchorReceipt on-chain registration uses the mock tx format
+- (AnchorReceipt on-chain registration is real in every mode: `anchor(bytes32)` on the Sepolia AnchorRegistry, desktop build only)
 
 Everything between those seams — ArtifactGuard hashing, the LexGuard pipeline,
 the hash-chained audit trail, the condition engine, the three release paths —

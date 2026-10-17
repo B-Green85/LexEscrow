@@ -77,6 +77,80 @@ describe("suggestAnchors — legal", () => {
   });
 });
 
+/** Shaped like the Bergener Mirejovsky retainer, as poppler extracts it. */
+const RETAINER_WITH_PARTIES = `BERGENER MIREJOVSKY
+Attorneys at Law
+800 Newport Center Drive, Suite 700 | Newport Beach, California 92660
+
+ATTORNEY-CLIENT RETAINER AGREEMENT
+Matter No. BM-DEMO-2026
+
+PARTIES
+This Attorney-Client Retainer Agreement ("Agreement") is entered into as of October 15, 2026:
+Attorney: James Michael Bergener, Esq., California State Bar No. 226570, Newport Beach, California.
+Client (FICTIONAL): ProvenyxRD LLC, a Delaware limited liability company ("Client"), with its principal place of
+business at 4215 Technology Drive, Oakland, California 94609.
+
+SCOPE OF REPRESENTATION
+The Firm agrees to represent the Client in connection with general corporate counsel services.
+`;
+
+describe("suggestAnchors — legal party definitions", () => {
+  it("never reads a document title as the client name", () => {
+    expect(suggestAnchors("ATTORNEY-CLIENT RETAINER AGREEMENT\n", "legal").clientName).toBeUndefined();
+    expect(suggestAnchors("CLIENT RETAINER AGREEMENT\n", "legal").clientName).toBeUndefined();
+    expect(suggestAnchors("CLIENT ENGAGEMENT LETTER\n", "legal").clientName).toBeUndefined();
+  });
+
+  it("rejects an all-caps multi-word label match", () => {
+    expect(suggestAnchors("Client: JANE ANDERSON\n", "legal").clientName).toBeUndefined();
+  });
+
+  it("takes the client from its formal definition, skipping the descriptor clause", () => {
+    expect(suggestAnchors(RETAINER_WITH_PARTIES, "legal").clientName).toBe("ProvenyxRD LLC");
+  });
+
+  it("reads the common definition forms", () => {
+    const client = (t: string) => suggestAnchors(t, "legal").clientName;
+    expect(client(`This Agreement is between Jane Doe ("Client") and the Firm.`)).toBe("Jane Doe");
+    expect(client(`by and between Jane Q. Doe (the "Client")`)).toBe("Jane Q. Doe");
+    expect(client(`Jane Doe (hereinafter referred to as the “Client”)`)).toBe("Jane Doe");
+  });
+
+  it("prefers the formal definition over an earlier labelled mention", () => {
+    const t = `Client: Johnny Smithe\nThis Agreement is between John Smith ("Client") and the Firm.`;
+    expect(suggestAnchors(t, "legal").clientName).toBe("John Smith");
+  });
+
+  it("takes the law firm from the letterhead above an Attorneys at Law line", () => {
+    expect(suggestAnchors(RETAINER_WITH_PARTIES, "legal").lawFirmName).toBe("BERGENER MIREJOVSKY");
+  });
+
+  it("takes the law firm from its formal definition when there is one", () => {
+    const t = `between Jane Doe ("Client") and Smith & Lee, LLP (the "Firm").`;
+    expect(suggestAnchors(t, "legal").lawFirmName).toBe("Smith & Lee, LLP");
+  });
+
+  it("suggests no law firm when the document neither defines nor letterheads one", () => {
+    expect(suggestAnchors(LEGAL_DOC, "legal").lawFirmName).toBeUndefined();
+  });
+
+  it("fills clientFullLegalName and lawFirmName on the Legal anchor record", () => {
+    const empty = emptyAnchorsFor("legal");
+    const { next, filled } = mergeSuggestions(
+      "legal",
+      empty,
+      empty,
+      suggestAnchors(RETAINER_WITH_PARTIES, "legal"),
+      new Set(),
+    );
+    expect(next.clientFullLegalName).toBe("ProvenyxRD LLC");
+    expect(next.lawFirmName).toBe("BERGENER MIREJOVSKY");
+    expect(next.attorneyBarNumber).toBe("226570");
+    expect(filled).toEqual(expect.arrayContaining(["clientFullLegalName", "lawFirmName"]));
+  });
+});
+
 describe("suggestAnchors — real estate", () => {
   it("extracts an APN in XXX-XXX-XXX form", () => {
     expect(suggestAnchors(REAL_ESTATE_DOC, "real_estate").parcelNumber).toBe("123-456-789");

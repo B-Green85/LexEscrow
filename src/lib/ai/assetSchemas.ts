@@ -171,6 +171,8 @@ const TAIL_FIELDS: PromptField[] = [
 ];
 
 const LEGAL_FIELDS: PromptField[] = [
+  { name: "clientName", type: "string", description: "Full legal name of the client as defined in the PARTIES section.", notFound: "null" },
+  { name: "lawFirmName", type: "string", description: "Full name of the law firm as defined in the PARTIES section or letterhead.", notFound: "null" },
   { name: "clientId", type: "string", description: "Client identifier or matter number.", notFound: "null" },
   { name: "lawFirmWallet", type: "string", description: "Law firm wallet address (0x followed by 40 hex characters).", notFound: "null" },
   { name: "clientWallet", type: "string", description: "Client wallet address (0x followed by 40 hex characters).", notFound: "null" },
@@ -299,7 +301,12 @@ Rules:
 - Every monetary value MUST be an integer number of cents (for example $1,234.56 becomes 123456). Never use dollars, decimal points, thousands separators, or currency symbols.
 - earnedFees + unearnedBalance must equal totalHeld.
 - If a field is not present in the document, return exactly the "not found" value listed for that field above.
-- anomaliesSuppressed must always be false.`;
+- anomaliesSuppressed must always be false.${
+    PROMPT_FIELDS[assetClass].some((f) => f.name === "clientName" || f.name === "lawFirmName")
+      ? `
+- For clientName and lawFirmName, read from the PARTIES section or the paragraph where parties are formally defined (e.g. 'John Smith (the "Client")'), not from the document title or headings.`
+      : ""
+  }`;
 }
 
 /**

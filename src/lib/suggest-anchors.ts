@@ -26,6 +26,7 @@ export interface AnchorSuggestions {
   // Legal
   barNumber?: string;
   clientName?: string;
+  lawFirmName?: string;
 
   // Real Estate
   parcelNumber?: string;
@@ -75,6 +76,9 @@ const LABEL_ECHO = new Set([
   "details", "agreement", "party", "parties", "shall", "hereby", "dated",
   "date", "address", "email", "phone", "wallet", "status", "signature",
   "total", "amount", "is", "are", "was", "were", "shall",
+  // Document-title words: "ATTORNEY-CLIENT RETAINER AGREEMENT" puts the label
+  // "Client" directly before "RETAINER AGREEMENT", which is not a name.
+  "retainer", "attorney", "attorneys", "client", "engagement", "fee", "fees",
 ]);
 
 /** Every word that begins with a letter must begin with a capital one. */
@@ -87,6 +91,20 @@ function confidentName(s: string): boolean {
   if (!properCased(s)) return false;
   const first = s.split(/\s+/)[0].replace(/[^a-zA-Z]/g, "").toLowerCase();
   return !LABEL_ECHO.has(first);
+}
+
+/**
+ * More than one word, and every letter upper-case — a heading or title line
+ * ("RETAINER AGREEMENT"), not a name. The label regexes carry `/i`, so the
+ * NAME pattern's `[A-Z]` cannot reject these on its own.
+ */
+function shouted(s: string): boolean {
+  return /\s/.test(s) && /[A-Z]/.test(s) && !/[a-z]/.test(s);
+}
+
+/** A name taken from after a label: confident, and not a shouted heading. */
+function confidentLabelledName(s: string): boolean {
+  return confidentName(s) && !shouted(s);
 }
 
 /**
@@ -124,7 +142,72 @@ const NAME = String.raw`([A-Z][a-zA-Z'-]+(?:[ \t]+[A-Z][a-zA-Z'-]+){1,3})`;
 function labelledName(text: string, labels: string): string | undefined {
   const anchored = new RegExp(`(?:${labels})[A-Za-z ]{0,30}?:\\s*${NAME}`, "i");
   const loose = new RegExp(`(?:${labels})[:\\s]+${NAME}`, "i");
-  return firstMatch(text, anchored, confidentName) ?? firstMatch(text, loose, confidentName);
+  return (
+    firstMatch(text, anchored, confidentLabelledName) ?? firstMatch(text, loose, confidentLabelledName)
+  );
+}
+
+/** `"client"` → `[Cc][Ll][Ii][Ee][Nn][Tt]` — case-insensitive without `/i`. */
+function caseless(word: string): string {
+  return word.replace(/[a-z]/gi, (c) => `[${c.toUpperCase()}${c.toLowerCase()}]`);
+}
+
+/**
+ * A party name in a formal definition. Case-SENSITIVE, unlike the label
+ * patterns: every word must really begin with a capital, so the capture stops
+ * at the lower-case word before the name ("between Jane Doe" → "Jane Doe").
+ * Words may carry `&`, periods and inner capitals ("ProvenyxRD", "Smith & Lee"),
+ * and an entity suffix may follow a comma ("Smith Lee, LLP").
+ */
+const DEFINED_NAME = String.raw`((?:[A-Z][\w.'’&-]*|&)(?:[ \t]+(?:[A-Z][\w.'’&-]*|&|of|and)){0,6}?(?:,[ \t]*(?:LLP|LLC|Inc\.?|P\.?C\.?|PLLC|APC|LPA))?)`;
+
+/**
+ * The name a document formally defines as `labels` — the way parties are
+ * introduced in nearly every agreement:
+ *
+ *   Jane Doe ("Client")
+ *   Smith & Lee LLP (the "Firm")
+ *   ProvenyxRD LLC, a Delaware limited liability company ("Client")
+ *   Jane Doe (hereinafter referred to as the "Client")
+ *
+ * The descriptor clause after a comma ("a Delaware limited liability
+ * company") is skipped, never captured. This is the strongest signal a
+ * document gives about who a party is — it beats any label match, and it is
+ * immune to headings like "ATTORNEY-CLIENT RETAINER AGREEMENT", which define
+ * nothing.
+ */
+function definedParty(text: string, labels: string[]): string | undefined {
+  const label = labels.map(caseless).join("|");
+  const re = new RegExp(
+    String.raw`(?<![\w&])${DEFINED_NAME}` +
+      // optional descriptor: ", a Delaware limited liability company"
+      String.raw`(?:,[ \t]*(?:an?|the)[ \t][^()\n"“”]{0,80}?)?` +
+      String.raw`[ \t]*\([ \t]*(?:hereinafter[ \t]+)?(?:referred[ \t]+to[ \t]+as[ \t]+)?(?:${caseless("the")}[ \t]+)?` +
+      String.raw`["“'‘](?:${label})["”'’]`,
+    "g",
+  );
+  return firstMatch(text, re, confidentName);
+}
+
+/**
+ * A firm name set as letterhead: a line on its own, immediately above an
+ * "Attorneys at Law" / "Lawyers" / "A Professional Law Corporation" line.
+ * Letterheads are routinely set in capitals, so — unlike a labelled name — an
+ * all-caps firm name is accepted here: the line below it is the context that
+ * says what it is. Returned exactly as written.
+ */
+function letterheadFirm(text: string): string | undefined {
+  const tagline = [
+    String.raw`${caseless("attorneys")}?[ \t]+${caseless("at")}[ \t]+${caseless("law")}`,
+    String.raw`${caseless("attorney")}[ \t]+${caseless("at")}[ \t]+${caseless("law")}`,
+    caseless("lawyers"),
+    String.raw`${caseless("a")}[ \t]+${caseless("professional")}[ \t]+(?:${caseless("law")}[ \t]+)?${caseless("corporation")}`,
+  ].join("|");
+  const re = new RegExp(
+    String.raw`^[ \t]*([A-Z][A-Za-z0-9&.,'’ \t-]{1,60}?)[ \t]*\r?\n[ \t]*(?:${tagline})[ \t]*$`,
+    "gm",
+  );
+  return firstMatch(text, re, confidentName);
 }
 
 /** Entity names carry a corporate suffix, so they tolerate `&`, commas, periods. */
@@ -210,8 +293,14 @@ export function suggestAnchors(text: string, assetClass: string): AnchorSuggesti
         text,
         /(?:Bar\s*(?:No|Number|#)?\.?\s*|State\s*Bar\s*(?:No|#)?\.?\s*)(\d{5,8})/i,
       ));
-      const client = labelledName(text, "Client");
+      // A formal definition ('ProvenyxRD LLC, a Delaware … ("Client")') first;
+      // a "Client: Jane Anderson" label only when the document defines none.
+      const client = definedParty(text, ["client", "clients"]) ?? labelledName(text, "Client");
       put("clientName", client);
+      put(
+        "lawFirmName",
+        definedParty(text, ["firm", "law firm", "attorney", "attorneys", "counsel"]) ?? letterheadFirm(text),
+      );
       // In Legal the client is the anchored party and the firm is the counterparty.
       put("primaryPartyName", client ?? out.primaryPartyName);
       put("secondaryPartyName", labelledName(text, String.raw`Attorney|Counsel|Law\s*Firm`) ?? out.secondaryPartyName);
@@ -332,6 +421,7 @@ export function suggestionsToFields(
     case "legal":
       put("attorneyBarNumber", s.barNumber);
       put("clientFullLegalName", s.clientName ?? s.primaryPartyName);
+      put("lawFirmName", s.lawFirmName);
       break;
 
     case "real_estate":

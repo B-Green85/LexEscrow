@@ -133,7 +133,8 @@ function extractionToPayload(x: AiExtraction): ParsedRetainerPayload {
     anomaliesFlagged: x.anomaliesFlagged,
     anomaliesSuppressed: x.anomaliesSuppressed,
     barNumber: "",
-    clientName: undefined,
+    clientName: x.clientName ?? undefined,
+    lawFirmName: x.lawFirmName ?? undefined,
     extractedBarNumber: null,
   };
 }
