@@ -92,3 +92,4 @@ cre-templates-new/
 
 .cre_build_tmp.js
 binary.wasm.br.b64src.zip
+lexescrow-cw/my-workflow/*.wasm.br.b64
