@@ -551,6 +551,19 @@ export async function saveRegisteredFingerprint(args: RegisteredFingerprintArgs)
 }
 
 /**
+ * Anchor a document fingerprint in the Sepolia AnchorRegistry (spec §8 step 3)
+ * and resolve to the confirmed transaction hash.
+ *
+ * Desktop only, and no browser stand-in: a fabricated hash is exactly what this
+ * replaced. Rejects on a locked vault, a missing `ANCHOR_REGISTRY_ADDRESS`, an
+ * unreachable RPC or a revert; callers mark the item unregistered.
+ */
+export async function anchorDocument(hash: string): Promise<string> {
+  if (!isTauri()) throw new Error("On-chain anchoring requires the desktop backend.");
+  return invoke<string>("anchor_document", { hash });
+}
+
+/**
  * AnchorReceipt HMAC seal over `"{hash}|{size}"` (spec §8).
  *
  * Keyed sealing only happens in the Rust backend — the seal key must never

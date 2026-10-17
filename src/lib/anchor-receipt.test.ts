@@ -7,8 +7,9 @@
  * "issue then verify passes" would miss the half that matters — most of what
  * follows is tampering.
  *
- * The backend bridge is mocked so no Tauri IPC or SQLite is involved; the seal
- * is a fixed stand-in, exactly as the browser fallback produces.
+ * The backend bridge is mocked so no Tauri IPC, SQLite or chain is involved;
+ * the seal is a fixed stand-in, exactly as the browser fallback produces, and
+ * anchoring resolves to a fixed well-formed tx hash.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +29,10 @@ import {
 } from "./anchor-receipt";
 import * as backend from "./backend";
 
+const TX = "0x" + "7f".repeat(32);
+
 vi.mock("./backend", () => ({
+  anchorDocument: vi.fn().mockResolvedValue("0x" + "7f".repeat(32)),
   computeHmacSeal: vi.fn().mockResolvedValue("DEMO-HMAC-abc12345"),
   saveRegisteredFingerprint: vi.fn().mockResolvedValue(undefined),
   logEvent: vi.fn().mockResolvedValue(undefined),
@@ -127,7 +131,7 @@ describe("issueReceipt", () => {
     });
     for (const item of receipt.items) {
       expect(item.hmac).toBe("DEMO-HMAC-abc12345");
-      expect(item.onChainTx).toMatch(/^0xanchor-/);
+      expect(item.onChainTx).toBe(TX);
       expect(item.registered).toBe(true);
       expect(item.registeredAt).toEqual(expect.any(String));
     }
@@ -152,7 +156,7 @@ describe("issueReceipt", () => {
         hmac: "DEMO-HMAC-abc12345",
         sessionId: "wf-001",
         assetClass: "cannabis_ind",
-        onChainTx: expect.stringMatching(/^0xanchor-/),
+        onChainTx: TX,
       }),
     );
   });
@@ -185,8 +189,42 @@ describe("issueReceipt", () => {
     const receipt = await issue();
     // The seal and the receipt hash are what make the receipt verifiable; a
     // lost index row must not cost the officer a usable receipt.
-    expect(receipt.items[0].onChainTx).toMatch(/^0xanchor-/);
+    expect(receipt.items[0].onChainTx).toBe(TX);
     expect((await verifyReceipt(receipt)).valid).toBe(true);
+  });
+
+  it("anchors each item's document hash, not its seal", async () => {
+    await issue({
+      items: [
+        { label: "a.pdf", hash: HASH_A, size: 10 },
+        { label: "b.pdf", hash: HASH_B, size: 20 },
+      ],
+    });
+    expect(vi.mocked(backend.anchorDocument).mock.calls).toEqual([[HASH_A], [HASH_B]]);
+  });
+
+  it("marks an item unregistered, with no tx and no registry row, when anchoring fails", async () => {
+    vi.mocked(backend.anchorDocument).mockRejectedValueOnce(new Error("RPC unreachable"));
+    const receipt = await issue();
+    expect(receipt.items[0].registered).toBe(false);
+    expect(receipt.items[0]).not.toHaveProperty("onChainTx");
+    expect(receipt.items[0]).not.toHaveProperty("registeredAt");
+    expect(receipt.summary.overallStatus).toBe("unverified");
+    expect(backend.saveRegisteredFingerprint).not.toHaveBeenCalled();
+    // Still a well-formed, offline-verifiable receipt — it just claims less.
+    expect((await verifyReceipt(receipt)).valid).toBe(true);
+  });
+
+  it("reports a partial receipt when only some items anchor", async () => {
+    vi.mocked(backend.anchorDocument).mockRejectedValueOnce(new Error("reverted"));
+    const receipt = await issue({
+      items: [
+        { label: "a.pdf", hash: HASH_A, size: 10 },
+        { label: "b.pdf", hash: HASH_B, size: 20 },
+      ],
+    });
+    expect(receipt.items.map((i) => i.registered)).toEqual([false, true]);
+    expect(receipt.summary).toMatchObject({ overallStatus: "verified_partial", verifiedCount: 1 });
   });
 
   it("issues distinct receipt ids for separate registrations", async () => {
@@ -213,9 +251,21 @@ describe("computeHmacSeal / registerOnChain", () => {
     expect(backend.computeHmacSeal).toHaveBeenCalledWith(HASH_A, 99);
   });
 
-  it("derives the mock tx from the seal", async () => {
-    const tx = await registerOnChain("wf-1", "legal", "SEALVALUE123");
-    expect(tx.startsWith("0xanchor-SEALVALU-")).toBe(true);
+  it("returns the confirmed anchoring tx and records it in the registry", async () => {
+    const tx = await registerOnChain("wf-1", "legal", "SEALVALUE123", HASH_A);
+    expect(tx).toBe(TX);
+    expect(backend.anchorDocument).toHaveBeenCalledWith(HASH_A);
+    expect(backend.saveRegisteredFingerprint).toHaveBeenCalledWith({
+      hmac: "SEALVALUE123",
+      sessionId: "wf-1",
+      assetClass: "legal",
+      onChainTx: TX,
+    });
+  });
+
+  it("returns null, never a stand-in hash, when anchoring fails", async () => {
+    vi.mocked(backend.anchorDocument).mockRejectedValueOnce(new Error("vault locked"));
+    expect(await registerOnChain("wf-1", "legal", "SEALVALUE123", HASH_A)).toBeNull();
   });
 });
 

@@ -8,6 +8,7 @@
 | USDC | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
 | CRE forwarder | `0x15fC6ae953E024d975e77382eEeC56A9101f9F88` |
 | Deployer / owner / workflow / arbitrator | `0x0b370090317443afFa8124Af45b7C2FeB5a01810` |
+| AnchorRegistry | [`0x0906Be060A47B3A44A3Ae42707c7538dBB0451Fb`](https://sepolia.etherscan.io/address/0x0906Be060A47B3A44A3Ae42707c7538dBB0451Fb) — deploy tx [`0x57b51db1…f1a7`](https://sepolia.etherscan.io/tx/0x57b51db1cc9e738d14ae7fe61be97abeb1bd20c4aca272cbfc1d63fcd159f1a7) (`forge create`, no ownership) |
 
 ## Deployment
 

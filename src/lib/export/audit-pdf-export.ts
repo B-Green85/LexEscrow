@@ -25,7 +25,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 
 import * as backend from "../backend";
-import { txUrl } from "../explorer";
+import { isRealTxHash, txUrl } from "../explorer";
 import type { SessionState } from "../../store/session";
 
 /** Minimal structural view of the session store — keeps this module testable. */
@@ -64,6 +64,15 @@ export interface AuditReportData {
 // outlives the session that produced it, so a link to the wrong network's
 // explorer would read as evidence the settlement never happened.
 const explorerTx = (hash: string) => txUrl(hash);
+
+// Only a real 32-byte tx hash gets an explorer link; stand-ins (`0xanchor-…`,
+// `0xarb-…`, `0xstaged-…`) render as plain text — a link to "transaction not
+// found" reads as evidence the transaction never happened.
+const txHtml = (hash: string) =>
+  isRealTxHash(hash)
+    ? `<a class="mono" href="${escapeHtml(explorerTx(hash))}">${escapeHtml(hash)}</a>`
+    : `<span class="mono">${escapeHtml(hash)}</span>`;
+const txText = (hash: string) => (isRealTxHash(hash) ? `${hash}\n${explorerTx(hash)}` : hash);
 
 // ── Data assembly ────────────────────────────────────────────────────────────
 
@@ -303,14 +312,14 @@ export function generateAuditReportHtml(data: AuditReportData): string {
     data.onChainTx
       ? summaryRow(
           "On-chain registration",
-          `<a class="mono" href="${escapeHtml(explorerTx(data.onChainTx))}">${escapeHtml(data.onChainTx)}</a>`,
+          txHtml(data.onChainTx),
         )
       : "",
     summaryRow("Execution path", escapeHtml(data.executionPath)),
     data.settlementTxHash
       ? summaryRow(
           "Settlement transaction",
-          `<a class="mono" href="${escapeHtml(explorerTx(data.settlementTxHash))}">${escapeHtml(data.settlementTxHash)}</a>`,
+          txHtml(data.settlementTxHash),
         )
       : "",
   ].join("");
@@ -495,13 +504,13 @@ export function generateAuditReportPdf(data: AuditReportData): Uint8Array {
   if (data.anchorReceiptId) summary.push(["AnchorReceipt ID", data.anchorReceiptId]);
   if (data.anchorReceiptHash) summary.push(["AnchorReceipt hash", data.anchorReceiptHash]);
   if (data.onChainTx) {
-    summary.push(["On-chain registration", `${data.onChainTx}\n${explorerTx(data.onChainTx)}`]);
+    summary.push(["On-chain registration", txText(data.onChainTx)]);
   }
   summary.push(["Execution path", data.executionPath]);
   if (data.settlementTxHash) {
     summary.push([
       "Settlement transaction",
-      `${data.settlementTxHash}\n${explorerTx(data.settlementTxHash)}`,
+      txText(data.settlementTxHash),
     ]);
   }
   y = labelValueTable(doc, summary, y);

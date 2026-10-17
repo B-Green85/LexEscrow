@@ -220,12 +220,22 @@ describe("generateAuditReportHtml", () => {
   });
 
   it("links the on-chain and settlement transactions to Etherscan", () => {
+    const anchorTx = "0x" + "a1".repeat(32);
+    const settleTx = "0x" + "5e".repeat(32);
+    const html = generateAuditReportHtml(reportData({ onChainTx: anchorTx, settlementTxHash: settleTx }));
+    expect(html).toContain(`href="https://sepolia.etherscan.io/tx/${anchorTx}"`);
+    expect(html).toContain(`href="https://sepolia.etherscan.io/tx/${settleTx}"`);
+    expect(html).toContain(`[QR: ${anchorTx}]`);
+  });
+
+  it("renders stand-in references as plain text, never as an explorer link", () => {
     const html = generateAuditReportHtml(
-      reportData({ onChainTx: "0xanchor123", settlementTxHash: "0xsettle456" }),
+      reportData({ onChainTx: "0xanchor-abc12345-18f3c", settlementTxHash: "0xarb-deadbeef" }),
     );
-    expect(html).toContain("https://sepolia.etherscan.io/tx/0xanchor123");
-    expect(html).toContain("https://sepolia.etherscan.io/tx/0xsettle456");
-    expect(html).toContain("[QR: 0xanchor123]");
+    expect(html).toContain('<span class="mono">0xanchor-abc12345-18f3c</span>');
+    expect(html).toContain('<span class="mono">0xarb-deadbeef</span>');
+    expect(html).not.toContain("etherscan.io/tx/0xanchor-");
+    expect(html).not.toContain("etherscan.io/tx/0xarb-");
   });
 
   it("carries the required footer attribution", () => {

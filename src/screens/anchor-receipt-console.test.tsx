@@ -11,7 +11,7 @@
  * an actual recomputation.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import {
@@ -24,7 +24,17 @@ import {
   type AnchorReceipt,
   type ReceiptFileVerification,
 } from "../lib/anchor-receipt";
+import * as backend from "../lib/backend";
 import type { LoadedArtifact } from "../lib/backend";
+
+// Everything else runs the real browser fallbacks; only the chain write is
+// stubbed, and it defaults to the browser behaviour (no desktop → rejects).
+vi.mock("../lib/backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/backend")>()),
+  anchorDocument: vi.fn().mockRejectedValue(new Error("On-chain anchoring requires the desktop backend.")),
+}));
+
+const REAL_TX = "0x" + "7f".repeat(32);
 
 const HASH = "sha256:" + "a".repeat(64);
 
@@ -162,7 +172,8 @@ describe("AnchorReceiptConsole — after registration", () => {
     expect(html).toContain("Copy Receipt Hash");
   });
 
-  it("shows the Registered status, plain-text tx reference and verified counts", async () => {
+  it("shows the Registered status, Etherscan-linked tx and verified counts once anchored", async () => {
+    vi.mocked(backend.anchorDocument).mockResolvedValueOnce(REAL_TX);
     const receipt = await issue();
     const html = render({
       artifact,
@@ -172,10 +183,15 @@ describe("AnchorReceiptConsole — after registration", () => {
     });
     expect(html).toContain("✅ Registered");
     expect(html).toContain("Verified — all documents");
-    // The simulated `0xanchor-…` reference is not a real 32-byte tx hash, so
-    // it must render as plain text — an Etherscan link would land on
-    // "transaction not found" and read as a failed registration.
-    expect(html).toContain("0xanchor-");
+    expect(html).toContain(`sepolia.etherscan.io/tx/${REAL_TX}`);
+  });
+
+  it("says the fingerprint is not on-chain when anchoring failed", async () => {
+    const receipt = await issue();
+    const html = render({ artifact, hmac: receipt.items[0].hmac, receipt, registeredAt: null });
+    expect(html).toContain("Not anchored on-chain");
+    expect(html).not.toContain("✅ Registered");
+    expect(html).not.toContain("Verified — all documents");
     expect(html).not.toContain("sepolia.etherscan.io/tx/");
   });
 

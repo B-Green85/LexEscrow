@@ -177,7 +177,7 @@ fn parse_amount(value: &str, what: &str) -> Result<U256, String> {
 
 /// `sha256:<64 hex>` (ArtifactGuard's format), `0x<64 hex>`, or bare hex →
 /// the `bytes32 documentHash` the contract anchors the settlement to.
-fn parse_document_hash(value: &str) -> Result<B256, String> {
+pub(crate) fn parse_document_hash(value: &str) -> Result<B256, String> {
     let bare = value.trim();
     let bare = bare.strip_prefix("sha256:").unwrap_or(bare);
     let bare = bare.strip_prefix("0x").unwrap_or(bare);

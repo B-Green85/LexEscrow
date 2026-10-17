@@ -15,7 +15,7 @@
  *   3. **Register**    — anchored on-chain via Chainlink CRE. Public,
  *                        decentralized, permanent — a stronger trust primitive
  *                        than a symmetric registry the issuer alone controls.
- *                        Mocked in V1 (see `registerOnChain`).
+ *                        Real on Sepolia — `AnchorRegistry` (see `registerOnChain`).
  *   4. **Issue**       — a portable `receipt.json` whose `receiptHash` any
  *                        counterparty can recompute **offline**, with no access
  *                        to the issuer's database. That offline property is the
@@ -33,7 +33,7 @@ export interface AnchorReceiptItem {
   size: number; // file size in bytes
   registered: boolean;
   registeredAt?: string; // ISO timestamp
-  onChainTx?: string; // CRE registration tx (mock in V1)
+  onChainTx?: string; // AnchorRegistry.anchor tx (Sepolia); absent when unregistered
   // CannaVerify extensions — cannabis_ind only (spec §8 receipt format).
   cannaverifyLicenseStatus?: string;
   cannaverifyComplianceHolds?: number;
@@ -88,24 +88,32 @@ export async function computeHmacSeal(hash: string, size: number): Promise<strin
 // ── Step 3 — on-chain registration ───────────────────────────────────────────
 
 /**
- * Anchor a sealed fingerprint on-chain and record it in the local registry.
+ * Anchor a document's SHA-256 fingerprint on-chain and record it in the local
+ * registry.
  *
- * V1 mocks the CRE call and synthesizes a tx hash, the same stand-in the
- * CannaVerify and eSign paths use. The *registry write* is real, so the
- * cross-session provenance lookup spec §8 describes works today; only the
- * chain anchoring is simulated.
+ * The anchor is real: the Rust backend calls `anchor(bytes32)` on the Sepolia
+ * AnchorRegistry and returns only once the transaction is mined. Resolves to
+ * that tx hash, or `null` when anchoring failed (locked vault, no registry
+ * configured, RPC down, revert) — never to a stand-in hash. The local registry
+ * row is written only for a confirmed anchor.
  *
- * A registry write failure is deliberately non-fatal: the receipt's integrity
- * rests on the seal and the receipt hash, both of which are already computed
- * by this point, so losing the local index row must not cost the officer a
- * receipt they can still verify offline.
+ * A registry write failure is deliberately non-fatal: the anchor is on-chain
+ * and the receipt hash covers it, so losing the local index row must not cost
+ * the officer a receipt they can still verify offline.
  */
 export async function registerOnChain(
   sessionId: string,
   assetClass: AssetClass,
   hmac: string,
-): Promise<string> {
-  const onChainTx = `0xanchor-${hmac.slice(0, 8)}-${Date.now().toString(16)}`;
+  hash: string,
+): Promise<string | null> {
+  let onChainTx: string;
+  try {
+    onChainTx = await backend.anchorDocument(hash);
+  } catch (e) {
+    console.error("on-chain anchoring failed", hash, e);
+    return null;
+  }
   try {
     await backend.saveRegisteredFingerprint({ hmac, sessionId, assetClass, onChainTx });
   } catch (e) {
@@ -198,15 +206,14 @@ export async function issueReceipt(params: {
 
   for (const input of params.items) {
     const hmac = await computeHmacSeal(input.hash, input.size);
-    const onChainTx = await registerOnChain(sessionId, assetClass, hmac);
+    const onChainTx = await registerOnChain(sessionId, assetClass, hmac, input.hash);
     items.push({
       label: input.label,
       hmac,
       hash: input.hash,
       size: input.size,
-      registered: true,
-      registeredAt: new Date().toISOString(),
-      onChainTx,
+      registered: onChainTx !== null,
+      ...(onChainTx !== null && { registeredAt: new Date().toISOString(), onChainTx }),
       ...(input.cannaverifyLicenseStatus !== undefined && {
         cannaverifyLicenseStatus: input.cannaverifyLicenseStatus,
       }),

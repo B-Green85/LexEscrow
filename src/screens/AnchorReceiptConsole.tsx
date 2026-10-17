@@ -137,6 +137,9 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
   const hashed = Boolean(artifact);
   const sealed = Boolean(hmac);
   const registered = Boolean(receipt);
+  // A receipt is issued even when the on-chain anchor fails — the item just
+  // carries `registered: false` — so "step done" and "anchored" are distinct.
+  const anchored = receipt?.items[0]?.registered === true;
 
   return (
     <div className="w-full">
@@ -251,8 +254,19 @@ export function AnchorReceiptConsoleView(props: AnchorReceiptConsoleViewProps) {
                 </span>
               </Row>
               <Row label="Status">
-                <span className="badge badge-emerald">✅ Registered</span>
+                {anchored ? (
+                  <span className="badge badge-emerald">✅ Registered</span>
+                ) : (
+                  <span className="badge badge-amber">⚠️ Not anchored on-chain</span>
+                )}
               </Row>
+              {!anchored && (
+                <p className="text-xs text-text-muted">
+                  The receipt was issued but the fingerprint is not on-chain. Unlock the credential
+                  store, check the blockchain configuration and ANCHOR_REGISTRY_ADDRESS, then
+                  register again.
+                </p>
+              )}
             </div>
           ) : (
             <>
@@ -462,7 +476,7 @@ export function AnchorReceiptConsole() {
         items: [{ label: artifact.filename, hash: artifact.hash, size: artifact.size }],
       });
       setReceipt(issued);
-      setRegisteredAt(issued.items[0]?.registeredAt ?? issued.issuedAt);
+      setRegisteredAt(issued.items[0]?.registeredAt ?? null);
 
       await backend.logEvent(
         sessionId,

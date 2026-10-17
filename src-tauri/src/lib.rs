@@ -7,6 +7,7 @@
 //!   * `DebugConsoleState`   — LexTrace command alternation + run guard.
 
 mod ai;
+mod anchor;
 mod artifact_guard;
 mod bar_verify;
 mod blockchain_write_auth;
@@ -156,6 +157,7 @@ pub fn run() {
             debug_console::run_cre_debug,
             cre::get_cre_config,
             cre::execute_direct_settle,
+            anchor::anchor_document,
             cre::get_usdc_price,
             cre_trigger::trigger_cre_workflow,
             // Practice-management integrations (Clio / PracticePanther)
