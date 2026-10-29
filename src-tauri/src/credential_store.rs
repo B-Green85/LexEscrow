@@ -773,12 +773,19 @@ pub fn get_credential_masked(state: State<'_, CredentialStoreState>, key: String
 /// Keychain — and a generic setter that also reached it would be an
 /// unauthenticated path around both. Everything else in the table is a
 /// revocable credential; the deployer key is not.
+///
+/// The seal key is refused too. It is minted by the backend, never typed, and
+/// overwriting it from the WebView would silently orphan every AnchorReceipt
+/// this install has issued.
 /// Which keys the generic setter will accept. Split out so the refusal is
 /// testable without standing up a Tauri app — the guard is the whole point of
 /// the command, and an untested guard is a guard that regresses.
 fn guard_generic_key(key: &str) -> Result<(), String> {
     if key == "blockchain" {
         return Err("Use set_blockchain_credential for the blockchain group".to_string());
+    }
+    if key == KEY_SEAL {
+        return Err(format!("{KEY_SEAL} is minted by the backend and cannot be set"));
     }
     if !CREDENTIAL_KEYS.contains(&key) {
         return Err(format!("Unknown credential key '{key}'."));
@@ -1801,10 +1808,16 @@ mod tests {
         // Every other group stays reachable — they are revocable credentials,
         // and routing them through a confirmation prompt would be friction
         // with nothing behind it.
-        for k in CREDENTIAL_KEYS.iter().filter(|k| **k != "blockchain") {
+        for k in CREDENTIAL_KEYS.iter().filter(|k| **k != "blockchain" && **k != KEY_SEAL) {
             assert!(guard_generic_key(k).is_ok(), "generic setter refused {k}");
         }
         assert!(guard_generic_key("not-a-key").is_err());
+    }
+
+    #[test]
+    fn the_generic_setter_refuses_the_seal_key() {
+        // Minted, never typed: a WebView write would orphan every issued receipt.
+        assert!(guard_generic_key(KEY_SEAL).is_err());
     }
 
     #[test]
