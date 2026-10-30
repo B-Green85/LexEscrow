@@ -27,8 +27,9 @@ financial transactions. Every layer has one job:
 
 ```
 LexEscrow/
-├── src/                     # React 18/19 + TypeScript frontend (Vite)
+├── src/                     # React 19 + TypeScript frontend (Vite)
 │   ├── lexguard/            # LexGuard Utility Suite (6 deterministic modules)
+│   │   ├── index.ts         #   barrel export
 │   │   ├── types.ts         #   shared parsed-payload / execution-path types
 │   │   ├── vdb.ts           #   session-scoped VDB store (prime / query / bind)
 │   │   ├── artifact-guard.ts#   Tauri IPC bridge to Rust ArtifactGuard
@@ -39,29 +40,63 @@ LexEscrow/
 │   │   └── pipeline.ts      #   async co-validation + AI nudge loop
 │   ├── lib/                 # backend bridge, AI providers, browser vault fallback
 │   │   ├── ai/              #   model-agnostic providers (HTTP / WebSocket / local)
+│   │   ├── adapters/        #   bar-verification adapter
+│   │   ├── cannaverify/     #   Metrc license / inventory / transfer compliance
+│   │   ├── conditions/      #   release-condition builder
+│   │   ├── esign/           #   eSignProvider (DocuSign + mock)
+│   │   ├── export/          #   audit-report PDF export
+│   │   ├── integrations/    #   Clio / PracticePanther webhooks
+│   │   ├── releasePaths/    #   staged + arbitration release paths
 │   │   ├── backend.ts       #   Tauri-or-browser bridge (incl. vault + AI transport)
 │   │   ├── browserVault.ts  #   Web-Crypto AES-GCM + PBKDF2 fallback vault
-│   │   └── aiParse.ts       #   deterministic heuristic parser (local provider)
-│   ├── screens/             # Seven screens (Load, Processing, Review, Execute, Escalation, Configuration, Batch)
-│   ├── store/               # Zustand session store
-│   └── components/          # Shared UI primitives
+│   │   ├── aiParse.ts       #   deterministic heuristic parser (local provider)
+│   │   ├── anchor-receipt.ts#   AnchorReceipt fingerprint + seal
+│   │   ├── clio.ts          #   Clio matter intake
+│   │   └── suggest-anchors.ts#  trust-anchor suggestions from document text
+│   ├── screens/             # Twelve screens (Load, Processing, Review, Execute, Escalation, Configuration, Batch,
+│   │                        #   Setup Wizard, Condition Definition, Escrow Monitor, Recent Workflows, AnchorReceipt Console)
+│   ├── store/               # Zustand session + batch stores
+│   ├── components/          # Shared UI primitives
+│   ├── mock/                # DocuSign / Metrc mock adapters
+│   └── stress/              # LexGuard stress harness
 ├── src-tauri/               # Rust backend (Tauri v2)
 │   ├── src/
 │   │   ├── artifact_guard.rs# SHA-256 hashing + UTF-8 normalization + final verify
 │   │   ├── db.rs            #   SQLite (sqlx) — sessions, payloads, audit trail
 │   │   ├── vault.rs         #   AES-256-GCM credential vault (scrypt KDF)
+│   │   ├── credential_store.rs# vault vs OS keychain backend (store_config.rs picks)
+│   │   ├── blockchain_write_auth.rs# write-auth gate for the deployer key
 │   │   ├── ai.rs            #   AI transport (HTTP + WebSocket) — secret stays in core
+│   │   ├── extractor.rs     #   document text extraction
+│   │   ├── bar_verify.rs    #   attorney bar verification (Apify)
+│   │   ├── anchor.rs        #   AnchorReceipt registration on AnchorRegistry
+│   │   ├── cre.rs           #   CRE workflow config from the vault
+│   │   ├── cre_trigger.rs   #   signed HTTPTrigger to the deployed workflow
+│   │   ├── debug_console.rs #   LexTrace read-only CRE debug console
+│   │   ├── docusign.rs      #   DocuSign eSignature
+│   │   ├── esign_callback.rs#   embedded-signing return-URL listener
+│   │   ├── clio.rs          #   Clio Manage OAuth matter intake
+│   │   ├── integrations.rs  #   practice-management webhook delivery
 │   │   ├── notify.rs        #   SMTP (lettre) + Twilio SMS (reqwest), vault-backed
+│   │   ├── menu.rs          #   native application menu
+│   │   ├── main.rs
 │   │   └── lib.rs           #   Tauri command registration
-│   └── migrations/          # SQLite schema (3 tables, hash-chained audit trail)
+│   └── migrations/          # SQLite schema (5 migrations, 10 tables, hash-chained audit trail)
 ├── cre/                     # Chainlink CRE workflow (bun + @chainlink/cre-sdk)
 │   ├── main.ts              #   two-handler pattern: onHTTPTrigger + onLogTrigger
 │   ├── workflow.yaml
-│   └── config.json
-└── contracts/               # Solidity RetainerRelease receiver (Chainlink CRE)
-    ├── src/RetainerRelease.sol  # directSettle / lockArbitration / 2-of-3 resolve
-    ├── interfaces/          #   IReceiver, IERC165, ReceiverTemplate
-    └── 1_deploy.ts …        #   viem deploy + fund + test scripts
+│   ├── project.yaml
+│   ├── config.json.example
+│   └── secrets.yaml.example
+├── lexescrow-cw/            # Confidential Workflow (TEE re-parse + HMAC-sealed verdict)
+├── contracts/               # Solidity RetainerRelease receiver (Chainlink CRE)
+│   ├── src/RetainerRelease.sol  # directSettle / lockArbitration / 2-of-3 resolve
+│   ├── src/AnchorRegistry.sol   # anchor(bytes32) — Sepolia 0x0906Be060A47B3A44A3Ae42707c7538dBB0451Fb
+│   ├── interfaces/          #   IReceiver, IERC165, ReceiverTemplate
+│   ├── abi/                 #   generated RetainerRelease ABI
+│   ├── DEPLOYMENT.md        #   deployed addresses + on-chain test record
+│   └── 1_deploy.ts … 5_testStaged.ts  # viem deploy + fund + test scripts
+└── demo/                    # offline demo suite (documents, mock adapters, scripts)
 ```
 
 ## Core invariants
@@ -79,15 +114,15 @@ LexEscrow/
 
 ## Tech stack
 
-- **Desktop:** Tauri v2 (Rust backend + WebView), React + TypeScript, Vite,
+- **Desktop:** Tauri v2 (Rust backend + WebView), React 19 + TypeScript, Vite,
   Tailwind CSS v4, Zustand
 - **Backend:** Rust — `sha2`, `sqlx` (SQLite), `lettre` (SMTP), `reqwest` (Twilio)
-- **Blockchain:** Chainlink CRE (TypeScript SDK), Functions, Price Feeds, CCIP
+- **Blockchain:** Chainlink CRE (TypeScript SDK), Functions, Price Feeds
 - **Notification:** SMTP + Twilio (post-settlement only)
 
 ## Prerequisites
 
-- Node ≥ 20 and npm (frontend + Rust app)
+- Node ≥ 20.19 and npm (frontend + Rust app)
 - Rust stable + Cargo (Tauri backend)
 - [bun](https://bun.com/docs/installation) (CRE workflow only)
 - Chainlink CRE CLI (for workflow simulate / deploy)
@@ -103,7 +138,7 @@ npm test               # LexGuard unit tests (Vitest)
 
 # CRE workflow
 cd cre && bun install
-cre workflow simulate ./cre --target local-simulation
+cre workflow simulate . --target local-simulation
 ```
 
 ### Notifications
@@ -191,8 +226,8 @@ chain. See `contracts/README.md` for compile / deploy / test steps.
 ## Tests
 
 ```bash
-npm test                                              # LexGuard suite (31 tests)
-cargo test --manifest-path src-tauri/Cargo.toml       # backend (16 tests)
+npm test                                              # frontend suite (977 tests)
+cargo test --manifest-path src-tauri/Cargo.toml       # backend (295 tests)
 cd cre && bun run typecheck                            # CRE workflow types
 ```
 
@@ -200,9 +235,9 @@ cd cre && bun run typecheck                            # CRE workflow types
 
 V1 implemented across all seven layers (Tauri scaffold, ArtifactGuard, SQLite +
 hash-chained audit trail, LexGuard suite, CRE workflow, five-screen UI,
-notification layer). See the product specification (`LexEscrow_Spec_v1.docx`)
+notification layer). See the product specification (`LexEscrow_Platform_Spec_Complete.docx`)
 for the complete design, edge-case analysis, and roadmap.
 
 ---
 
-_CONFIDENTIAL — ALL RIGHTS RESERVED_
+© 2026 ProvenyxRD. Licensed under the GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).
