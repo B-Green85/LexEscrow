@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Notification layer — post-settlement client notification only.
 //!
 //! Email via SMTP (lettre) and optional SMS via the Twilio REST API (reqwest).

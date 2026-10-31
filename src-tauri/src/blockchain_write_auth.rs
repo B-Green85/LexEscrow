@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Write-authorization gate for the deployer private key.
 //!
 //! The App Vault backend already gates this write: `VaultState::set_blockchain`

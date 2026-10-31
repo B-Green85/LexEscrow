@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * The non-sensitive projection of session state — everything an outbound
  * integration is allowed to know.

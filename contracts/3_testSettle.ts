@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Test Path A — DirectSettlement end-to-end on Sepolia.
  * Calls directSettle (deployer = workflow) and checks the USDC movement.

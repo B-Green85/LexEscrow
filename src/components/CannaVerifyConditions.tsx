@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * CannaVerify condition checklist (spec §5 / §11 — Escrow Monitor).
  *

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Deterministic heuristic document parser — the `LocalHeuristicProvider`
  * implementation and the fallback when no AI provider is configured in the

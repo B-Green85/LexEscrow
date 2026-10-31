@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * eSign layer tests — the mock provider's lifecycle simulation and the
  * completion pipeline's anchor-matching logic (spec §20, §23).

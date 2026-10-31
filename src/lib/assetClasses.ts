@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Asset class abstraction — the single barrel for LexEscrow's seven asset
  * classes (platform spec §4). The underlying escrow engine (ArtifactGuard, the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * CannaVerify — inventory / batch confirmation (spec §5, "Inventory confirmed").
  *

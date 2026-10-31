@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Release paths — Path B (ArbitrationEscrow) and Path C (StagedRelease).
  *

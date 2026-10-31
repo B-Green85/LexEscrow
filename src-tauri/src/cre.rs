@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! CRE workflow configuration — the vault-to-workflow seam.
 //!
 //! The Chainlink CRE workflow (`cre/main.ts`) is already fully config-driven:

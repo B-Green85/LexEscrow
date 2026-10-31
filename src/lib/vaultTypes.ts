@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Shared vault types. The `*Public` shapes are the only credential data that
  * crosses IPC to the WebView — secrets (api_key, password, auth_token) are

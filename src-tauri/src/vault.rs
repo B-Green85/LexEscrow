@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Credential vault — AES-256-GCM encrypted store.
 //!
 //! Ported from TrueLink's Electron/Node-crypto engine to Tauri + Rust. The

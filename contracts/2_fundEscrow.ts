@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Fund the deployed RetainerRelease escrow with test USDC so it can settle.
  * Amount (whole USDC) via FUND_AMOUNT env, default 6.

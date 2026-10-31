@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * <CorrectedField /> — spec §28 (Stage 4 corrected-field visual) and §30.
  *

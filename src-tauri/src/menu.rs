@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Native application menu (spec §12 Screen 9).
 //!
 //! Two custom File items — New Transaction and Recent Workflows — alongside the

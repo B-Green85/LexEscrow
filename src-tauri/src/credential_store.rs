@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Credential storage — one trait, two backends.
 //!
 //! LexEscrow holds credentials the operator cannot afford to lose and cannot

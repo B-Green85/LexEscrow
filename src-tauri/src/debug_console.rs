@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! LexTrace — the read-only CRE debug console.
 //!
 //! One Tauri command, [`run_cre_debug`], which runs a fixed CRE CLI invocation

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * CannaVerify — Secretary of State entity standing (spec §5, "Entity standing").
  *

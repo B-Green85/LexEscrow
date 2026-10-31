@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * scope-guard — enforces field-access boundaries. AI is authorized to read and
  * populate exactly this set of fields for a retainer release workflow. Any

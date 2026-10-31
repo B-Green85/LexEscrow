@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! AnchorReceipt on-chain registration (spec §8, step 3) — real, not mocked.
 //!
 //! Anchors a document's SHA-256 fingerprint in `AnchorRegistry`

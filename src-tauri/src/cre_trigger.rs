@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! CRE HTTPTrigger — signed JSON-RPC invocation of the deployed workflow.
 //!
 //! `cre.rs` settles on chain. This module does something narrower and stranger:

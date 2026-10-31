@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Embedded signing return-URL listener (spec Part II, §22).
 //!
 //! DocuSign's embedded signing ceremony ends by redirecting the *browser* to a

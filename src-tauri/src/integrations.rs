@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Practice-management webhook delivery (spec §14 V1).
 //!
 //! The payload is built in the frontend — it is a projection of session state,

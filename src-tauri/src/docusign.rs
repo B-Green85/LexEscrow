@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! DocuSign eSignature integration (spec Part II, §15–25).
 //!
 //! LexEscrow's first `eSignProvider` implementation. Everything that touches a

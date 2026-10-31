@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Clio Manage — read-only matter intake over OAuth 2.0.
 //!
 //! LexEscrow's second document-intake path. Where the Artifact Loader takes raw

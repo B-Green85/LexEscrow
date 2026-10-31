@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 import { useSession, type ProcessingStep } from "../store/session";
 import { ManualEntryForm } from "../components/ManualEntryForm";
 

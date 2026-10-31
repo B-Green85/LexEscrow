@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Attorney bar verification against official state registries, via Apify.
 //!
 //! The legal asset class turns on one fact an escrow cannot assume: that the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * suggest-anchors — deterministic, best-effort pre-fill of the Document Load
  * trust anchors from the raw text of a dropped artifact.

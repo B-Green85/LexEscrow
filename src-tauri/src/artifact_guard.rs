@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! ArtifactGuard — the integrity baseline for LexEscrow.
 //!
 //! Two jobs, both deterministic and both performed in the Rust backend so they

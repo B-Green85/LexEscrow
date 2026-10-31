@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 // @vitest-environment jsdom
 /**
  * LexTrace — the debug console, from the icon to the terminal.

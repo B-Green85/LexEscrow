@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * AI extraction schemas for all seven asset classes (platform spec §4),
  * following the same pattern as RETAINER_SCHEMA. Every schema carries the

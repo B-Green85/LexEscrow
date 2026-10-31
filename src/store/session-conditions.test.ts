@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 // @vitest-environment jsdom
 /**
  * Session 7 — condition tracking wiring (spec §6 Stages 6–7).

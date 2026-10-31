@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * anchor-matcher — verifies proper nouns and bar numbers extracted from the
  * document against user-provided trust anchors. Case-insensitive,

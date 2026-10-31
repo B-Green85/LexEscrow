@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Audit report export (spec §14 V1 — "Audit report PDF export with embedded QR
  * linking to on-chain records").

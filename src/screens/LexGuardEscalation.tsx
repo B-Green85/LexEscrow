@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * LexGuard escalation dialog — spec §29 (Scenario 2) and §31 (multi-field cascade).
  *

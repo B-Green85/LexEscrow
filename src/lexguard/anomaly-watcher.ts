@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * anomaly-watcher — detects anomaly *suppression*: the condition where AI
  * flagged anomalies during parsing but the execution payload would proceed as

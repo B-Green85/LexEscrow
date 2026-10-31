@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSession, type LexGuardCorrection } from "../store/session";
 import { ExecutionPath } from "../lexguard/types";

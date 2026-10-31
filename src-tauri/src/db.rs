@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Persistence layer — SQLite via sqlx.
 //!
 //! Three tables (see `migrations/0001_init.sql`): `release_sessions`,

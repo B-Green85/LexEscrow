@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * artifact-guard — the LexGuard bridge to the Rust ArtifactGuard over Tauri IPC.
  *

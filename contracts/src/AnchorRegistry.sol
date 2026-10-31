@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
 pragma solidity ^0.8.24;
 
 /// @title AnchorRegistry — public, permissionless document-hash anchoring for AnchorReceipt.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! LexEscrow Tauri backend entrypoint.
 //!
 //! Wires the Rust integrity/persistence/notification layers to the WebView via

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! Which credential backend this install uses.
 //!
 //! Deliberately plaintext, and deliberately *not* held in either credential

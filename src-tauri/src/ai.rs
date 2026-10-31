@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 //! AI provider transport.
 //!
 //! Two commands mirror the two connection types stored in the vault. Both pull

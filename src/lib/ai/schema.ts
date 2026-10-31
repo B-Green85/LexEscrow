@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /** The retainer field schema handed to an AI provider to shape its output. */
 
 export interface SchemaField {

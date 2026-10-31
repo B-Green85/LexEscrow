@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 ProvenyxRD
+
 /**
  * Stage 6/7 — Escrow Monitor (spec §12 Screen 6, §6 Stages 6–7).
  *
